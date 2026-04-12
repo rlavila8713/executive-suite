@@ -1,21 +1,35 @@
-import { useState, useEffect } from 'react';
-import { Product, CartItem, Transaction, Expense, Screen } from '../types';
-import { MOCK_PRODUCTS, MOCK_TRANSACTIONS, MOCK_EXPENSES } from '../constants';
+import { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import {
+  Product,
+  CartItem,
+  Transaction,
+  Screen,
+  AppSettings,
+  CheckoutPayload,
+  Expense,
+} from '../types';
+import { db, newId } from '../db/database';
+import { DEFAULT_APP_SETTINGS } from '../constants';
 
 export function useAppState() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard');
-  const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>(MOCK_TRANSACTIONS);
-  const [expenses, setExpenses] = useState<Expense[]>(MOCK_EXPENSES);
-  const [isAuthReady, setIsAuthReady] = useState(true);
+
+  const products =
+    useLiveQuery(() => db.products.orderBy('id').toArray(), []) ?? [];
+  const transactions =
+    useLiveQuery(() => db.transactions.orderBy('createdAt').reverse().toArray(), []) ?? [];
+  const expenses = useLiveQuery(() => db.expenses.orderBy('date').reverse().toArray(), []) ?? [];
+  const appSettings =
+    useLiveQuery(() => db.appSettings.get('main'), []) ?? DEFAULT_APP_SETTINGS;
 
   const addToCart = (product: Product) => {
-    setCart(prev => {
-      const existing = prev.find(item => item.id === product.id);
+    setCart((prev) => {
+      const existing = prev.find((item) => item.id === product.id);
       if (existing) {
-        return prev.map(item => 
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+        return prev.map((item) =>
+          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item,
         );
       }
       return [...prev, { ...product, quantity: 1 }];
@@ -23,57 +37,95 @@ export function useAppState() {
   };
 
   const removeFromCart = (productId: string) => {
-    setCart(prev => prev.filter(item => item.id !== productId));
+    setCart((prev) => prev.filter((item) => item.id !== productId));
   };
 
   const updateCartQuantity = (productId: string, delta: number) => {
-    setCart(prev => prev.map(item => {
-      if (item.id === productId) {
-        const newQty = Math.max(1, item.quantity + delta);
-        return { ...item, quantity: newQty };
-      }
-      return item;
-    }));
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.id === productId) {
+          const newQty = Math.max(1, item.quantity + delta);
+          return { ...item, quantity: newQty };
+        }
+        return item;
+      }),
+    );
   };
 
   const clearCart = () => setCart([]);
 
-  const processSale = () => {
-    const total = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
+  const processSale = async (payload: CheckoutPayload): Promise<void> => {
+    const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    const amount = payload.amount > 0 ? payload.amount : subtotal;
     const newTransaction: Transaction = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: newId(),
       orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
-      customer: 'Walk-in Customer',
-      amount: total,
+      customer: payload.customerName.trim() || 'Walk-in Customer',
+      amount,
       status: 'completed',
       timestamp: 'Just now',
-      type: 'sale'
+      type: 'sale',
+      createdAt: Date.now(),
     };
-    setTransactions(prev => [newTransaction, ...prev]);
-    
-    // Update stock
-    setProducts(prev => prev.map(p => {
-      const cartItem = cart.find(ci => ci.id === p.id);
-      if (cartItem) {
-        return { ...p, stock: Math.max(0, p.stock - cartItem.quantity) };
+
+    await db.transaction('rw', db.transactions, db.products, async () => {
+      await db.transactions.add(newTransaction);
+      for (const item of cart) {
+        const p = await db.products.get(item.id);
+        if (p) {
+          await db.products.update(item.id, {
+            stock: Math.max(0, p.stock - item.quantity),
+          });
+        }
       }
-      return p;
-    }));
-    
+    });
+
     clearCart();
   };
 
-  const addProduct = (product: Omit<Product, 'id'>) => {
-    const newProduct = { ...product, id: Math.random().toString(36).substr(2, 9) };
-    setProducts(prev => [...prev, newProduct]);
+  const addProduct = async (product: Omit<Product, 'id'>) => {
+    await db.products.add({ ...product, id: newId() });
   };
 
-  const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    await db.products.update(id, updates);
   };
 
-  const deleteProduct = (id: string) => {
-    setProducts(prev => prev.filter(p => p.id !== id));
+  const deleteProduct = async (id: string) => {
+    await db.products.delete(id);
+  };
+
+  const addExpense = async (row: Omit<Expense, 'id'>) => {
+    await db.expenses.add({ ...row, id: newId() });
+  };
+
+  const updateExpense = async (id: string, updates: Partial<Expense>) => {
+    await db.expenses.update(id, updates);
+  };
+
+  const deleteExpense = async (id: string) => {
+    await db.expenses.delete(id);
+  };
+
+  const addTransaction = async (row: Omit<Transaction, 'id'>) => {
+    await db.transactions.add({ ...row, id: newId() });
+  };
+
+  const updateTransaction = async (id: string, updates: Partial<Transaction>) => {
+    await db.transactions.update(id, updates);
+  };
+
+  const deleteTransaction = async (id: string) => {
+    await db.transactions.delete(id);
+  };
+
+  const updateAppSettings = async (patch: Partial<Omit<AppSettings, 'id'>>) => {
+    const existing = await db.appSettings.get('main');
+    if (!existing) {
+      await db.appSettings.put({ ...DEFAULT_APP_SETTINGS, ...patch, id: 'main' });
+    } else {
+      await db.appSettings.update('main', patch);
+    }
   };
 
   return {
@@ -83,6 +135,7 @@ export function useAppState() {
     cart,
     transactions,
     expenses,
+    appSettings,
     addToCart,
     removeFromCart,
     updateCartQuantity,
@@ -90,6 +143,13 @@ export function useAppState() {
     processSale,
     addProduct,
     updateProduct,
-    deleteProduct
+    deleteProduct,
+    addExpense,
+    updateExpense,
+    deleteExpense,
+    addTransaction,
+    updateTransaction,
+    deleteTransaction,
+    updateAppSettings,
   };
 }

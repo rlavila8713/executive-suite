@@ -1,53 +1,65 @@
-import React, { useState } from 'react';
-import { 
-  Plus, 
-  Search, 
-  Filter, 
-  Download, 
-  Edit2, 
-  Trash2, 
-  ChevronLeft, 
+import React, { useEffect, useState } from 'react';
+import {
+  Plus,
+  Search,
+  Filter,
+  Download,
+  Edit2,
+  Trash2,
+  ChevronLeft,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ImagePicker } from '../components/ImagePicker';
+import { ProductThumb } from '../components/ProductThumb';
 import { Product } from '../types';
-import { cn } from '../lib/utils';
+import { cn, rowMatchesSearch } from '../lib/utils';
+import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
 
 interface ProductsProps {
   products: Product[];
-  onAdd: (product: Omit<Product, 'id'>) => void;
-  onUpdate: (id: string, updates: Partial<Product>) => void;
-  onDelete: (id: string) => void;
+  globalSearch?: string;
+  onAdd: (product: Omit<Product, 'id'>) => void | Promise<void>;
+  onUpdate: (id: string, updates: Partial<Product>) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
 }
 
-export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps) {
+export function Products({ products, globalSearch = '', onAdd, onUpdate, onDelete }: ProductsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productImage, setProductImage] = useState<string>(PLACEHOLDER_PRODUCT_IMAGE);
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.sku.toLowerCase().includes(searchTerm.toLowerCase())
+  useEffect(() => {
+    if (!isModalOpen) return;
+    setProductImage(editingProduct?.image ?? PLACEHOLDER_PRODUCT_IMAGE);
+  }, [isModalOpen, editingProduct]);
+
+  const filteredProducts = products.filter(
+    (p) =>
+      rowMatchesSearch(searchTerm, [p.name, p.sku, p.category]) &&
+      rowMatchesSearch(globalSearch, [p.name, p.sku, p.category]),
   );
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    const name = formData.get('name') as string;
     const productData = {
-      name: formData.get('name') as string,
+      name,
       sku: formData.get('sku') as string,
       category: formData.get('category') as string,
       price: parseFloat(formData.get('price') as string),
       cost: parseFloat(formData.get('cost') as string),
-      stock: parseInt(formData.get('stock') as string),
-      image: `https://picsum.photos/seed/${formData.get('name')}/400/500`
+      stock: parseInt(formData.get('stock') as string, 10),
+      image: productImage,
     };
 
     if (editingProduct) {
-      onUpdate(editingProduct.id, productData);
+      await onUpdate(editingProduct.id, productData);
     } else {
-      onAdd(productData);
+      await onAdd(productData);
     }
     setIsModalOpen(false);
     setEditingProduct(null);
@@ -58,7 +70,9 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
       <div className="flex justify-between items-end">
         <div>
           <h2 className="text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">Products Management</h2>
-          <p className="text-on-surface-variant text-sm font-medium">Manage your curated collection and monitor stock health.</p>
+          <p className="text-on-surface-variant text-sm font-medium">
+            Photos are stored on this device (embedded in the local database), not loaded from the internet.
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" className="flex items-center gap-2">
@@ -67,13 +81,18 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
           <Button variant="secondary" className="flex items-center gap-2">
             <Download size={16} /> Export
           </Button>
-          <Button onClick={() => { setEditingProduct(null); setIsModalOpen(true); }} className="flex items-center gap-2">
+          <Button
+            onClick={() => {
+              setEditingProduct(null);
+              setIsModalOpen(true);
+            }}
+            className="flex items-center gap-2"
+          >
             <Plus size={16} /> Add Product
           </Button>
         </div>
       </div>
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="h-32 flex flex-col justify-between hover:shadow-xl transition-all">
           <span className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold">Total Products</span>
@@ -91,7 +110,7 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
         <Card className="h-32 flex flex-col justify-between hover:shadow-xl transition-all">
           <span className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold">Low Stock Alerts</span>
           <div className="flex items-center gap-2">
-            <span className="text-3xl font-extrabold text-error">{products.filter(p => p.stock <= 5).length}</span>
+            <span className="text-3xl font-extrabold text-error">{products.filter((p) => p.stock <= 5).length}</span>
             <AlertCircle className="text-error" size={20} />
           </div>
         </Card>
@@ -101,13 +120,12 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
         </div>
       </div>
 
-      {/* Table */}
       <Card className="p-0 overflow-hidden">
         <div className="p-6 border-b border-black/5 flex justify-between items-center bg-surface-container-low">
           <div className="relative w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <Input 
-              placeholder="Search products..." 
+            <Input
+              placeholder="Search products..."
               className="pl-10"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -118,19 +136,36 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-surface-container-low border-b border-black/5">
-                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">Product Name</th>
-                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">Category</th>
-                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">Price</th>
-                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-center">Stock Status</th>
-                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">Actions</th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">
+                  Product Name
+                </th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
+                  Category
+                </th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
+                  Price
+                </th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-center">
+                  Stock Status
+                </th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map(product => (
-                <tr key={product.id} className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0">
+              {filteredProducts.map((product) => (
+                <tr
+                  key={product.id}
+                  className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0"
+                >
                   <td className="py-4 px-6">
                     <div className="flex items-center gap-4">
-                      <img src={product.image} className="w-12 h-12 rounded-lg object-cover" alt={product.name} />
+                      <ProductThumb
+                        src={product.image}
+                        alt={product.name}
+                        className="w-12 h-12 rounded-lg object-cover"
+                      />
                       <div>
                         <p className="font-bold text-primary">{product.name}</p>
                         <p className="text-xs text-on-surface-variant">SKU: {product.sku}</p>
@@ -140,23 +175,41 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
                   <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{product.category}</td>
                   <td className="py-4 px-6 text-right text-sm font-bold text-primary">${product.price.toFixed(2)}</td>
                   <td className="py-4 px-6 text-center">
-                    <span className={cn(
-                      "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                      product.stock > 10 ? "bg-tertiary-container/10 text-on-tertiary-container" : 
-                      product.stock > 0 ? "bg-error-container text-on-error-container" : 
-                      "bg-surface-container-high text-on-surface-variant"
-                    )}>
-                      {product.stock > 10 ? `In Stock (${product.stock})` : 
-                       product.stock > 0 ? `Low Stock (${product.stock})` : 
-                       "Out of Stock"}
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider',
+                        product.stock > 10
+                          ? 'bg-tertiary-container/10 text-on-tertiary-container'
+                          : product.stock > 0
+                            ? 'bg-error-container text-on-error-container'
+                            : 'bg-surface-container-high text-on-surface-variant',
+                      )}
+                    >
+                      {product.stock > 10
+                        ? `In Stock (${product.stock})`
+                        : product.stock > 0
+                          ? `Low Stock (${product.stock})`
+                          : 'Out of Stock'}
                     </span>
                   </td>
                   <td className="py-4 px-6 text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="sm" onClick={() => { setEditingProduct(product); setIsModalOpen(true); }}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditingProduct(product);
+                          setIsModalOpen(true);
+                        }}
+                      >
                         <Edit2 size={14} />
                       </Button>
-                      <Button variant="ghost" size="sm" className="text-error hover:bg-error/10" onClick={() => onDelete(product.id)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-error hover:bg-error/10"
+                        onClick={() => onDelete(product.id)}
+                      >
                         <Trash2 size={14} />
                       </Button>
                     </div>
@@ -169,20 +222,35 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
         <div className="px-8 py-6 flex justify-between items-center bg-surface-container-low border-t border-black/5">
           <span className="text-xs text-on-surface-variant font-medium">Showing {filteredProducts.length} entries</span>
           <div className="flex gap-1">
-            <Button variant="ghost" size="sm"><ChevronLeft size={16} /></Button>
-            <Button size="sm" className="w-8 h-8 p-0">1</Button>
-            <Button variant="ghost" size="sm" className="w-8 h-8 p-0">2</Button>
-            <Button variant="ghost" size="sm"><ChevronRight size={16} /></Button>
+            <Button variant="ghost" size="sm">
+              <ChevronLeft size={16} />
+            </Button>
+            <Button size="sm" className="w-8 h-8 p-0">
+              1
+            </Button>
+            <Button variant="ghost" size="sm" className="w-8 h-8 p-0">
+              2
+            </Button>
+            <Button variant="ghost" size="sm">
+              <ChevronRight size={16} />
+            </Button>
           </div>
         </div>
       </Card>
 
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        title={editingProduct ? "Edit Product" : "Add Product"}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={editingProduct ? 'Edit Product' : 'Add Product'}
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form key={editingProduct?.id ?? 'new'} onSubmit={handleSubmit} className="space-y-4">
+          <ImagePicker
+            value={productImage}
+            onChange={setProductImage}
+            label="Product image"
+            helperText="Uses your operating system file dialog. Images are saved as data in the local database (keep files under ~2.5 MB)."
+            compact
+          />
           <div className="space-y-1">
             <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Product Name</label>
             <Input name="name" defaultValue={editingProduct?.name} required />
@@ -212,8 +280,12 @@ export function Products({ products, onAdd, onUpdate, onDelete }: ProductsProps)
             </div>
           </div>
           <div className="pt-4 flex gap-3">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-            <Button type="submit" className="flex-1">Save Product</Button>
+            <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" className="flex-1">
+              Save Product
+            </Button>
           </div>
         </form>
       </Modal>

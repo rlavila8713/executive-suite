@@ -1,8 +1,10 @@
 node_modules/
 build/
 dist/
+release/
 coverage/
 .DS_Store
 *.log
+executive-suite-release.zip
 .env*
 !.env.example

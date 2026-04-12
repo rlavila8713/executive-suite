@@ -8,6 +8,7 @@ export interface Product {
   price: number;
   cost: number;
   stock: number;
+  /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — local only, no remote URLs. */
   image: string;
 }
 
@@ -23,6 +24,8 @@ export interface Transaction {
   status: 'completed' | 'refunded' | 'pending';
   timestamp: string;
   type: 'sale' | 'return';
+  /** Used for ordering in the local database (newest first). */
+  createdAt: number;
 }
 
 export interface Expense {
@@ -33,9 +36,21 @@ export interface Expense {
   date: string;
 }
 
-export interface StoreConfig {
-  name: string;
+/** Single-row app configuration stored locally (IndexedDB). */
+export interface AppSettings {
+  id: 'main';
+  storeName: string;
   branch: string;
   currency: string;
   taxRate: number;
+  darkMode: boolean;
+  lowStockNotifications: boolean;
+  managerName: string;
+  managerTitle: string;
 }
+
+export type CheckoutPayload = {
+  customerName: string;
+  /** Grand total charged (including tax). */
+  amount: number;
+};

@@ -1,0 +1,98 @@
+Executive Suite — llevar la app a otra PC
+==========================================
+
+QUÉ NECESITAS EN LA OTRA PC
+----------------------------
+Opción A — Solo ver la app compilada (recomendado si ya tienes dist/ o el .zip):
+  • Node.js 18+ o 20+ LTS (solo para el comando "npx serve", unos segundos de descarga la primera vez)
+  • O cualquier servidor web estático (nginx, Apache, IIS) sirviendo los archivos de dist/
+
+Opción B — Volver a compilar desde el código fuente:
+  • Node.js 20+ LTS (coincide con el motor que usaste al desarrollar)
+  • npm (viene con Node)
+
+
+EN ESTA MÁQUINA (BUILD)
+-----------------------
+Desde la raíz del proyecto:
+
+  npm ci
+  npm run build
+
+Salida: carpeta dist/ con HTML, JS y CSS listos para producción.
+
+Atajos:
+  npm run deploy:build     → solo build
+  npm run deploy:serve     → build + abre servidor en http://localhost:4173
+  npm run deploy:zip       → build + crea executive-suite-release.zip en la raíz del proyecto
+
+Scripts de conveniencia (misma idea):
+  ./deploy/build.sh        (macOS / Linux)
+  deploy\\build.cmd        (Windows)
+
+
+LLEVAR SOLO LA CARPETA dist/
+-----------------------------
+1. Copia dist/ a un pendrive o red.
+2. En la otra PC, en una terminal dentro de dist/:
+
+     npx --yes serve@14 . -s -l 4173
+
+   Abre http://localhost:4173  (-s sirve la SPA en un solo index.html)
+
+Si ya clonaste el repo completo en la otra PC y tienes node_modules:
+
+     npm run start:dist
+
+
+LLEVAR EL .ZIP (deploy:zip)
+---------------------------
+1. npm run deploy:zip
+2. Copia executive-suite-release.zip a la otra PC.
+3. Descomprime; dentro de la carpeta descomprimida (los archivos planos del build):
+
+     npx --yes serve@14 . -s -l 4173
+
+
+DATOS (IndexedDB) Y BACKUPS
+----------------------------
+El build NO incluye tu base de datos local del navegador.
+
+Para mover datos entre PCs usa Ajustes → Backup & data → Exportar JSON en la máquina origen
+e Importar en la máquina destino después de abrir la app.
+
+
+VARIABLES DE ENTORNO (opcional)
+--------------------------------
+Si usas Gemini en el cliente, en build Vite inyecta GEMINI_API_KEY desde .env.production al compilar.
+Crea .env.production con GEMINI_API_KEY=... antes de npm run build (cuidado: queda embebida en el bundle).
+
+
+ELECTRON (INSTALADOR .EXE PARA WINDOWS)
+-----------------------------------------
+Prueba local (requiere dist/ ya generado):
+
+  npm run build
+  npm run electron:start
+
+Generar instalador (en la máquina donde compiles):
+
+  npm run electron:build
+
+Salida típica: carpeta release/ con el instalador NSIS (.exe Setup).
+
+Instalador SOLO Windows desde esta config:
+
+  npm run electron:build:win
+
+Importante: el target NSIS para Windows se compila de forma fiable en una PC Windows.
+Desde macOS, electron-builder --win suele exigir herramientas extra (p. ej. Wine) o usar CI en Windows.
+
+Icono personalizado: coloca icon.ico en la raíz del proyecto y en package.json → build.win añade:
+  "icon": "icon.ico"
+
+
+NOTA SOBRE main.js Y "type": "module"
+--------------------------------------
+Con "type": "module", un main con require() debe ser .cjs. Este proyecto usa electron/main.cjs
+y "main": "electron/main.cjs" en package.json.

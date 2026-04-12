@@ -1,22 +1,29 @@
-import { 
-  Search, 
-  Filter, 
-  Download, 
-  AlertTriangle,
-  ArrowUpRight,
-  RefreshCw
-} from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Search, Download, AlertTriangle, ArrowUpRight, RefreshCw } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
+import { ProductThumb } from '../components/ProductThumb';
 import { Product } from '../types';
-import { cn } from '../lib/utils';
+import { cn, rowMatchesSearch } from '../lib/utils';
 
 interface InventoryProps {
   products: Product[];
-  onUpdateStock: (id: string, newStock: number) => void;
+  globalSearch?: string;
+  onUpdateStock: (id: string, newStock: number) => void | Promise<void>;
 }
 
-export function Inventory({ products, onUpdateStock }: InventoryProps) {
-  const lowStock = products.filter(p => p.stock <= 5);
+export function Inventory({ products, globalSearch = '', onUpdateStock }: InventoryProps) {
+  const [localSearch, setLocalSearch] = useState('');
+  const lowStock = products.filter((p) => p.stock <= 5);
+
+  const visibleProducts = useMemo(
+    () =>
+      products.filter(
+        (p) =>
+          rowMatchesSearch(localSearch, [p.name, p.sku, p.category, String(p.stock)]) &&
+          rowMatchesSearch(globalSearch, [p.name, p.sku, p.category, String(p.stock)]),
+      ),
+    [products, localSearch, globalSearch],
+  );
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -64,7 +71,12 @@ export function Inventory({ products, onUpdateStock }: InventoryProps) {
         <div className="p-6 border-b border-black/5 flex justify-between items-center bg-surface-container-low">
           <div className="relative w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <Input placeholder="Search inventory..." className="pl-10" />
+            <Input
+              placeholder="Search inventory..."
+              className="pl-10"
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
+            />
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -78,11 +90,11 @@ export function Inventory({ products, onUpdateStock }: InventoryProps) {
               </tr>
             </thead>
             <tbody>
-              {products.map(product => (
+              {visibleProducts.map((product) => (
                 <tr key={product.id} className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0">
                   <td className="py-4 px-6">
                     <div className="flex items-center gap-4">
-                      <img src={product.image} className="w-10 h-10 rounded object-cover" alt={product.name} />
+                      <ProductThumb src={product.image} className="w-10 h-10 rounded object-cover" alt={product.name} />
                       <div>
                         <p className="text-sm font-bold text-primary">{product.name}</p>
                         <p className="text-[10px] text-on-surface-variant">{product.sku}</p>

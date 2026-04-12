@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-04-12T20:31:01.985Z",
+  "app": "executive-suite",
+  "products": [
+    {
+      "name": "Laptop TOSHIBA",
+      "sku": "123",
+      "category": "Electronics",
+      "price": 100,
+      "cost": 20,
+      "stock": 17,
+      "image": "https://picsum.photos/id/2/200/300",
+      "id": "cwgvoaq5t"
+    },
+    {
+      "name": "Laptop Dell",
+      "sku": "023",
+      "category": "Electronics",
+      "price": 200,
+      "cost": 100,
+      "stock": 12,
+      "image": "https://picsum.photos/seed/Laptop%20Dell/400/500",
+      "id": "ntly71zl7"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "3rlqfm5ov",
+      "orderNumber": "#76504",
+      "customer": "Manolo",
+      "amount": 200,
+      "status": "completed",
+      "timestamp": "Just now",
+      "type": "sale",
+      "createdAt": 1776025132342
+    },
+    {
+      "id": "j7v0sz6qb",
+      "orderNumber": "#79366",
+      "customer": "Walk-in Customer",
+      "amount": 300,
+      "status": "completed",
+      "timestamp": "Just now",
+      "type": "sale",
+      "createdAt": 1776025387073
+    },
+    {
+      "id": "k0kshpkkv",
+      "orderNumber": "#23676",
+      "customer": "Walk-in Customer",
+      "amount": 300,
+      "status": "completed",
+      "timestamp": "Just now",
+      "type": "sale",
+      "createdAt": 1776025061664
+    }
+  ],
+  "expenses": [
+    {
+      "title": "Gasto Trasnporte Freyre",
+      "category": "Transporte",
+      "date": "2026-04-12",
+      "amount": 150,
+      "id": "g8ao7t3h7"
+    },
+    {
+      "title": "Transporte Holguin",
+      "category": "Transporte",
+      "date": "2026-04-11",
+      "amount": 500,
+      "id": "ztrtbxjq8"
+    }
+  ],
+  "appSettings": {
+    "id": "main",
+    "storeName": "Tienda Mixta",
+    "branch": "Aguada la Piedra",
+    "currency": "PESOS ($)",
+    "taxRate": 0,
+    "darkMode": false,
+    "lowStockNotifications": true,
+    "managerName": "Reinier Leyva",
+    "managerTitle": "Administrador"
+  }
+}
