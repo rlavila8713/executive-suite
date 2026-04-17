@@ -12,8 +12,9 @@ import {
   Download,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
-import { AppSettings } from '../types';
+import { AppSettings, type AppLocale } from '../types';
 import { cn } from '../lib/utils';
+import { useI18n } from '../i18n/I18nContext';
 import {
   buildBackupSnapshot,
   downloadBackupFile,
@@ -30,6 +31,7 @@ interface SettingsProps {
 }
 
 export function Settings({ settings, onUpdate }: SettingsProps) {
+  const { t } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState<Section>('general');
   const [backupBusy, setBackupBusy] = useState(false);
@@ -43,6 +45,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
     branch: settings.branch,
     currency: settings.currency,
     taxRate: settings.taxRate,
+    cardQrPayload: settings.cardQrPayload,
     managerName: settings.managerName,
     managerTitle: settings.managerTitle,
   });
@@ -53,6 +56,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
       branch: settings.branch,
       currency: settings.currency,
       taxRate: settings.taxRate,
+      cardQrPayload: settings.cardQrPayload,
       managerName: settings.managerName,
       managerTitle: settings.managerTitle,
     });
@@ -64,6 +68,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
       branch: draft.branch,
       currency: draft.currency,
       taxRate: draft.taxRate,
+      cardQrPayload: draft.cardQrPayload,
     });
   };
 
@@ -80,9 +85,9 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
     try {
       const snap = await buildBackupSnapshot();
       downloadBackupFile(snap);
-      setBackupMessage({ type: 'ok', text: 'Backup file downloaded. Copy it to your other computer, then use Import there.' });
+      setBackupMessage({ type: 'ok', text: t('settings.backupOkDownload') });
     } catch (e) {
-      setBackupMessage({ type: 'err', text: e instanceof Error ? e.message : 'Export failed.' });
+      setBackupMessage({ type: 'err', text: e instanceof Error ? e.message : t('settings.exportFailed') });
     } finally {
       setBackupBusy(false);
     }
@@ -102,7 +107,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
     } catch (err) {
       setBackupMessage({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Could not read this file.',
+        text: err instanceof Error ? err.message : t('settings.readFileFailed'),
       });
     } finally {
       setBackupBusy(false);
@@ -119,32 +124,30 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
       setPendingFileName('');
       setBackupMessage({
         type: 'ok',
-        text: 'Local database replaced. Your screens should update immediately.',
+        text: t('settings.backupOkRestored'),
       });
     } catch (e) {
-      setBackupMessage({ type: 'err', text: e instanceof Error ? e.message : 'Restore failed.' });
+      setBackupMessage({ type: 'err', text: e instanceof Error ? e.message : t('settings.restoreFailed') });
     } finally {
       setBackupBusy(false);
     }
   };
 
   const nav = [
-    { id: 'general' as const, label: 'General Store', icon: Store },
-    { id: 'profile' as const, label: 'User Profile', icon: User },
-    { id: 'notifications' as const, label: 'Notifications', icon: Bell },
-    { id: 'security' as const, label: 'Security', icon: Shield },
-    { id: 'regional' as const, label: 'Regional & Language', icon: Globe },
-    { id: 'billing' as const, label: 'Billing & Plans', icon: CreditCard },
-    { id: 'data' as const, label: 'Backup & data', icon: HardDrive },
+    { id: 'general' as const, label: t('settings.navGeneral'), icon: Store },
+    { id: 'profile' as const, label: t('settings.navProfile'), icon: User },
+    { id: 'notifications' as const, label: t('settings.navNotifications'), icon: Bell },
+    { id: 'security' as const, label: t('settings.navSecurity'), icon: Shield },
+    { id: 'regional' as const, label: t('settings.navRegional'), icon: Globe },
+    { id: 'billing' as const, label: t('settings.navBilling'), icon: CreditCard },
+    { id: 'data' as const, label: t('settings.navData'), icon: HardDrive },
   ];
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="mb-10">
-        <h2 className="text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">System Settings</h2>
-        <p className="text-on-surface-variant text-sm font-medium">
-          Configure your store preferences and system parameters. Changes are saved locally.
-        </p>
+      <div className="mb-8 sm:mb-10">
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">{t('settings.pageTitle')}</h2>
+        <p className="text-on-surface-variant text-sm font-medium">{t('settings.pageSubtitle')}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -172,12 +175,12 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
 
         <div className="lg:col-span-2 space-y-6">
           {section === 'general' && (
-            <Card title="Store configuration">
+            <Card title={t('settings.storeConfig')}>
               <div className="space-y-6 mt-6">
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Store name
+                      {t('settings.storeName')}
                     </label>
                     <Input
                       value={draft.storeName}
@@ -186,7 +189,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Branch location
+                      {t('settings.branchLocation')}
                     </label>
                     <Input
                       value={draft.branch}
@@ -194,10 +197,10 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Currency label
+                      {t('settings.currencyLabel')}
                     </label>
                     <Input
                       value={draft.currency}
@@ -206,7 +209,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Tax rate (%)
+                      {t('settings.taxRate')}
                     </label>
                     <Input
                       type="number"
@@ -215,22 +218,37 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                       value={draft.taxRate}
                       onChange={(e) => setDraft((d) => ({ ...d, taxRate: parseFloat(e.target.value) || 0 }))}
                     />
+                    <p className="text-xs text-on-surface-variant mt-1.5">{t('settings.taxRateCardOnlyNote')}</p>
                   </div>
                 </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                    {t('settings.cardQrPayloadLabel')}
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={draft.cardQrPayload}
+                    onChange={(e) => setDraft((d) => ({ ...d, cardQrPayload: e.target.value }))}
+                    className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-lowest transition-all outline-none resize-y min-h-[5rem]"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-on-surface-variant">{t('settings.cardQrPayloadHelp')}</p>
+                </div>
                 <div className="pt-4 flex justify-end">
-                  <Button onClick={saveStore}>Save changes</Button>
+                  <Button onClick={saveStore}>{t('settings.saveChanges')}</Button>
                 </div>
               </div>
             </Card>
           )}
 
           {section === 'profile' && (
-            <Card title="User profile">
+            <Card title={t('settings.userProfile')}>
               <div className="space-y-6 mt-6">
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Display name
+                      {t('settings.displayName')}
                     </label>
                     <Input
                       value={draft.managerName}
@@ -239,7 +257,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      Role title
+                      {t('settings.roleTitle')}
                     </label>
                     <Input
                       value={draft.managerTitle}
@@ -248,21 +266,19 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   </div>
                 </div>
                 <div className="pt-4 flex justify-end">
-                  <Button onClick={saveProfile}>Save profile</Button>
+                  <Button onClick={saveProfile}>{t('settings.saveProfile')}</Button>
                 </div>
               </div>
             </Card>
           )}
 
           {section === 'notifications' && (
-            <Card title="Notifications">
-              <p className="text-sm text-on-surface-variant mt-2 mb-6">
-                Low-stock alerts preference is stored locally and can be used by future features.
-              </p>
+            <Card title={t('settings.notificationsTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2 mb-6">{t('settings.notificationsLowStockHelp')}</p>
               <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-xl">
                 <div>
-                  <p className="text-sm font-bold">Low stock notifications</p>
-                  <p className="text-xs text-on-surface-variant">Alert when items fall below threshold</p>
+                  <p className="text-sm font-bold">{t('settings.lowStockTitle')}</p>
+                  <p className="text-xs text-on-surface-variant">{t('settings.lowStockSubtitle')}</p>
                 </div>
                 <button
                   type="button"
@@ -284,33 +300,40 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
           )}
 
           {section === 'security' && (
-            <Card title="Security">
-              <p className="text-sm text-on-surface-variant mt-2">
-                This prototype has no sign-in. Data stays on this device only (IndexedDB).
-              </p>
+            <Card title={t('settings.securityTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2">{t('settings.securityBody')}</p>
             </Card>
           )}
 
           {section === 'regional' && (
-            <Card title="Regional">
-              <p className="text-sm text-on-surface-variant mt-2">
-                Currency display is configured under General Store.
-              </p>
+            <Card title={t('settings.regionalTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2 mb-4">{t('settings.regionalCurrencyNote')}</p>
+              <div className="space-y-2 max-w-md">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant block">
+                  {t('settings.languageLabel')}
+                </label>
+                <select
+                  value={settings.locale}
+                  onChange={(e) => onUpdate({ locale: e.target.value as AppLocale })}
+                  className="w-full rounded-lg border border-black/10 bg-surface-container-high px-3 py-2 text-sm text-primary outline-none focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="es">{t('settings.languageEs')}</option>
+                  <option value="en">{t('settings.languageEn')}</option>
+                </select>
+                <p className="text-xs text-on-surface-variant">{t('settings.languageHelp')}</p>
+              </div>
             </Card>
           )}
 
           {section === 'billing' && (
-            <Card title="Billing">
-              <p className="text-sm text-on-surface-variant mt-2">No billing integration in this build.</p>
+            <Card title={t('settings.billingTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2">{t('settings.billingBody')}</p>
             </Card>
           )}
 
           {section === 'data' && (
-            <Card title="Backup & portability">
-              <p className="text-sm text-on-surface-variant mt-2 mb-6">
-                Export everything (products, sales, expenses, settings) as one JSON file. On another computer, open this
-                app and import that file to recreate your database in the browser.
-              </p>
+            <Card title={t('settings.dataTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2 mb-6">{t('settings.dataBody')}</p>
               {backupMessage && (
                 <p
                   className={cn(
@@ -325,7 +348,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
               )}
               <div className="flex flex-wrap gap-3">
                 <Button className="flex items-center gap-2" disabled={backupBusy} onClick={handleExportBackup}>
-                  <Download size={16} /> Download backup (.json)
+                  <Download size={16} /> {t('settings.downloadBackup')}
                 </Button>
                 <Button
                   type="button"
@@ -334,7 +357,7 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   disabled={backupBusy}
                   onClick={() => fileRef.current?.click()}
                 >
-                  <Upload size={16} /> Import backup…
+                  <Upload size={16} /> {t('settings.importBackup')}
                 </Button>
                 <input
                   ref={fileRef}
@@ -344,19 +367,16 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
                   onChange={handleBackupFileChange}
                 />
               </div>
-              <p className="text-xs text-on-surface-variant mt-6">
-                Tip: keep periodic copies of your backup file. Importing always replaces the current local data on this
-                device.
-              </p>
+              <p className="text-xs text-on-surface-variant mt-6">{t('settings.dataTip')}</p>
             </Card>
           )}
 
-          <Card title="Appearance">
+          <Card title={t('settings.appearance')}>
             <div className="space-y-4 mt-6">
               <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-xl">
                 <div>
-                  <p className="text-sm font-bold">Dark mode</p>
-                  <p className="text-xs text-on-surface-variant">Uses the Tailwind class strategy on the document root</p>
+                  <p className="text-sm font-bold">{t('settings.darkMode')}</p>
+                  <p className="text-xs text-on-surface-variant">{t('settings.darkModeHelp')}</p>
                 </div>
                 <button
                   type="button"
@@ -388,13 +408,11 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
             setPendingFileName('');
           }
         }}
-        title="Replace local database?"
+        title={t('settings.replaceDbTitle')}
       >
-        <p className="text-sm text-on-surface-variant mb-2">
-          All current data in this browser will be deleted and replaced with the contents of:
-        </p>
+        <p className="text-sm text-on-surface-variant mb-2">{t('settings.replaceDbBody')}</p>
         <p className="text-sm font-bold text-primary mb-6 break-all">{pendingFileName}</p>
-        <p className="text-xs text-error font-medium mb-6">This cannot be undone. Make sure you exported a backup first if you need to keep today&apos;s data.</p>
+        <p className="text-xs text-error font-medium mb-6">{t('settings.replaceDbWarning')}</p>
         <div className="flex gap-3">
           <Button
             variant="secondary"
@@ -406,10 +424,10 @@ export function Settings({ settings, onUpdate }: SettingsProps) {
               setPendingFileName('');
             }}
           >
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button variant="danger" className="flex-1" disabled={backupBusy} onClick={confirmRestoreBackup}>
-            {backupBusy ? 'Restoring…' : 'Yes, restore'}
+            {backupBusy ? t('settings.restoring') : t('settings.yesRestore')}
           </Button>
         </div>
       </Modal>

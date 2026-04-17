@@ -1,5 +1,8 @@
 import { AppSettings, Product, Transaction, Expense } from './types';
 
+/** Initial product category names when the database is empty (demo data uses these). */
+export const DEFAULT_PRODUCT_CATEGORY_NAMES = ['Apparel', 'Footwear', 'Accessories', 'Electronics'] as const;
+
 /** Offline placeholder when no photo is set (SVG data URL). */
 export const PLACEHOLDER_PRODUCT_IMAGE =
   'data:image/svg+xml,' +
@@ -16,10 +19,12 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   branch: 'Main Branch - Downtown',
   currency: 'USD ($)',
   taxRate: 8,
+  cardQrPayload: '',
   darkMode: false,
   lowStockNotifications: true,
   managerName: 'Julian V.',
   managerTitle: 'Store Manager',
+  locale: 'es',
 };
 
 export const MOCK_PRODUCTS: Product[] = [
@@ -92,32 +97,86 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
     id: '1',
     orderNumber: '#88219',
     customer: 'Elena Rossi',
-    amount: 189.00,
+    amount: 189.0,
     status: 'completed',
     timestamp: '2 mins ago',
     type: 'sale',
     createdAt: MOCK_TX_ANCHOR + 3,
+    paymentMethod: 'cash',
+    receipt: {
+      storeName: DEFAULT_APP_SETTINGS.storeName,
+      branch: DEFAULT_APP_SETTINGS.branch,
+      currency: DEFAULT_APP_SETTINGS.currency,
+      lines: [
+        {
+          name: 'Executive Wool Blazer',
+          sku: 'APP-NVY-92',
+          quantity: 1,
+          unitPrice: 189,
+          lineTotal: 189,
+          productId: '5',
+          unitCostSnapshot: 95,
+        },
+      ],
+      subtotal: 189,
+      tax: 0,
+      taxRatePercent: 0,
+      total: 189,
+      paymentMethod: 'cash',
+    },
   },
   {
     id: '2',
     orderNumber: '#88218',
     customer: 'Marcus Thorne',
-    amount: 45.50,
+    amount: 45.5,
     status: 'completed',
     timestamp: '15 mins ago',
     type: 'sale',
     createdAt: MOCK_TX_ANCHOR + 2,
+    paymentMethod: 'card',
+    receipt: {
+      storeName: DEFAULT_APP_SETTINGS.storeName,
+      branch: '',
+      currency: DEFAULT_APP_SETTINGS.currency,
+      lines: [
+        {
+          name: 'Chronograph Minimal',
+          sku: 'WCH-MN-99',
+          quantity: 1,
+          unitPrice: 40.0,
+          lineTotal: 40.0,
+          productId: '2',
+          unitCostSnapshot: 62,
+        },
+        {
+          name: 'Essential Cotton Tee',
+          sku: 'APP-WHT-01',
+          quantity: 1,
+          unitPrice: 5.5,
+          lineTotal: 5.5,
+          productId: '4',
+          unitCostSnapshot: 15,
+        },
+      ],
+      subtotal: 45.5,
+      tax: 0,
+      taxRatePercent: 0,
+      total: 45.5,
+      paymentMethod: 'card',
+    },
   },
   {
     id: '3',
     orderNumber: '#R-4412',
     customer: 'Sarah Jenkins',
-    amount: -12.00,
+    amount: -12.0,
     status: 'refunded',
     timestamp: '42 mins ago',
     type: 'return',
     createdAt: MOCK_TX_ANCHOR + 1,
-  }
+    paymentMethod: 'other',
+  },
 ];
 
 export const MOCK_EXPENSES: Expense[] = [

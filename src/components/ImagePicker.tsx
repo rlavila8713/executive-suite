@@ -4,6 +4,7 @@ import { Button } from './ui';
 import { readImageFileAsDataUrl } from '../lib/images';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
 import { cn } from '../lib/utils';
+import { useI18n } from '../i18n/I18nContext';
 
 export interface ImagePickerProps {
   /** Current image (data URL or built-in placeholder). */
@@ -22,11 +23,14 @@ export interface ImagePickerProps {
 export function ImagePicker({
   value,
   onChange,
-  label = 'Product image',
-  helperText = 'Choose a file from this computer. Stored locally in your database.',
+  label,
+  helperText,
   disabled,
   compact,
 }: ImagePickerProps) {
+  const { t } = useI18n();
+  const resolvedLabel = label ?? t('products.imageLabel');
+  const resolvedHelper = helperText ?? t('products.imageHelper');
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,14 +43,14 @@ export function ImagePicker({
       const dataUrl = await readImageFileAsDataUrl(file);
       onChange(dataUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load image');
+      setError(err instanceof Error ? err.message : t('imagePicker.loadFailed'));
     }
   };
 
   return (
     <div className={cn('space-y-2', compact && 'space-y-1')}>
-      {label ? (
-        <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{label}</label>
+      {resolvedLabel ? (
+        <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{resolvedLabel}</label>
       ) : null}
       <div className={cn('flex flex-wrap gap-3 items-start', compact && 'gap-2')}>
         <div
@@ -65,7 +69,7 @@ export function ImagePicker({
             className="sr-only"
             onChange={handleFile}
             disabled={disabled}
-            aria-label={label}
+            aria-label={resolvedLabel}
           />
           <Button
             type="button"
@@ -76,7 +80,7 @@ export function ImagePicker({
             onClick={() => inputRef.current?.click()}
           >
             <ImagePlus size={16} />
-            Choose image…
+            {t('imagePicker.chooseImage')}
           </Button>
           <Button
             type="button"
@@ -90,11 +94,13 @@ export function ImagePicker({
             }}
           >
             <X size={14} />
-            Use placeholder
+            {t('imagePicker.usePlaceholder')}
           </Button>
         </div>
       </div>
-      {helperText ? <p className="text-[10px] text-on-surface-variant leading-relaxed max-w-md">{helperText}</p> : null}
+      {resolvedHelper ? (
+        <p className="text-[10px] text-on-surface-variant leading-relaxed max-w-md">{resolvedHelper}</p>
+      ) : null}
       {error ? <p className="text-xs text-error font-medium">{error}</p> : null}
     </div>
   );

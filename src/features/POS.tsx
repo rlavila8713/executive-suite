@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Plus,
   Minus,
@@ -6,86 +6,152 @@ import {
   CreditCard,
   Banknote,
   ArrowRight,
-  CheckCircle2,
   ShoppingCart,
 } from 'lucide-react';
-import { Button, Input, Modal } from '../components/ui';
+import { Button, Input } from '../components/ui';
+import { CardQrModal } from '../components/CardQrModal';
+import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
-import { CheckoutPayload, Product, CartItem } from '../types';
+import type { CheckoutPayload, Product, CartItem, SaleReceipt, Transaction } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
+import { useI18n } from '../i18n/I18nContext';
+
+const FILTER_ALL = '__ALL__';
+
+type PosPaymentMethod = 'cash' | 'card';
 
 interface POSProps {
   products: Product[];
+  /** Managed category names (from Categories); POS also shows “All Items”. */
+  productCategoryNames: string[];
   cart: CartItem[];
   taxRatePercent: number;
+  /** Encoded in the Card payment QR (from settings). */
+  cardQrPayload: string;
+  storeName: string;
+  storeBranch: string;
+  storeCurrency: string;
   globalSearch?: string;
   addToCart: (product: Product) => void;
   removeFromCart: (id: string) => void;
   updateQuantity: (id: string, delta: number) => void;
-  onCheckout: (payload: CheckoutPayload) => void | Promise<void>;
+  onCheckout: (payload: CheckoutPayload) => Promise<Transaction>;
 }
 
 export function POS({
   products,
+  productCategoryNames,
   cart,
   taxRatePercent,
+  cardQrPayload,
+  storeName,
+  storeBranch,
+  storeCurrency,
   globalSearch = '',
   addToCart,
   removeFromCart,
   updateQuantity,
   onCheckout,
 }: POSProps) {
-  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
-  const [category, setCategory] = useState('All Items');
+  const { t } = useI18n();
+  const [receiptModalTx, setReceiptModalTx] = useState<Transaction | null>(null);
+  const [cardQrOpen, setCardQrOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  const [category, setCategory] = useState<string>(FILTER_ALL);
   const [customerName, setCustomerName] = useState('');
 
-  const categories = ['All Items', 'Apparel', 'Footwear', 'Accessories', 'Electronics'];
+  const categoryChips = useMemo(
+    () => [
+      { value: FILTER_ALL, label: t('pos.allItems') },
+      ...[...productCategoryNames]
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => ({ value: name, label: name })),
+    ],
+    [productCategoryNames, t],
+  );
+
+  useEffect(() => {
+    if (category !== FILTER_ALL && !productCategoryNames.includes(category)) {
+      setCategory(FILTER_ALL);
+    }
+  }, [category, productCategoryNames]);
+
+  useEffect(() => {
+    if (cart.length === 0) {
+      setPaymentMethod('cash');
+      setCardQrOpen(false);
+    }
+  }, [cart.length]);
+
   const filteredProducts = useMemo(() => {
-    const byCat = category === 'All Items' ? products : products.filter((p) => p.category === category);
+    const byCat = category === FILTER_ALL ? products : products.filter((p) => p.category === category);
     return byCat.filter((p) => rowMatchesSearch(globalSearch, [p.name, p.sku, p.category]));
   }, [products, category, globalSearch]);
 
   const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-  const rate = taxRatePercent / 100;
-  const tax = subtotal * rate;
+  const tax = paymentMethod === 'card' ? subtotal * (taxRatePercent / 100) : 0;
   const total = subtotal + tax;
 
   const handleProcessSale = async () => {
-    await onCheckout({
-      customerName: customerName.trim() || 'Walk-in Customer',
+    const name = customerName.trim() || t('pos.walkInCustomer');
+    const receipt: SaleReceipt = {
+      storeName: storeName.trim() || t('receipt.defaultStore'),
+      branch: storeBranch.trim(),
+      currency: storeCurrency.trim() || 'USD',
+      lines: cart.map((item) => ({
+        name: item.name,
+        sku: item.sku,
+        quantity: item.quantity,
+        unitPrice: item.price,
+        lineTotal: item.price * item.quantity,
+        productId: item.id,
+        unitCostSnapshot: item.cost,
+      })),
+      subtotal,
+      tax,
+      taxRatePercent: paymentMethod === 'card' ? taxRatePercent : 0,
+      total,
+      paymentMethod,
+    };
+    const saved = await onCheckout({
+      customerName: name,
       amount: total,
+      receipt,
     });
-    setIsSuccessModalOpen(true);
+    if (saved) setReceiptModalTx(saved);
     setCustomerName('');
+    setPaymentMethod('cash');
+    setCardQrOpen(false);
   };
 
-  const taxLabel = useMemo(
-    () => `Sales Tax (${taxRatePercent % 1 === 0 ? taxRatePercent.toFixed(0) : taxRatePercent.toFixed(2)}%)`,
-    [taxRatePercent],
-  );
+  const taxLabel = useMemo(() => {
+    const rateStr = taxRatePercent % 1 === 0 ? taxRatePercent.toFixed(0) : taxRatePercent.toFixed(2);
+    return t('pos.salesTax', { rate: rateStr });
+  }, [taxRatePercent, t]);
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <section className="flex-[2.5] flex flex-col space-y-6 overflow-hidden">
+    <div className="flex flex-col xl:flex-row gap-4 xl:gap-6 min-h-0 w-full xl:h-[calc(100vh-8rem)] xl:max-h-[calc(100vh-8rem)] animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <section className="flex-1 xl:flex-[2.5] min-h-[min(50vh,28rem)] xl:min-h-0 flex flex-col space-y-4 xl:space-y-6 overflow-hidden">
         <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar shrink-0">
-          {categories.map((cat) => (
+          {categoryChips.map((chip) => (
             <button
-              key={cat}
-              onClick={() => setCategory(cat)}
+              key={chip.value}
+              type="button"
+              onClick={() => setCategory(chip.value)}
               className={cn(
                 'whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold tracking-wide transition-all',
-                category === cat
+                category === chip.value
                   ? 'bg-primary text-white shadow-lg shadow-primary/20'
                   : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high',
               )}
             >
-              {cat}
+              {chip.label}
             </button>
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto pr-2 no-scrollbar">
-          <div className="grid grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 sm:pr-2 no-scrollbar">
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3 sm:gap-4">
             {filteredProducts.map((product) => (
               <div
                 key={product.id}
@@ -105,7 +171,7 @@ export function POS({
                         product.stock > 0 ? 'bg-tertiary-container/80 text-white' : 'bg-error/80 text-white',
                       )}
                     >
-                      {product.stock > 0 ? 'In Stock' : 'Out of Stock'}
+                      {product.stock > 0 ? t('pos.inStock') : t('pos.outOfStock')}
                     </span>
                   </div>
                 </div>
@@ -113,7 +179,9 @@ export function POS({
                   <h3 className="font-headline font-bold text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
                     {product.name}
                   </h3>
-                  <p className="text-xs text-slate-500 mb-4">SKU: {product.sku}</p>
+                  <p className="text-xs text-slate-500 mb-4">
+                    {t('common.sku')}: {product.sku}
+                  </p>
                   <div className="mt-auto flex justify-between items-end">
                     <span className="text-lg font-headline font-extrabold text-primary">
                       ${product.price.toFixed(2)}
@@ -129,23 +197,23 @@ export function POS({
         </div>
       </section>
 
-      <section className="flex-1 flex flex-col bg-surface-container-low rounded-xl overflow-hidden shadow-2xl shadow-on-surface/5 border border-black/5">
+      <section className="w-full xl:flex-1 shrink-0 xl:min-w-0 min-h-[22rem] xl:min-h-0 flex flex-col bg-surface-container-low rounded-xl overflow-hidden shadow-2xl shadow-on-surface/5 border border-black/5">
         <div className="p-6 pb-4 border-b border-black/5 space-y-4">
           <div className="flex items-center justify-between mb-1">
-            <h2 className="font-headline font-extrabold text-xl text-primary">Current Cart</h2>
+            <h2 className="font-headline font-extrabold text-xl text-primary">{t('pos.currentCart')}</h2>
             <span className="bg-primary text-white text-[10px] font-bold h-5 w-5 flex items-center justify-center rounded-full">
               {cart.reduce((acc, item) => acc + item.quantity, 0)}
             </span>
           </div>
           <p className="text-xs text-on-surface-variant/70 uppercase tracking-widest font-semibold">
-            Transaction #082492
+            {t('pos.transactionStub')}
           </p>
           <div className="space-y-1">
             <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-              Customer name
+              {t('pos.customerName')}
             </label>
             <Input
-              placeholder="Walk-in or customer name"
+              placeholder={t('pos.customerPlaceholder')}
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
             />
@@ -156,7 +224,7 @@ export function POS({
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-on-surface-variant opacity-50 space-y-2">
               <ShoppingCart size={48} strokeWidth={1} />
-              <p className="text-sm font-medium">Your cart is empty</p>
+              <p className="text-sm font-medium">{t('pos.emptyCart')}</p>
             </div>
           ) : (
             cart.map((item) => (
@@ -202,29 +270,56 @@ export function POS({
 
         <div className="bg-surface-container-high/50 p-6 space-y-3">
           <div className="flex justify-between text-sm">
-            <span className="text-on-surface-variant font-medium">Subtotal</span>
+            <span className="text-on-surface-variant font-medium">{t('pos.subtotal')}</span>
             <span className="text-slate-900 dark:text-slate-100 font-bold">${subtotal.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-on-surface-variant font-medium">{taxLabel}</span>
-            <span className="text-slate-900 dark:text-slate-100 font-bold">${tax.toFixed(2)}</span>
+          <div className="flex justify-between text-sm gap-3 items-start">
+            <div className="min-w-0">
+              <span className="text-on-surface-variant font-medium">
+                {paymentMethod === 'card' ? taxLabel : t('pos.taxCashRow')}
+              </span>
+              {paymentMethod === 'cash' ? (
+                <p className="text-[11px] text-on-surface-variant/80 mt-0.5 leading-snug">{t('pos.taxCashNote')}</p>
+              ) : null}
+            </div>
+            <span className="text-slate-900 dark:text-slate-100 font-bold shrink-0">${tax.toFixed(2)}</span>
           </div>
           <div className="pt-3 border-t border-black/10 flex justify-between items-end">
-            <span className="text-on-surface-variant font-bold uppercase tracking-widest text-xs">Total Amount</span>
+            <span className="text-on-surface-variant font-bold uppercase tracking-widest text-xs">{t('pos.totalAmount')}</span>
             <span className="text-3xl font-headline font-black text-primary">${total.toFixed(2)}</span>
           </div>
         </div>
 
         <div className="p-6 pt-0 space-y-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">{t('pos.paymentMethod')}</p>
           <div className="grid grid-cols-2 gap-3">
-            <Button variant="secondary" className="flex items-center gap-2 py-3">
-              <Banknote size={18} /> Cash
+            <Button
+              type="button"
+              variant="secondary"
+              className={cn(
+                'flex items-center justify-center gap-2 py-3',
+                paymentMethod === 'cash' && 'ring-2 ring-primary border-primary/30 bg-primary/5',
+              )}
+              onClick={() => {
+                setPaymentMethod('cash');
+                setCardQrOpen(false);
+              }}
+            >
+              <Banknote size={18} /> {t('pos.cash')}
             </Button>
             <Button
+              type="button"
               variant="secondary"
-              className="flex items-center gap-2 py-3 border-2 border-primary text-primary bg-transparent"
+              className={cn(
+                'flex items-center justify-center gap-2 py-3',
+                paymentMethod === 'card' && 'ring-2 ring-primary border-primary/30 bg-primary/5',
+              )}
+              onClick={() => {
+                setPaymentMethod('card');
+                setCardQrOpen(true);
+              }}
             >
-              <CreditCard size={18} /> Card
+              <CreditCard size={18} /> {t('pos.card')}
             </Button>
           </div>
           <Button
@@ -232,34 +327,19 @@ export function POS({
             onClick={handleProcessSale}
             className="w-full py-4 text-lg shadow-xl flex items-center justify-center gap-3"
           >
-            Process Sale <ArrowRight size={20} />
+            {t('pos.processSale')} <ArrowRight size={20} />
           </Button>
         </div>
       </section>
 
-      <Modal
-        isOpen={isSuccessModalOpen}
-        onClose={() => setIsSuccessModalOpen(false)}
-        title="Payment Successful"
-      >
-        <div className="text-center space-y-4">
-          <div className="w-20 h-20 bg-tertiary-container/20 text-on-tertiary-container rounded-full flex items-center justify-center mx-auto">
-            <CheckCircle2 size={48} />
-          </div>
-          <div>
-            <h4 className="text-2xl font-black font-headline text-primary">Transaction Complete</h4>
-            <p className="text-on-surface-variant">The order has been processed and stock updated.</p>
-          </div>
-          <div className="pt-6 flex gap-3">
-            <Button variant="secondary" className="flex-1" onClick={() => setIsSuccessModalOpen(false)}>
-              Print Receipt
-            </Button>
-            <Button className="flex-1" onClick={() => setIsSuccessModalOpen(false)}>
-              Done
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <CardQrModal open={cardQrOpen} onClose={() => setCardQrOpen(false)} payload={cardQrPayload} />
+
+      <ReceiptViewModal
+        isOpen={!!receiptModalTx}
+        onClose={() => setReceiptModalTx(null)}
+        transaction={receiptModalTx}
+        showSuccessBanner
+      />
     </div>
   );
 }

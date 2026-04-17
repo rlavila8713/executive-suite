@@ -3,6 +3,7 @@ import { Search, Download, TrendingDown, Plus, Edit2, Trash2 } from 'lucide-reac
 import { Card, Button, Input, Modal } from '../components/ui';
 import { Expense } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
+import { useI18n } from '../i18n/I18nContext';
 
 function escapeCsvCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
@@ -33,6 +34,7 @@ interface ExpensesProps {
 }
 
 export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelete }: ExpensesProps) {
+  const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
@@ -89,14 +91,10 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex justify-between items-end flex-wrap gap-4">
-        <div>
-          <h2 className="text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">
-            Expense Tracking
-          </h2>
-          <p className="text-on-surface-variant text-sm font-medium">
-            Monitor your operational costs and overheads.
-          </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
+        <div className="min-w-0">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">{t('expenses.pageTitle')}</h2>
+          <p className="text-on-surface-variant text-sm font-medium">{t('expenses.subtitle')}</p>
         </div>
         <div className="flex gap-2">
           <Button
@@ -106,32 +104,34 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
             }}
             className="flex items-center gap-2"
           >
-            <Plus size={16} /> Add Expense
+            <Plus size={16} /> {t('expenses.addExpense')}
           </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="bg-primary text-white">
-          <p className="text-[10px] opacity-70 uppercase tracking-widest font-bold mb-1">Total Expenses</p>
+          <p className="text-[10px] opacity-70 uppercase tracking-widest font-bold mb-1">{t('expenses.totalExpenses')}</p>
           <h3 className="text-3xl font-extrabold tracking-tight">${totalExpenses.toLocaleString()}</h3>
           <div className="mt-4 flex items-center gap-2 text-on-tertiary-container">
             <TrendingDown size={16} />
-            <span className="text-xs font-bold">Recorded in local database</span>
+            <span className="text-xs font-bold">{t('expenses.recordedLocal')}</span>
           </div>
         </Card>
         <Card>
           <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold mb-1">
-            Largest entry
+            {t('expenses.largestEntry')}
           </p>
           <h3 className="text-2xl font-bold text-primary">{largest?.title ?? '—'}</h3>
           <p className="text-xs text-on-surface-variant mt-1">
-            {largest ? `$${largest.amount.toLocaleString()} (${largestPct}% of total)` : 'Add expenses to see insights'}
+            {largest
+              ? `$${largest.amount.toLocaleString()} (${t('expenses.pctOfTotal', { pct: largestPct })})`
+              : t('expenses.addToSeeInsights')}
           </p>
         </Card>
         <Card>
           <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold mb-1">
-            Budget utilization (est.)
+            {t('expenses.budgetUtil')}
           </p>
           <h3 className="text-2xl font-bold text-primary">{budgetUtilization}%</h3>
           <div className="mt-4 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
@@ -145,14 +145,14 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
           <div className="relative w-full max-w-sm min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <Input
-              placeholder="Search expenses..."
+              placeholder={t('expenses.searchPlaceholder')}
               className="pl-10"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
           <Button variant="secondary" className="flex items-center gap-2" onClick={() => downloadExpensesCsv(filtered)}>
-            <Download size={16} /> Export CSV
+            <Download size={16} /> {t('expenses.exportCsv')}
           </Button>
         </div>
         <div className="overflow-x-auto">
@@ -160,19 +160,19 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
             <thead>
               <tr className="bg-surface-container-low border-b border-black/5">
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">
-                  Expense Title
+                  {t('expenses.colTitle')}
                 </th>
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
-                  Category
+                  {t('expenses.colCategory')}
                 </th>
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
-                  Date
+                  {t('expenses.colDate')}
                 </th>
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
-                  Amount
+                  {t('expenses.colAmount')}
                 </th>
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
-                  Actions
+                  {t('common.actions')}
                 </th>
               </tr>
             </thead>
@@ -189,7 +189,7 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
                     ${expense.amount.toLocaleString()}
                   </td>
                   <td className="py-4 px-6 text-right">
-                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -223,48 +223,46 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
           setModalOpen(false);
           setEditing(null);
         }}
-        title={editing ? 'Edit expense' : 'Add expense'}
+        title={editing ? t('expenses.editExpense') : t('expenses.addExpenseTitle')}
       >
         <form key={editing?.id ?? 'new'} onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Title</label>
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.fieldTitle')}</label>
             <Input name="title" defaultValue={editing?.title} required />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Category</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.colCategory')}</label>
               <Input name="category" defaultValue={editing?.category} required />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Date</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.date')}</label>
               <Input name="date" type="date" defaultValue={editing?.date} required />
             </div>
           </div>
           <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Amount</label>
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.amount')}</label>
             <Input name="amount" type="number" step="0.01" min="0" defaultValue={editing?.amount} required />
           </div>
           <div className="pt-4 flex gap-3">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setModalOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" className="flex-1">
-              {editing ? 'Save changes' : 'Create expense'}
+              {editing ? t('expenses.saveChanges') : t('expenses.createExpense')}
             </Button>
           </div>
         </form>
       </Modal>
 
-      <Modal isOpen={!!deleting} onClose={() => setDeleting(null)} title="Delete expense">
-        <p className="text-on-surface-variant text-sm mb-6">
-          Delete <span className="font-bold text-primary">{deleting?.title}</span>? This cannot be undone.
-        </p>
+      <Modal isOpen={!!deleting} onClose={() => setDeleting(null)} title={t('expenses.deleteTitle')}>
+        <p className="text-on-surface-variant text-sm mb-6">{t('expenses.deleteBody', { title: deleting?.title ?? '' })}</p>
         <div className="flex gap-3">
           <Button variant="secondary" className="flex-1" onClick={() => setDeleting(null)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button variant="danger" className="flex-1" onClick={confirmDelete}>
-            Delete
+            {t('common.delete')}
           </Button>
         </div>
       </Modal>

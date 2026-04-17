@@ -11,6 +11,7 @@ import {
   Edit2,
   Trash2,
   ListOrdered,
+  FileText,
 } from 'lucide-react';
 import {
   BarChart,
@@ -23,9 +24,11 @@ import {
   Cell,
 } from 'recharts';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
-import { Transaction, Product, Expense, Screen } from '../types';
+import { Transaction, Product, Expense, Screen, type PaymentMethod } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
+import { useI18n } from '../i18n/I18nContext';
 
 function startOfLocalDay(ts: number = Date.now()): number {
   const d = new Date(ts);
@@ -78,6 +81,7 @@ export function Dashboard({
   onUpdateTransaction,
   onDeleteTransaction,
 }: DashboardProps) {
+  const { t, locale } = useI18n();
   const lowStockProducts = useMemo(() => {
     const low = products.filter((p) => p.stock <= 5);
     if (!headerSearch.trim()) return low;
@@ -107,6 +111,7 @@ export function Dashboard({
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+  const [receiptViewTx, setReceiptViewTx] = useState<Transaction | null>(null);
 
   const handleTxSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -115,6 +120,9 @@ export function Dashboard({
     const status = fd.get('status') as Transaction['status'];
     const raw = parseFloat(fd.get('amount') as string);
     const amount = type === 'return' ? -Math.abs(raw) : Math.abs(raw);
+    const rawPm = fd.get('paymentMethod') as string;
+    const paymentMethod: PaymentMethod =
+      rawPm === 'cash' || rawPm === 'card' || rawPm === 'transfer' || rawPm === 'other' ? rawPm : 'other';
     const row: Omit<Transaction, 'id'> = {
       orderNumber: fd.get('orderNumber') as string,
       customer: fd.get('customer') as string,
@@ -123,6 +131,8 @@ export function Dashboard({
       timestamp: fd.get('timestamp') as string,
       type,
       createdAt: editingTx?.createdAt ?? Date.now(),
+      paymentMethod,
+      ...(editingTx?.receipt ? { receipt: editingTx.receipt } : {}),
     };
     if (editingTx) {
       await onUpdateTransaction(editingTx.id, row);
@@ -149,6 +159,8 @@ export function Dashboard({
         tx.type,
         tx.timestamp,
         String(tx.amount),
+        ...(tx.receipt?.lines.map((l) => l.name) ?? []),
+        ...(tx.receipt?.lines.map((l) => l.sku) ?? []),
       ]),
     );
   }, [transactions, headerSearch]);
@@ -157,20 +169,20 @@ export function Dashboard({
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="mb-10 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold text-primary font-headline tracking-tight mb-2">
-            Performance overview
+      <div className="mb-8 sm:mb-10 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-primary font-headline tracking-tight mb-2">
+            {t('dashboard.performanceTitle')}
           </h1>
           <p className="text-on-surface-variant font-medium">
-            Store health from your local data for{' '}
+            {t('dashboard.performanceSubtitle')}{' '}
             <span className="text-primary font-bold">
-              {new Date().toLocaleDateString(undefined, { dateStyle: 'long' })}
+              {new Date().toLocaleDateString(locale === 'es' ? 'es' : 'en-US', { dateStyle: 'long' })}
             </span>
             .
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 shrink-0">
           <Button
             className="flex items-center gap-2"
             onClick={() => {
@@ -178,10 +190,10 @@ export function Dashboard({
               setTxModalOpen(true);
             }}
           >
-            <Plus size={16} /> Register transaction
+            <Plus size={16} /> {t('dashboard.registerTx')}
           </Button>
           <Button variant="secondary" className="flex items-center gap-2" onClick={() => setLogOpen(true)}>
-            <ListOrdered size={16} /> Full log
+            <ListOrdered size={16} /> {t('dashboard.fullLog')}
           </Button>
         </div>
       </div>
@@ -189,13 +201,13 @@ export function Dashboard({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="md:col-span-2 relative overflow-hidden rounded-xl bg-gradient-to-br from-primary to-primary-container p-8 text-white shadow-lg">
           <div className="relative z-10">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-70 mb-2">Today&apos;s revenue (sales)</p>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-70 mb-2">{t('dashboard.todayRevenue')}</p>
             <h3 className="text-5xl font-black font-headline tracking-tighter mb-4">
               ${todayRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </h3>
             <div className="flex items-center gap-2 text-on-tertiary-container">
               <TrendingUp size={16} />
-              <span className="text-sm font-bold">Completed sales created today</span>
+              <span className="text-sm font-bold">{t('dashboard.completedSalesToday')}</span>
             </div>
           </div>
           <div className="absolute top-0 right-0 w-48 h-48 bg-white/5 rounded-full -mr-12 -mt-12 blur-3xl" />
@@ -208,17 +220,17 @@ export function Dashboard({
                 <Receipt className="text-primary" size={20} />
               </div>
               <span className="text-[10px] font-bold px-2 py-1 bg-surface-container-high rounded text-on-surface-variant">
-                ALL RECORDS
+                {t('dashboard.allRecords')}
               </span>
             </div>
-            <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">Total expenses</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">{t('dashboard.totalExpenses')}</p>
             <h4 className="text-2xl font-bold text-primary">${expenseMonthly.toLocaleString()}</h4>
           </div>
           <div className="mt-4">
             <div className="h-1 bg-surface-container-highest rounded-full overflow-hidden">
               <div className="h-full bg-primary transition-all" style={{ width: `${budgetPct}%` }} />
             </div>
-            <p className="text-[10px] text-on-surface-variant mt-2 font-medium">Relative load indicator</p>
+            <p className="text-[10px] text-on-surface-variant mt-2 font-medium">{t('dashboard.relativeLoad')}</p>
           </div>
         </Card>
 
@@ -229,20 +241,20 @@ export function Dashboard({
                 <DollarSign className="text-on-tertiary-container" size={20} />
               </div>
             </div>
-            <p className="text-xs font-bold uppercase tracking-widest opacity-70 mb-1">Today − expenses/30</p>
+            <p className="text-xs font-bold uppercase tracking-widest opacity-70 mb-1">{t('dashboard.todayMinusExpenses')}</p>
             <h4 className="text-2xl font-bold">
               ${Math.round(profitApprox).toLocaleString()}
             </h4>
           </div>
           <div className="flex items-center gap-1 text-on-tertiary-container text-[10px] font-bold mt-4">
             <CheckCircle size={12} />
-            INDICATIVE
+            {t('dashboard.indicative')}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Card className="lg:col-span-2 p-8" title="Last 7 days sales" subtitle="Completed sale amounts by calendar day">
+        <Card className="lg:col-span-2 p-8" title={t('dashboard.last7Days')} subtitle={t('dashboard.last7DaysSubtitle')}>
           <div className="h-64 mt-8">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
@@ -273,14 +285,14 @@ export function Dashboard({
         </Card>
 
         <div className="space-y-6">
-          <Card className="bg-surface-container-high" title="Stock alerts">
+          <Card className="bg-surface-container-high" title={t('dashboard.stockAlerts')}>
             <div className="space-y-4 mt-4">
               {lowStockProducts.slice(0, 3).map((product) => (
                 <div key={product.id} className="flex items-center gap-4 bg-white/50 dark:bg-slate-800/50 p-3 rounded-lg">
                   <ProductThumb src={product.image} alt={product.name} className="w-10 h-10 rounded object-cover" />
                   <div className="flex-1">
                     <p className="text-xs font-bold text-primary">{product.name}</p>
-                    <p className="text-[10px] text-error font-bold">{product.stock} items left</p>
+                    <p className="text-[10px] text-error font-bold">{t('dashboard.itemsLeft', { count: product.stock })}</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => onNavigate('inventory')}>
                     <Plus size={14} />
@@ -293,13 +305,13 @@ export function Dashboard({
               className="w-full mt-6 uppercase tracking-widest text-[10px]"
               onClick={() => onNavigate('inventory')}
             >
-              View all inventory
+              {t('dashboard.viewAllInventory')}
             </Button>
           </Card>
 
           <Card className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Total active SKUs</p>
+              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{t('dashboard.totalSkus')}</p>
               <h4 className="text-3xl font-black text-primary font-headline">{products.length}</h4>
             </div>
             <div className="w-12 h-12 bg-surface-container-high rounded-full flex items-center justify-center text-primary">
@@ -309,7 +321,7 @@ export function Dashboard({
         </div>
       </div>
 
-      <Card title="Recent transactions">
+      <Card title={t('dashboard.recentTx')}>
         <div className="space-y-3 mt-6">
           {recent.map((tx) => (
             <div
@@ -321,7 +333,9 @@ export function Dashboard({
                   <ShoppingBag size={18} className="text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-primary truncate">Order {tx.orderNumber}</p>
+                  <p className="text-sm font-bold text-primary truncate">
+                    {t('dashboard.order')} {tx.orderNumber}
+                  </p>
                   <p className="text-[10px] text-on-surface-variant font-medium truncate">
                     {tx.customer} • {tx.timestamp}
                   </p>
@@ -345,10 +359,25 @@ export function Dashboard({
                         : 'bg-surface-container-high text-on-surface-variant',
                     )}
                   >
-                    {tx.status.toUpperCase()}
+                    {tx.status === 'completed'
+                      ? t('dashboard.statusBadge.completed')
+                      : tx.status === 'pending'
+                        ? t('dashboard.statusBadge.pending')
+                        : t('dashboard.statusBadge.refunded')}
                   </span>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                  {tx.receipt ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('dashboard.viewReceiptAria')}
+                      title={t('dashboard.viewReceipt')}
+                      onClick={() => setReceiptViewTx(tx)}
+                    >
+                      <FileText size={14} />
+                    </Button>
+                  ) : null}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -373,7 +402,7 @@ export function Dashboard({
             onClick={() => setLogOpen(true)}
             className="text-xs font-bold text-primary underline underline-offset-4 flex items-center gap-2 mx-auto"
           >
-            VIEW TRANSACTION LOG <ArrowRight size={14} />
+            {t('dashboard.viewTxLog')} <ArrowRight size={14} />
           </button>
         </div>
       </Card>
@@ -384,22 +413,22 @@ export function Dashboard({
           setTxModalOpen(false);
           setEditingTx(null);
         }}
-        title={editingTx ? 'Edit transaction' : 'Register transaction'}
+        title={editingTx ? t('dashboard.editTx') : t('dashboard.registerTxTitle')}
       >
         <form key={editingTx?.id ?? 'new'} onSubmit={handleTxSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Order #</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.orderNumber')}</label>
               <Input name="orderNumber" defaultValue={editingTx?.orderNumber ?? `#${Math.floor(Math.random() * 90000) + 10000}`} required />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Customer</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.customer')}</label>
               <Input name="customer" defaultValue={editingTx?.customer} required />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Amount (absolute)</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.amountAbsolute')}</label>
               <Input
                 name="amount"
                 type="number"
@@ -410,50 +439,67 @@ export function Dashboard({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Display time</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.displayTime')}</label>
               <Input name="timestamp" defaultValue={editingTx?.timestamp ?? 'Just now'} required />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Type</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.type')}</label>
               <select
                 name="type"
                 defaultValue={editingTx?.type ?? 'sale'}
                 className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
               >
-                <option value="sale">Sale</option>
-                <option value="return">Return</option>
+                <option value="sale">{t('dashboard.typeSale')}</option>
+                <option value="return">{t('dashboard.typeReturn')}</option>
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Status</label>
+              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.status')}</label>
               <select
                 name="status"
                 defaultValue={editingTx?.status ?? 'completed'}
                 className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
               >
-                <option value="completed">Completed</option>
-                <option value="pending">Pending</option>
-                <option value="refunded">Refunded</option>
+                <option value="completed">{t('dashboard.statusCompleted')}</option>
+                <option value="pending">{t('dashboard.statusPending')}</option>
+                <option value="refunded">{t('dashboard.statusRefunded')}</option>
               </select>
             </div>
           </div>
-          <p className="text-[10px] text-on-surface-variant">
-            Returns store a negative amount. Charting uses completed sales only.
-          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              {t('dashboard.paymentMethod')}
+            </label>
+            <select
+              name="paymentMethod"
+              defaultValue={
+                editingTx?.paymentMethod ??
+                editingTx?.receipt?.paymentMethod ??
+                'other'
+              }
+              className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
+            >
+              <option value="cash">{t('dashboard.pmCash')}</option>
+              <option value="card">{t('dashboard.pmCard')}</option>
+              <option value="transfer">{t('dashboard.pmTransfer')}</option>
+              <option value="other">{t('dashboard.pmOther')}</option>
+            </select>
+          </div>
+          <p className="text-[10px] text-on-surface-variant">{t('dashboard.returnsNote')}</p>
           <div className="pt-4 flex gap-3">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setTxModalOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" className="flex-1">
-              {editingTx ? 'Save' : 'Create'}
+              {editingTx ? t('common.save') : t('dashboard.create')}
             </Button>
           </div>
         </form>
       </Modal>
 
-      <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title="Transaction log">
+      <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title={t('dashboard.txLogTitle')}>
         <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
           {transactionsFiltered.map((tx) => (
             <div
@@ -467,6 +513,21 @@ export function Dashboard({
                 <span className={cn('font-bold', tx.amount < 0 ? 'text-error' : 'text-primary')}>
                   ${tx.amount.toFixed(2)}
                 </span>
+                {tx.receipt ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="p-1 h-8 w-8"
+                    aria-label={t('dashboard.viewReceiptAria')}
+                    title={t('dashboard.viewReceipt')}
+                    onClick={() => {
+                      setLogOpen(false);
+                      setReceiptViewTx(tx);
+                    }}
+                  >
+                    <FileText size={14} />
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -488,19 +549,25 @@ export function Dashboard({
         </div>
       </Modal>
 
-      <Modal isOpen={!!deletingTx} onClose={() => setDeletingTx(null)} title="Delete transaction">
+      <Modal isOpen={!!deletingTx} onClose={() => setDeletingTx(null)} title={t('dashboard.deleteTxTitle')}>
         <p className="text-on-surface-variant text-sm mb-6">
-          Remove <span className="font-bold text-primary">{deletingTx?.orderNumber}</span> permanently?
+          {t('dashboard.deleteTxBody', { order: deletingTx?.orderNumber ?? '' })}
         </p>
         <div className="flex gap-3">
           <Button variant="secondary" className="flex-1" onClick={() => setDeletingTx(null)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button variant="danger" className="flex-1" onClick={confirmDeleteTx}>
-            Delete
+            {t('common.delete')}
           </Button>
         </div>
       </Modal>
+
+      <ReceiptViewModal
+        isOpen={!!receiptViewTx}
+        onClose={() => setReceiptViewTx(null)}
+        transaction={receiptViewTx}
+      />
     </div>
   );
 }

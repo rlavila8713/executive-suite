@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Product,
@@ -8,9 +8,12 @@ import {
   AppSettings,
   CheckoutPayload,
   Expense,
+  ProductCategory,
+  CashSession,
 } from '../types';
 import { db, newId } from '../db/database';
 import { DEFAULT_APP_SETTINGS } from '../constants';
+import { computeSessionPaymentTotals } from '../lib/reporting';
 
 export function useAppState() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard');
@@ -21,8 +24,21 @@ export function useAppState() {
   const transactions =
     useLiveQuery(() => db.transactions.orderBy('createdAt').reverse().toArray(), []) ?? [];
   const expenses = useLiveQuery(() => db.expenses.orderBy('date').reverse().toArray(), []) ?? [];
-  const appSettings =
-    useLiveQuery(() => db.appSettings.get('main'), []) ?? DEFAULT_APP_SETTINGS;
+  const appSettingsRow = useLiveQuery(() => db.appSettings.get('main'), []);
+  const appSettings = useMemo(
+    () => ({ ...DEFAULT_APP_SETTINGS, ...(appSettingsRow ?? {}) }),
+    [appSettingsRow],
+  );
+  const productCategories =
+    useLiveQuery(() => db.categories.orderBy('name').toArray(), []) ?? [];
+  const cashSessions =
+    useLiveQuery(() => db.cashSessions.orderBy('openedAt').reverse().toArray(), []) ?? [];
+
+  const nameClashes = async (name: string, exceptId?: string) => {
+    const lower = name.trim().toLowerCase();
+    const rows = await db.categories.toArray();
+    return rows.some((c) => c.id !== exceptId && c.name.trim().toLowerCase() === lower);
+  };
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
@@ -54,9 +70,8 @@ export function useAppState() {
 
   const clearCart = () => setCart([]);
 
-  const processSale = async (payload: CheckoutPayload): Promise<void> => {
-    const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-    const amount = payload.amount > 0 ? payload.amount : subtotal;
+  const processSale = async (payload: CheckoutPayload): Promise<Transaction> => {
+    const amount = payload.amount > 0 ? payload.amount : payload.receipt.total;
     const newTransaction: Transaction = {
       id: newId(),
       orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
@@ -66,6 +81,8 @@ export function useAppState() {
       timestamp: 'Just now',
       type: 'sale',
       createdAt: Date.now(),
+      receipt: payload.receipt,
+      paymentMethod: payload.receipt.paymentMethod,
     };
 
     await db.transaction('rw', db.transactions, db.products, async () => {
@@ -81,6 +98,7 @@ export function useAppState() {
     });
 
     clearCart();
+    return newTransaction;
   };
 
   const addProduct = async (product: Omit<Product, 'id'>) => {
@@ -116,7 +134,7 @@ export function useAppState() {
   };
 
   const deleteTransaction = async (id: string) => {
-    await db.transactions.delete(id);
+    await db.transactions.where('id').equals(id).delete();
   };
 
   const updateAppSettings = async (patch: Partial<Omit<AppSettings, 'id'>>) => {
@@ -128,6 +146,76 @@ export function useAppState() {
     }
   };
 
+  const addProductCategory = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (await nameClashes(trimmed)) {
+      throw new Error('ERR_DUPLICATE_CATEGORY');
+    }
+    const row: ProductCategory = { id: newId(), name: trimmed };
+    await db.categories.add(row);
+  };
+
+  const renameProductCategory = async (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const row = await db.categories.get(id);
+    if (!row) return;
+    if (trimmed === row.name) return;
+    if (await nameClashes(trimmed, id)) {
+      throw new Error('ERR_DUPLICATE_CATEGORY');
+    }
+    await db.transaction('rw', db.products, db.categories, async () => {
+      const affected = await db.products.where('category').equals(row.name).toArray();
+      for (const p of affected) {
+        await db.products.update(p.id, { category: trimmed });
+      }
+      await db.categories.update(id, { name: trimmed });
+    });
+  };
+
+  const openCashSession = async (openingCash: number) => {
+    const openCount = await db.cashSessions.filter((s) => s.closedAt == null).count();
+    if (openCount > 0) {
+      throw new Error('ERR_CASH_SESSION_OPEN');
+    }
+    const row: CashSession = {
+      id: newId(),
+      openedAt: Date.now(),
+      closedAt: null,
+      openingCash,
+      closingCash: null,
+      totalCashSales: 0,
+      totalCardSales: 0,
+      totalTransferSales: 0,
+      totalOtherSales: 0,
+    };
+    await db.cashSessions.add(row);
+  };
+
+  const closeCashSession = async (id: string, closingCash: number) => {
+    const s = await db.cashSessions.get(id);
+    if (!s || s.closedAt != null) return;
+    const closedAt = Date.now();
+    const allTx = await db.transactions.toArray();
+    const totals = computeSessionPaymentTotals(allTx, s.openedAt, closedAt);
+    await db.cashSessions.update(id, {
+      closedAt,
+      closingCash,
+      ...totals,
+    });
+  };
+
+  const deleteProductCategory = async (id: string) => {
+    const row = await db.categories.get(id);
+    if (!row) return;
+    const n = await db.products.where('category').equals(row.name).count();
+    if (n > 0) {
+      throw new Error(`ERR_CATEGORY_IN_USE|${n}|${encodeURIComponent(row.name)}`);
+    }
+    await db.categories.delete(id);
+  };
+
   return {
     currentScreen,
     setCurrentScreen,
@@ -136,6 +224,10 @@ export function useAppState() {
     transactions,
     expenses,
     appSettings,
+    productCategories,
+    cashSessions,
+    openCashSession,
+    closeCashSession,
     addToCart,
     removeFromCart,
     updateCartQuantity,
@@ -151,5 +243,8 @@ export function useAppState() {
     updateTransaction,
     deleteTransaction,
     updateAppSettings,
+    addProductCategory,
+    renameProductCategory,
+    deleteProductCategory,
   };
 }
