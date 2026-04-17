@@ -10,7 +10,7 @@ interface CardProps {
 
 export function Card({ children, className, title, subtitle }: CardProps) {
   return (
-    <div className={cn("bg-surface-container-lowest rounded-xl p-6 shadow-sm border border-black/5", className)}>
+    <div className={cn('bg-surface-container-lowest rounded-xl p-4 sm:p-6 shadow-sm border border-black/5', className)}>
       {(title || subtitle) && (
         <div className="mb-6">
           {title && <h3 className="text-lg font-bold font-headline text-primary">{title}</h3>}
@@ -91,17 +91,20 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
-        <div className="p-6 border-b border-black/5 flex justify-between items-center">
-          <h3 className="text-xl font-bold font-headline text-primary">{title}</h3>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-primary transition-colors">
+    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto overscroll-contain">
+      <div className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col my-auto sm:my-0">
+        <div className="p-4 sm:p-6 border-b border-black/5 dark:border-white/10 flex justify-between items-center gap-3 shrink-0">
+          <h3 className="text-lg sm:text-xl font-bold font-headline text-primary pr-2">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-on-surface-variant hover:text-primary transition-colors shrink-0 p-1 rounded-lg"
+            aria-label="Close"
+          >
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
-        <div className="p-6">
-          {children}
-        </div>
+        <div className="p-4 sm:p-6 overflow-y-auto overscroll-contain min-h-0 flex-1">{children}</div>
       </div>
     </div>
   );
