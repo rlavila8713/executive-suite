@@ -5,8 +5,12 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "api": "tsx watch --clear-screen=false --exclude ./data --exclude ./data/** server/index.ts",
+    "free-ports": "node scripts/free-dev-ports.mjs",
+    "dev": "npm run free-ports && concurrently -k -n api,web -c blue,green \"npm run api\" \"vite --port=3000 --host=0.0.0.0\"",
+    "dev:web": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=cjs --outfile=server/dist/index.cjs --packages=external",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "start:dist": "serve dist -s -l 4173",
     "deploy:build": "npm run build",
@@ -15,8 +19,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "electron:start": "electron .",
-    "electron:build": "npm run build && electron-builder",
-    "electron:build:win": "npm run build && electron-builder --win"
+    "electron:build": "npm run build && npm run build:server && electron-builder",
+    "electron:build:win": "npm run build && npm run build:server && electron-builder --win"
   },
   "build": {
     "appId": "com.executivesuite.app",
@@ -27,6 +31,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "server/dist/**/*",
+      "node_modules/sql.js/**/*",
       "package.json"
     ],
     "asar": false,
@@ -44,6 +50,7 @@
   "dependencies": {
     "@google/genai": "^1.29.0",
     "clsx": "^2.1.1",
+    "cors": "^2.8.6",
     "dexie": "^4.4.2",
     "dexie-react-hooks": "^4.4.0",
     "dotenv": "^17.2.3",
@@ -54,10 +61,12 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.8.1",
+    "sql.js": "^1.14.2",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",
+    "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
@@ -65,8 +74,10 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^10.0.5",
     "electron": "^41.2.0",
     "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.2",
     "serve": "^14.2.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

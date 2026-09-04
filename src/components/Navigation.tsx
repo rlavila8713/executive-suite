@@ -1,8 +1,14 @@
 import { useEffect } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import {
   LayoutDashboard,
   Package,
   Tags,
+  FileUp,
+  Layers,
+  MapPin,
+  Wallet,
+  Scale,
   ShoppingCart,
   Receipt,
   BarChart3,
@@ -17,6 +23,122 @@ import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 
+type MenuItem = {
+  id: Screen;
+  label: string;
+  icon: LucideIcon;
+  emphasis?: boolean;
+};
+
+type MenuGroup = {
+  id: string;
+  label: string;
+  items: MenuItem[];
+};
+
+function useMenuGroups(): MenuGroup[] {
+  const { t } = useI18n();
+  return [
+    {
+      id: 'overview',
+      label: t('nav.groupOverview'),
+      items: [{ id: 'dashboard', label: t('nav.dashboard'), icon: LayoutDashboard }],
+    },
+    {
+      id: 'sales',
+      label: t('nav.groupSales'),
+      items: [
+        { id: 'pos', label: t('nav.pos'), icon: ShoppingCart, emphasis: true },
+        { id: 'cash', label: t('nav.cash'), icon: Wallet },
+        { id: 'reconciliation', label: t('nav.reconciliation'), icon: Scale },
+      ],
+    },
+    {
+      id: 'catalog',
+      label: t('nav.groupCatalog'),
+      items: [
+        { id: 'products', label: t('nav.products'), icon: Package },
+        { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
+        { id: 'import', label: t('nav.import'), icon: FileUp },
+        { id: 'categories', label: t('nav.categories'), icon: Tags },
+        { id: 'subcategories', label: t('nav.subcategories'), icon: Layers },
+        { id: 'locations', label: t('nav.locations'), icon: MapPin },
+      ],
+    },
+    {
+      id: 'finance',
+      label: t('nav.groupFinance'),
+      items: [
+        { id: 'expenses', label: t('nav.expenses'), icon: Receipt },
+        { id: 'reports', label: t('nav.reports'), icon: BarChart3 },
+      ],
+    },
+    {
+      id: 'system',
+      label: t('nav.groupSystem'),
+      items: [{ id: 'settings', label: t('nav.settings'), icon: Settings }],
+    },
+  ];
+}
+
+function NavMenu({
+  groups,
+  currentScreen,
+  onSelect,
+  compact,
+}: {
+  groups: MenuGroup[];
+  currentScreen: Screen;
+  onSelect: (screen: Screen) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={cn('space-y-1', compact ? 'pr-1' : '')}>
+      {groups.map((group, groupIndex) => (
+        <div key={group.id} className={cn(groupIndex > 0 ? 'pt-3 mt-1 border-t border-slate-200/80 dark:border-slate-700/60' : '')}>
+          <p
+            className={cn(
+              'px-3 mb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 dark:text-slate-500',
+              groupIndex === 0 ? 'pt-0' : 'pt-2',
+            )}
+          >
+            {group.label}
+          </p>
+          <ul className="space-y-0.5">
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const isActive = currentScreen === item.id;
+              return (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(item.id)}
+                    className={cn(
+                      'w-full flex items-center gap-2.5 rounded-lg text-left transition-colors duration-150',
+                      compact ? 'px-3 py-2.5' : 'px-3 py-2',
+                      isActive
+                        ? 'bg-white dark:bg-slate-800 text-primary shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                        : item.emphasis
+                          ? 'text-slate-700 dark:text-slate-200 hover:bg-slate-200/80 dark:hover:bg-slate-800 font-semibold'
+                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-100',
+                    )}
+                  >
+                    <Icon
+                      size={18}
+                      className={cn('shrink-0', isActive ? 'text-primary' : item.emphasis ? 'text-primary/80' : '')}
+                    />
+                    <span className="text-sm font-medium leading-tight truncate">{item.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface SidebarProps {
   currentScreen: Screen;
   onNavigate: (screen: Screen) => void;
@@ -24,20 +146,6 @@ interface SidebarProps {
   branchLabel?: string;
   managerName?: string;
   managerTitle?: string;
-}
-
-function useMenuItems() {
-  const { t } = useI18n();
-  return [
-    { id: 'dashboard' as const, label: t('nav.dashboard'), icon: LayoutDashboard },
-    { id: 'products' as const, label: t('nav.products'), icon: Package },
-    { id: 'categories' as const, label: t('nav.categories'), icon: Tags },
-    { id: 'pos' as const, label: t('nav.pos'), icon: ShoppingCart },
-    { id: 'expenses' as const, label: t('nav.expenses'), icon: Receipt },
-    { id: 'reports' as const, label: t('nav.reports'), icon: BarChart3 },
-    { id: 'inventory' as const, label: t('nav.inventory'), icon: Boxes },
-    { id: 'settings' as const, label: t('nav.settings'), icon: Settings },
-  ];
 }
 
 export function Sidebar({
@@ -48,49 +156,30 @@ export function Sidebar({
   managerName = 'Manager',
   managerTitle = 'Staff',
 }: SidebarProps) {
-  const menuItems = useMenuItems();
+  const groups = useMenuGroups();
 
   return (
-    <aside className="hidden md:flex h-screen w-64 fixed left-0 top-0 bg-slate-100 dark:bg-slate-900 flex-col py-6 px-4 space-y-2 z-50">
-      <div className="px-4 mb-8">
-        <h1 className="text-lg font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest font-headline line-clamp-2">
+    <aside className="no-print hidden md:flex h-screen w-[15.5rem] fixed left-0 top-0 bg-slate-100 dark:bg-slate-900 flex-col z-50 border-r border-black/5 dark:border-white/5">
+      <div className="shrink-0 px-4 pt-5 pb-4 border-b border-slate-200/80 dark:border-slate-700/60">
+        <h1 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wide font-headline line-clamp-2 leading-snug">
           {storeName}
         </h1>
-        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold line-clamp-2">{branchLabel}</p>
+        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold line-clamp-2 mt-1">{branchLabel}</p>
       </div>
 
-      <nav className="flex-1 space-y-1">
-        {menuItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentScreen === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onNavigate(item.id as Screen)}
-              className={cn(
-                'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200',
-                isActive
-                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-50 shadow-sm translate-x-1'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800',
-              )}
-            >
-              <Icon size={20} />
-              <span className="text-sm uppercase tracking-widest font-medium">{item.label}</span>
-            </button>
-          );
-        })}
+      <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 no-scrollbar">
+        <NavMenu groups={groups} currentScreen={currentScreen} onSelect={onNavigate} />
       </nav>
 
-      <div className="mt-auto px-4 py-4 bg-surface-container-high rounded-xl">
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 m-3 p-3 bg-white/60 dark:bg-slate-800/60 rounded-xl border border-black/5 dark:border-white/5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div
-            className="w-10 h-10 rounded-full bg-primary-container text-white flex items-center justify-center text-xs font-bold shrink-0"
+            className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center text-[10px] font-bold shrink-0"
             aria-hidden
           >
             {initialsFromName(managerName)}
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-xs font-bold text-primary line-clamp-1">{managerName}</p>
             <p className="text-[10px] text-slate-500 line-clamp-1">{managerTitle}</p>
           </div>
@@ -105,7 +194,6 @@ export type MobileNavDrawerProps = SidebarProps & {
   onClose: () => void;
 };
 
-/** Slide-in navigation for small screens (paired with TopBar menu button). */
 export function MobileNavDrawer({
   open,
   onClose,
@@ -117,7 +205,7 @@ export function MobileNavDrawer({
   managerTitle = 'Staff',
 }: MobileNavDrawerProps) {
   const { t } = useI18n();
-  const menuItems = useMenuItems();
+  const groups = useMenuGroups();
 
   useEffect(() => {
     if (!open) return;
@@ -136,54 +224,39 @@ export function MobileNavDrawer({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] md:hidden" role="dialog" aria-modal="true" aria-label={t('nav.openMenu')}>
+    <div className="no-print fixed inset-0 z-[70] md:hidden" role="dialog" aria-modal="true" aria-label={t('nav.openMenu')}>
       <button
         type="button"
         className="absolute inset-0 bg-black/50"
         aria-label={t('nav.closeMenu')}
         onClick={onClose}
       />
-      <aside className="absolute left-0 top-0 bottom-0 w-[min(20rem,90vw)] max-w-sm bg-slate-100 dark:bg-slate-900 shadow-2xl flex flex-col py-5 pl-4 pr-12 overflow-y-auto overscroll-contain animate-in slide-in-from-left duration-200">
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute top-3 right-3 p-2 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800"
-          aria-label={t('nav.closeMenu')}
-        >
-          <X size={22} />
-        </button>
-        <div className="pr-2 mb-6 mt-1">
-          <h1 className="text-base font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest font-headline line-clamp-2">
-            {storeName}
-          </h1>
-          <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold line-clamp-2">{branchLabel}</p>
+      <aside className="absolute left-0 top-0 bottom-0 w-[min(18.5rem,88vw)] bg-slate-100 dark:bg-slate-900 shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
+        <div className="shrink-0 flex items-start justify-between gap-2 px-4 pt-4 pb-3 border-b border-slate-200/80 dark:border-slate-700/60">
+          <div className="min-w-0 pr-8">
+            <h1 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wide font-headline line-clamp-2">
+              {storeName}
+            </h1>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold line-clamp-2 mt-1">{branchLabel}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-3 right-3 p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800"
+            aria-label={t('nav.closeMenu')}
+          >
+            <X size={20} />
+          </button>
         </div>
-        <nav className="flex-1 space-y-1">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentScreen === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => go(item.id as Screen)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-all duration-200',
-                  isActive
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-50 shadow-sm'
-                    : 'text-slate-500 dark:text-slate-400 active:bg-slate-200 dark:active:bg-slate-800',
-                )}
-              >
-                <Icon size={20} />
-                <span className="text-sm uppercase tracking-widest font-medium">{item.label}</span>
-              </button>
-            );
-          })}
+
+        <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3">
+          <NavMenu groups={groups} currentScreen={currentScreen} onSelect={go} compact />
         </nav>
-        <div className="mt-6 mr-2 px-3 py-3 bg-surface-container-high rounded-xl shrink-0">
-          <div className="flex items-center gap-3">
+
+        <div className="shrink-0 m-3 p-3 bg-white/60 dark:bg-slate-800/60 rounded-xl border border-black/5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div
-              className="w-10 h-10 rounded-full bg-primary-container text-white flex items-center justify-center text-xs font-bold shrink-0"
+              className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center text-[10px] font-bold shrink-0"
               aria-hidden
             >
               {initialsFromName(managerName)}
@@ -205,7 +278,6 @@ interface TopBarProps {
   searchQuery?: string;
   onSearchChange?: (value: string) => void;
   searchPlaceholder?: string;
-  /** Opens the mobile navigation drawer (only shown below `md`). */
   onOpenMobileNav?: () => void;
 }
 
@@ -220,8 +292,7 @@ export function TopBar({
   const { t } = useI18n();
   const placeholder = searchPlaceholder ?? t('common.search');
   return (
-    <header className="w-full min-h-14 md:h-16 shrink-0 sticky top-0 z-40 bg-slate-50 dark:bg-slate-950 border-b border-black/5">
-      {/* Una sola fila: título (izq) · búsqueda (centro, crece) · acciones (derecha fija). Sin order-last ni wrap que mezclen campana/avatar con la búsqueda. */}
+    <header className="no-print w-full min-h-14 md:h-16 shrink-0 sticky top-0 z-40 bg-slate-50 dark:bg-slate-950 border-b border-black/5">
       <div className="flex h-auto md:h-16 min-h-14 w-full flex-nowrap items-center gap-2 sm:gap-3 md:gap-4 px-4 sm:px-6 md:px-8 py-2 md:py-0">
         <div className="flex min-w-0 shrink-0 items-center gap-2 md:max-w-[min(42%,18rem)]">
           {onOpenMobileNav ? (

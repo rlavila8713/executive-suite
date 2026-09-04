@@ -101,6 +101,18 @@ export function SaleReceiptPanel({
                   : t('receipt.paymentCash')}
           </span>
         </div>
+        {receipt.paymentMethod === 'cash' && receipt.amountPaid != null ? (
+          <div className="mt-2 pt-2 border-t border-dashed border-zinc-300 space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-zinc-600">{t('receipt.amountPaid')}</span>
+              <span className="font-semibold">${money(receipt.amountPaid)}</span>
+            </div>
+            <div className="flex justify-between font-bold text-sm text-zinc-900">
+              <span>{t('receipt.changeGiven')}</span>
+              <span>${money(receipt.changeGiven ?? 0)}</span>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <p className="text-center text-xs text-zinc-600 mt-4 pt-3 border-t border-dashed border-zinc-300">

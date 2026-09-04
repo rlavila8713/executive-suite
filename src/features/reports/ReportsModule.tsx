@@ -18,6 +18,7 @@ import {
   groupSalesByBucket,
   inventoryValuationAtCost,
   inventoryValuationAtRetail,
+  inventoryTurnoverRatio,
   paymentMethodBreakdown,
   previousPeriodOfSameLength,
   profitGrossInRange,
@@ -131,6 +132,10 @@ export function ReportsModule({
   const valCost = useMemo(() => inventoryValuationAtCost(products), [products]);
   const valRetail = useMemo(() => inventoryValuationAtRetail(products), [products]);
   const lowStock = useMemo(() => products.filter((p) => p.stock <= 5).length, [products]);
+  const turnover = useMemo(
+    () => inventoryTurnoverRatio(transactions, products, range),
+    [transactions, products, range],
+  );
 
   const openSession = cashSessions.find((s) => s.closedAt == null) ?? null;
 
@@ -184,12 +189,18 @@ export function ReportsModule({
           <h2 className="text-2xl sm:text-3xl font-extrabold text-primary font-headline tracking-tight">{t('reports.title')}</h2>
           <p className="text-sm text-on-surface-variant mt-1">{t('reports.subtitle')}</p>
         </div>
-        <Button variant="secondary" className="self-start" onClick={() => window.print()}>
+        <Button
+          variant="secondary"
+          className="self-start no-print"
+          onClick={() => {
+            window.print();
+          }}
+        >
           {t('reports.printPdf')}
         </Button>
       </div>
 
-      <div className="flex flex-wrap gap-2 p-1 bg-surface-container-low rounded-xl border border-black/5">
+      <div className="flex flex-wrap gap-2 p-1 bg-surface-container-low rounded-xl border border-black/5 no-print">
         {tabs.map((x) => (
           <button
             key={x.id}
@@ -396,7 +407,7 @@ export function ReportsModule({
 
       {tab === 'inventory' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.valuationCost')}</p>
               <p className="text-2xl font-black text-primary mt-1">${valCost.toLocaleString()}</p>
@@ -408,6 +419,13 @@ export function ReportsModule({
             <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.lowStock')}</p>
               <p className="text-2xl font-black text-error mt-1">{lowStock}</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.turnover')}</p>
+              <p className="text-2xl font-black text-primary mt-1">{turnover.ratio.toFixed(2)}x</p>
+              <p className="text-[10px] text-on-surface-variant mt-1">
+                {turnover.unitsSold} / {turnover.stockOnHand}
+              </p>
             </Card>
           </div>
           <Card className="p-0 overflow-hidden">

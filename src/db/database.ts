@@ -7,6 +7,7 @@ import {
   MOCK_PRODUCTS,
   MOCK_TRANSACTIONS,
 } from '../constants';
+import { codeFromCategoryName } from '../lib/sku';
 
 export class ExecutiveSuiteDB extends Dexie {
   products!: EntityTable<Product, 'id'>;
@@ -57,7 +58,7 @@ export async function ensureSeeded(): Promise<void> {
       if ((await db.categories.count()) === 0) {
         if ((await db.products.count()) === 0) {
           await db.categories.bulkAdd(
-            DEFAULT_PRODUCT_CATEGORY_NAMES.map((name) => ({ id: newId(), name })),
+            DEFAULT_PRODUCT_CATEGORY_NAMES.map((name) => ({ id: newId(), name, code: codeFromCategoryName(name) })),
           );
         } else {
           const prods = await db.products.toArray();
@@ -65,7 +66,7 @@ export async function ensureSeeded(): Promise<void> {
             ...new Set(prods.map((p) => p.category.trim()).filter(Boolean)),
           ].sort((a, b) => a.localeCompare(b));
           if (names.length > 0) {
-            await db.categories.bulkAdd(names.map((name) => ({ id: newId(), name })));
+            await db.categories.bulkAdd(names.map((name) => ({ id: newId(), name, code: codeFromCategoryName(name) })));
           }
         }
       }

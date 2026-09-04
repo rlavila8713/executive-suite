@@ -3,15 +3,37 @@ export type AppLocale = 'es' | 'en';
 export type Screen =
   | 'dashboard'
   | 'products'
+  | 'import'
   | 'categories'
+  | 'subcategories'
+  | 'locations'
+  | 'cash'
+  | 'reconciliation'
   | 'pos'
   | 'inventory'
   | 'expenses'
   | 'reports'
   | 'settings';
 
-/** Product shelf categories (distinct from expense categories). Stored locally; product rows reference the category by name. */
+export type ProductStatus = 'active' | 'inactive' | 'pending';
+
+export type UnitOfMeasure = 'unidad' | 'par' | 'caja' | 'paquete' | 'metro' | 'kg' | 'litro';
+
+/** Product shelf categories (distinct from expense categories). */
 export interface ProductCategory {
+  id: string;
+  name: string;
+  code: string;
+}
+
+export interface ProductSubcategory {
+  id: string;
+  categoryId: string;
+  name: string;
+  code: string;
+}
+
+export interface ProductLocation {
   id: string;
   name: string;
 }
@@ -26,6 +48,13 @@ export interface Product {
   stock: number;
   /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — local only, no remote URLs. */
   image: string;
+  categoryId: string;
+  subcategoryId: string;
+  subcategory: string;
+  status: ProductStatus;
+  unitOfMeasure: UnitOfMeasure;
+  locationId: string | null;
+  barcode: string | null;
 }
 
 export interface CartItem extends Product {
@@ -61,6 +90,10 @@ export interface SaleReceipt {
   taxRatePercent: number;
   total: number;
   paymentMethod: PaymentMethod;
+  /** Efectivo: importe entregado por el cliente. */
+  amountPaid?: number;
+  /** Efectivo: vuelto entregado (amountPaid - total). */
+  changeGiven?: number;
 }
 
 export interface Transaction {
@@ -68,7 +101,7 @@ export interface Transaction {
   orderNumber: string;
   customer: string;
   amount: number;
-  status: 'completed' | 'refunded' | 'pending';
+  status: 'completed' | 'refunded' | 'pending' | 'reversed';
   timestamp: string;
   type: 'sale' | 'return';
   /** Used for ordering in the local database (newest first). */

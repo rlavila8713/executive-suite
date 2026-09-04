@@ -1,25 +1,5 @@
-import { AppSettings, Product, Transaction, Expense } from './types';
+/** Server-side seed data (mirrors src/constants.ts). */
 
-function mockProduct(
-  base: Pick<Product, 'id' | 'name' | 'sku' | 'category' | 'price' | 'cost' | 'stock' | 'image'> &
-    Partial<Pick<Product, 'categoryId' | 'subcategoryId' | 'subcategory' | 'status' | 'unitOfMeasure' | 'locationId' | 'barcode'>>,
-): Product {
-  return {
-    categoryId: '',
-    subcategoryId: '',
-    subcategory: '',
-    status: 'active',
-    unitOfMeasure: 'unidad',
-    locationId: null,
-    barcode: null,
-    ...base,
-  };
-}
-
-/** Initial product category names when the database is empty (demo data uses these). */
-export const DEFAULT_PRODUCT_CATEGORY_NAMES = ['Apparel', 'Footwear', 'Accessories', 'Electronics'] as const;
-
-/** Offline placeholder when no photo is set (SVG data URL). */
 export const PLACEHOLDER_PRODUCT_IMAGE =
   'data:image/svg+xml,' +
   encodeURIComponent(
@@ -29,8 +9,10 @@ export const PLACEHOLDER_PRODUCT_IMAGE =
     </svg>`,
   );
 
-export const DEFAULT_APP_SETTINGS: AppSettings = {
-  id: 'main',
+export const DEFAULT_PRODUCT_CATEGORY_NAMES = ['Apparel', 'Footwear', 'Accessories', 'Electronics'] as const;
+
+export const DEFAULT_APP_SETTINGS = {
+  id: 'main' as const,
   storeName: 'The Editorial Executive',
   branch: 'Main Branch - Downtown',
   currency: 'USD ($)',
@@ -40,85 +22,85 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   lowStockNotifications: true,
   managerName: 'Julian V.',
   managerTitle: 'Store Manager',
-  locale: 'es',
+  locale: 'es' as const,
 };
 
-export const MOCK_PRODUCTS: Product[] = [
-  mockProduct({
+const MOCK_TX_ANCHOR = 1_730_000_000_000;
+
+export const MOCK_PRODUCTS = [
+  {
     id: '1',
     name: 'Acoustic Pro Headset',
     sku: 'HEAD-PR-202',
     category: 'Electronics',
-    price: 299.00,
-    cost: 112.50,
+    price: 299.0,
+    cost: 112.5,
     stock: 42,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
-  mockProduct({
+  },
+  {
     id: '2',
     name: 'Chronograph Minimal',
     sku: 'WCH-MN-99',
     category: 'Accessories',
-    price: 185.00,
-    cost: 62.00,
+    price: 185.0,
+    cost: 62.0,
     stock: 4,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
-  mockProduct({
+  },
+  {
     id: '3',
     name: 'Urban Walker V2',
     sku: 'SHO-UR-312',
     category: 'Footwear',
-    price: 120.00,
-    cost: 48.00,
+    price: 120.0,
+    cost: 48.0,
     stock: 0,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
-  mockProduct({
+  },
+  {
     id: '4',
     name: 'Essential Cotton Tee',
     sku: 'APP-WHT-01',
     category: 'Apparel',
-    price: 45.00,
-    cost: 15.00,
+    price: 45.0,
+    cost: 15.0,
     stock: 120,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
-  mockProduct({
+  },
+  {
     id: '5',
     name: 'Executive Wool Blazer',
     sku: 'APP-NVY-92',
     category: 'Apparel',
-    price: 295.00,
-    cost: 95.00,
+    price: 295.0,
+    cost: 95.0,
     stock: 15,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
-  mockProduct({
+  },
+  {
     id: '6',
     name: 'Velocity Runner X1',
     sku: 'FTW-RED-05',
     category: 'Footwear',
-    price: 120.00,
-    cost: 45.00,
+    price: 120.0,
+    cost: 45.0,
     stock: 8,
     image: PLACEHOLDER_PRODUCT_IMAGE,
-  }),
+  },
 ];
 
-const MOCK_TX_ANCHOR = 1_730_000_000_000;
-
-export const MOCK_TRANSACTIONS: Transaction[] = [
+export const MOCK_TRANSACTIONS = [
   {
     id: '1',
     orderNumber: '#88219',
     customer: 'Elena Rossi',
     amount: 189.0,
-    status: 'completed',
+    status: 'completed' as const,
     timestamp: '2 mins ago',
-    type: 'sale',
+    type: 'sale' as const,
     createdAt: MOCK_TX_ANCHOR + 3,
-    paymentMethod: 'cash',
+    paymentMethod: 'cash' as const,
     receipt: {
       storeName: DEFAULT_APP_SETTINGS.storeName,
       branch: DEFAULT_APP_SETTINGS.branch,
@@ -138,7 +120,7 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
       tax: 0,
       taxRatePercent: 0,
       total: 189,
-      paymentMethod: 'cash',
+      paymentMethod: 'cash' as const,
     },
   },
   {
@@ -146,11 +128,11 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
     orderNumber: '#88218',
     customer: 'Marcus Thorne',
     amount: 45.5,
-    status: 'completed',
+    status: 'completed' as const,
     timestamp: '15 mins ago',
-    type: 'sale',
+    type: 'sale' as const,
     createdAt: MOCK_TX_ANCHOR + 2,
-    paymentMethod: 'card',
+    paymentMethod: 'card' as const,
     receipt: {
       storeName: DEFAULT_APP_SETTINGS.storeName,
       branch: '',
@@ -179,7 +161,7 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
       tax: 0,
       taxRatePercent: 0,
       total: 45.5,
-      paymentMethod: 'card',
+      paymentMethod: 'card' as const,
     },
   },
   {
@@ -187,16 +169,16 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
     orderNumber: '#R-4412',
     customer: 'Sarah Jenkins',
     amount: -12.0,
-    status: 'refunded',
+    status: 'refunded' as const,
     timestamp: '42 mins ago',
-    type: 'return',
+    type: 'return' as const,
     createdAt: MOCK_TX_ANCHOR + 1,
-    paymentMethod: 'other',
+    paymentMethod: 'other' as const,
   },
 ];
 
-export const MOCK_EXPENSES: Expense[] = [
+export const MOCK_EXPENSES = [
   { id: '1', title: 'Logistics & Shipping', amount: 142000, category: 'Operations', date: '2023-10-01' },
   { id: '2', title: 'Digital Marketing', amount: 84500, category: 'Marketing', date: '2023-10-05' },
-  { id: '3', title: 'Personnel & Ops', amount: 210000, category: 'Payroll', date: '2023-10-10' }
+  { id: '3', title: 'Personnel & Ops', amount: 210000, category: 'Payroll', date: '2023-10-10' },
 ];

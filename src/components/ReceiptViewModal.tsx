@@ -33,6 +33,8 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
       paymentCard: t('receipt.paymentCard'),
       paymentTransfer: t('receipt.paymentTransfer'),
       paymentOther: t('receipt.paymentOther'),
+      amountPaid: t('receipt.amountPaid'),
+      changeGiven: t('receipt.changeGiven'),
       thankYou: t('receipt.thankYou'),
     }),
     [t],
@@ -40,7 +42,7 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
 
   const handlePrint = () => {
     if (!transaction?.receipt) return;
-    printReceiptInNewWindow(
+    const ok = printReceiptInNewWindow(
       transaction.receipt,
       transaction.customer,
       transaction.orderNumber,
@@ -48,6 +50,7 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
       locale,
       printLabels,
     );
+    if (!ok) window.alert(t('pos.popupBlocked'));
   };
 
   if (!isOpen || !transaction || !receipt) return null;

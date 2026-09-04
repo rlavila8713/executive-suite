@@ -1,20 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Search, Plus, Edit2, Trash2, Tags } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Tags, Layers } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import type { Product, ProductCategory } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
+import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n, type TranslateFn } from '../i18n/I18nContext';
 
 function mapCategoryError(err: unknown, t: TranslateFn): string {
-  const msg = err instanceof Error ? err.message : '';
-  if (msg === 'ERR_DUPLICATE_CATEGORY') return t('errors.duplicateCategory');
-  if (msg.startsWith('ERR_CATEGORY_IN_USE|')) {
-    const parts = msg.split('|');
-    const count = parts[1] ?? '0';
-    const name = parts[2] ? decodeURIComponent(parts[2]) : '';
-    return t('errors.categoryInUse', { name, count });
-  }
-  return t('errors.generic');
+  return mapMutationError(err, t);
 }
 
 interface CategoriesProps {
@@ -24,6 +18,7 @@ interface CategoriesProps {
   onAdd: (name: string) => void | Promise<void>;
   onRename: (id: string, newName: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
+  onManageSubcategories?: (categoryId: string) => void;
 }
 
 export function Categories({
@@ -33,6 +28,7 @@ export function Categories({
   onAdd,
   onRename,
   onDelete,
+  onManageSubcategories,
 }: CategoriesProps) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
@@ -81,17 +77,6 @@ export function Categories({
       }
       setModalOpen(false);
       setEditing(null);
-    } catch (err) {
-      setFormError(mapCategoryError(err, t));
-    }
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    setFormError(null);
-    try {
-      await onDelete(deleting.id);
-      setDeleting(null);
     } catch (err) {
       setFormError(mapCategoryError(err, t));
     }
@@ -149,6 +134,9 @@ export function Categories({
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">
                   {t('categories.colName')}
                 </th>
+                <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">
+                  {t('categories.colCode')}
+                </th>
                 <th className="py-4 px-6 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">
                   {t('categories.colProducts')}
                 </th>
@@ -166,9 +154,15 @@ export function Categories({
                     className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0"
                   >
                     <td className="py-4 px-6 font-bold text-primary">{c.name}</td>
+                    <td className="py-4 px-6 font-mono text-sm text-secondary">{c.code}</td>
                     <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{n}</td>
                     <td className="py-4 px-6 text-right">
                       <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                        {onManageSubcategories ? (
+                          <Button variant="ghost" size="sm" title={t('categories.manageSubcategories')} onClick={() => onManageSubcategories(c.id)}>
+                            <Layers size={14} />
+                          </Button>
+                        ) : null}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -239,34 +233,14 @@ export function Categories({
         </form>
       </Modal>
 
-      <Modal
-        isOpen={!!deleting}
-        onClose={() => {
-          setDeleting(null);
-          setFormError(null);
-        }}
+      <ConfirmDeleteModal
+        target={deleting}
         title={t('categories.deleteTitle')}
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-on-surface-variant">{t('categories.deleteBody', { name: deleting?.name ?? '' })}</p>
-          {formError ? <p className="text-sm text-error font-medium">{formError}</p> : null}
-          <div className="flex gap-3">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              onClick={() => {
-                setDeleting(null);
-                setFormError(null);
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button className="flex-1 text-white bg-error hover:bg-error/90" onClick={confirmDelete}>
-              {t('common.delete')}
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        renderMessage={(c) => t('categories.deleteBody', { name: c.name })}
+        onClose={() => setDeleting(null)}
+        onDelete={onDelete}
+        mapError={(err) => mapCategoryError(err, t)}
+      />
     </div>
   );
 }
