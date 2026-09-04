@@ -38,3 +38,17 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .reports-print-main {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
+}

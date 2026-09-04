@@ -8,6 +8,24 @@ export type SalesSeriesPoint = { key: string; label: string; revenue: number; or
 
 const PAYMENT_METHODS: PaymentMethod[] = ['cash', 'card', 'transfer', 'other'];
 
+/** Sale row that still counts toward revenue (not voided). */
+export function isCompletedSale(tx: Transaction): boolean {
+  return tx.type === 'sale' && tx.status === 'completed';
+}
+
+/** Sale row voided by reversal or refund (still type sale, positive amount). */
+export function isReversedSale(tx: Transaction): boolean {
+  return (
+    tx.type === 'sale' &&
+    (tx.status === 'reversed' || tx.status === 'refunded' || tx.amount < 0)
+  );
+}
+
+/** Legacy return rows (negative amount, type return). */
+export function isReturnRow(tx: Transaction): boolean {
+  return tx.type === 'return' || (tx.amount < 0 && tx.type !== 'sale');
+}
+
 export function resolveTransactionPaymentMethod(tx: Transaction): PaymentMethod {
   if (tx.paymentMethod && PAYMENT_METHODS.includes(tx.paymentMethod)) return tx.paymentMethod;
   const r = tx.receipt?.paymentMethod;
@@ -43,16 +61,24 @@ export function previousPeriodOfSameLength(range: DateRangeMs): DateRangeMs {
 export function completedSalesInRange(transactions: Transaction[], range: DateRangeMs): Transaction[] {
   return transactions.filter(
     (tx) =>
-      tx.type === 'sale' &&
-      tx.status === 'completed' &&
+      isCompletedSale(tx) &&
       tx.createdAt >= range.start &&
       tx.createdAt <= range.end,
   );
 }
 
+/** Completed sales in a cash session window (open → close or now). */
+export function sessionPaymentBreakdown(
+  transactions: Transaction[],
+  openedAt: number,
+  closedAt: number = Date.now(),
+): Record<PaymentMethod, number> {
+  return paymentMethodBreakdown(transactions, { start: openedAt, end: closedAt });
+}
+
 export function salesRevenue(transactions: Transaction[]): number {
   return transactions
-    .filter((tx) => tx.type === 'sale' && tx.status === 'completed')
+    .filter((tx) => isCompletedSale(tx))
     .reduce((s, tx) => s + Math.abs(tx.amount), 0);
 }
 
@@ -156,7 +182,7 @@ export function lineCOGS(line: SaleReceiptLine, products: Product[]): number {
 export function cogsForTransactions(transactions: Transaction[], products: Product[]): number {
   let sum = 0;
   for (const tx of transactions) {
-    if (tx.type !== 'sale' || tx.status !== 'completed' || !tx.receipt?.lines) continue;
+    if (!isCompletedSale(tx) || !tx.receipt?.lines) continue;
     for (const line of tx.receipt.lines) {
       sum += lineCOGS(line, products);
     }
@@ -274,6 +300,26 @@ export function inventoryValuationAtCost(products: Product[]): number {
 
 export function inventoryValuationAtRetail(products: Product[]): number {
   return Math.round(products.reduce((s, p) => s + p.price * p.stock, 0) * 100) / 100;
+}
+
+export function inventoryTurnoverRatio(
+  transactions: Transaction[],
+  products: Product[],
+  range: DateRangeMs,
+): { unitsSold: number; stockOnHand: number; ratio: number } {
+  let unitsSold = 0;
+  for (const tx of completedSalesInRange(transactions, range)) {
+    for (const line of tx.receipt?.lines ?? []) {
+      unitsSold += line.quantity;
+    }
+  }
+  const stockOnHand = products.reduce((s, p) => s + Math.max(0, p.stock), 0);
+  const ratio = stockOnHand > 0 ? unitsSold / stockOnHand : unitsSold > 0 ? unitsSold : 0;
+  return {
+    unitsSold,
+    stockOnHand,
+    ratio: Math.round(ratio * 100) / 100,
+  };
 }
 
 /** Expense rows whose `date` falls inside the inclusive local range (date is YYYY-MM-DD or parseable). */

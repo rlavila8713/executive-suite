@@ -2,14 +2,23 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import {ensureSeeded} from './db/database';
+import { migrateDexieToApi } from './lib/backup';
 
-ensureSeeded()
-  .catch((err) => console.error('Local database init failed', err))
-  .finally(() => {
-    createRoot(document.getElementById('root')!).render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    );
-  });
+async function bootstrap() {
+  try {
+    const migrated = await migrateDexieToApi();
+    if (migrated) {
+      console.info('Migrated local IndexedDB data to API server.');
+    }
+  } catch (err) {
+    console.warn('IndexedDB migration skipped', err);
+  }
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+
+void bootstrap();

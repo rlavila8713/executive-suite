@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Search, Download, TrendingDown, Plus, Edit2, Trash2 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { Expense } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
+import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
 
 function escapeCsvCell(value: string): string {
@@ -81,12 +83,6 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
     }
     setModalOpen(false);
     setEditing(null);
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    await onDelete(deleting.id);
-    setDeleting(null);
   };
 
   return (
@@ -255,17 +251,14 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
         </form>
       </Modal>
 
-      <Modal isOpen={!!deleting} onClose={() => setDeleting(null)} title={t('expenses.deleteTitle')}>
-        <p className="text-on-surface-variant text-sm mb-6">{t('expenses.deleteBody', { title: deleting?.title ?? '' })}</p>
-        <div className="flex gap-3">
-          <Button variant="secondary" className="flex-1" onClick={() => setDeleting(null)}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="danger" className="flex-1" onClick={confirmDelete}>
-            {t('common.delete')}
-          </Button>
-        </div>
-      </Modal>
+      <ConfirmDeleteModal
+        target={deleting}
+        title={t('expenses.deleteTitle')}
+        renderMessage={(e) => t('expenses.deleteBody', { title: e.title })}
+        onClose={() => setDeleting(null)}
+        onDelete={onDelete}
+        mapError={(err) => mapMutationError(err, t)}
+      />
     </div>
   );
 }

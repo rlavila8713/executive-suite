@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Product,
   CartItem,
@@ -9,36 +8,88 @@ import {
   CheckoutPayload,
   Expense,
   ProductCategory,
+  ProductSubcategory,
+  ProductLocation,
   CashSession,
 } from '../types';
-import { db, newId } from '../db/database';
 import { DEFAULT_APP_SETTINGS } from '../constants';
-import { computeSessionPaymentTotals } from '../lib/reporting';
+import { api, ApiConnectionError, ApiRequestError } from '../api/client';
+import { useApiConnection, useApiPolling } from '../api/connection';
 
 export function useAppState() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard');
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
+  const [productSubcategories, setProductSubcategories] = useState<ProductSubcategory[]>([]);
+  const [productLocations, setProductLocations] = useState<ProductLocation[]>([]);
+  const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const products =
-    useLiveQuery(() => db.products.orderBy('id').toArray(), []) ?? [];
-  const transactions =
-    useLiveQuery(() => db.transactions.orderBy('createdAt').reverse().toArray(), []) ?? [];
-  const expenses = useLiveQuery(() => db.expenses.orderBy('date').reverse().toArray(), []) ?? [];
-  const appSettingsRow = useLiveQuery(() => db.appSettings.get('main'), []);
-  const appSettings = useMemo(
-    () => ({ ...DEFAULT_APP_SETTINGS, ...(appSettingsRow ?? {}) }),
-    [appSettingsRow],
-  );
-  const productCategories =
-    useLiveQuery(() => db.categories.orderBy('name').toArray(), []) ?? [];
-  const cashSessions =
-    useLiveQuery(() => db.cashSessions.orderBy('openedAt').reverse().toArray(), []) ?? [];
+  const refreshAll = useCallback(async () => {
+    const [p, t, e, s, c, subs, locs, cs] = await Promise.all([
+      api.getProducts(),
+      api.getTransactions(),
+      api.getExpenses(),
+      api.getSettings(),
+      api.getCategories(),
+      api.getSubcategories(),
+      api.getLocations(),
+      api.getCashSessions(),
+    ]);
+    setProducts(p);
+    setTransactions(t);
+    setExpenses(e);
+    setAppSettings(s);
+    setProductCategories(c);
+    setProductSubcategories(subs);
+    setProductLocations(locs);
+    setCashSessions(cs);
+  }, []);
 
-  const nameClashes = async (name: string, exceptId?: string) => {
-    const lower = name.trim().toLowerCase();
-    const rows = await db.categories.toArray();
-    return rows.some((c) => c.id !== exceptId && c.name.trim().toLowerCase() === lower);
-  };
+  const refreshAfterMutation = useCallback(async () => {
+    try {
+      await refreshAll();
+    } catch (err) {
+      console.error('Failed to refresh data after mutation', err);
+    }
+  }, [refreshAll]);
+
+  const checkHealth = useCallback(async () => {
+    try {
+      await api.health();
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const { connected, checking, verify } = useApiConnection(checkHealth);
+
+  const loadData = useCallback(async () => {
+    try {
+      await refreshAll();
+    } catch (err) {
+      if (!(err instanceof ApiConnectionError)) {
+        console.error('Failed to load data from API', err);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshAll]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData, connected]);
+
+  useApiPolling(refreshAll, connected);
+
+  const guardMutation = useCallback(() => {
+    if (!connected) throw new ApiConnectionError();
+  }, [connected]);
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
@@ -71,150 +122,256 @@ export function useAppState() {
   const clearCart = () => setCart([]);
 
   const processSale = async (payload: CheckoutPayload): Promise<Transaction> => {
-    const amount = payload.amount > 0 ? payload.amount : payload.receipt.total;
-    const newTransaction: Transaction = {
-      id: newId(),
-      orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
-      customer: payload.customerName.trim() || 'Walk-in Customer',
-      amount,
-      status: 'completed',
-      timestamp: 'Just now',
-      type: 'sale',
-      createdAt: Date.now(),
-      receipt: payload.receipt,
-      paymentMethod: payload.receipt.paymentMethod,
-    };
-
-    await db.transaction('rw', db.transactions, db.products, async () => {
-      await db.transactions.add(newTransaction);
-      for (const item of cart) {
-        const p = await db.products.get(item.id);
-        if (p) {
-          await db.products.update(item.id, {
-            stock: Math.max(0, p.stock - item.quantity),
-          });
-        }
-      }
-    });
-
+    guardMutation();
+    const newTransaction = await api.processSale(payload);
     clearCart();
+    await refreshAfterMutation();
     return newTransaction;
   };
 
   const addProduct = async (product: Omit<Product, 'id'>) => {
-    await db.products.add({ ...product, id: newId() });
+    guardMutation();
+    await api.createProduct(product);
+    await refreshAfterMutation();
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
-    await db.products.update(id, updates);
+    guardMutation();
+    if (updates.stock !== undefined && Object.keys(updates).length === 1) {
+      await api.updateProductStock(id, updates.stock);
+    } else {
+      await api.updateProduct(id, updates);
+    }
+    await refreshAfterMutation();
+  };
+
+  const receiveProductStock = async (
+    id: string,
+    payload: { quantity: number; unitCost: number; price: number },
+  ) => {
+    guardMutation();
+    await api.receiveProductStock(id, payload);
+    await refreshAfterMutation();
   };
 
   const deleteProduct = async (id: string) => {
-    await db.products.delete(id);
+    guardMutation();
+    await api.deleteProduct(id);
+    void refreshAfterMutation();
+  };
+
+  const importProducts = async (
+    rows: {
+      name: string;
+      category: string;
+      subcategory: string;
+      price: number;
+      cost: number;
+      stock: number;
+      location?: string;
+      sku?: string;
+    }[],
+  ) => {
+    guardMutation();
+    const result = await api.importProducts(rows);
+    await refreshAfterMutation();
+    return result;
   };
 
   const addExpense = async (row: Omit<Expense, 'id'>) => {
-    await db.expenses.add({ ...row, id: newId() });
+    guardMutation();
+    await api.createExpense(row);
+    await refreshAfterMutation();
   };
 
   const updateExpense = async (id: string, updates: Partial<Expense>) => {
-    await db.expenses.update(id, updates);
+    guardMutation();
+    await api.updateExpense(id, updates);
+    await refreshAfterMutation();
   };
 
   const deleteExpense = async (id: string) => {
-    await db.expenses.delete(id);
+    guardMutation();
+    await api.deleteExpense(id);
+    void refreshAfterMutation();
   };
 
   const addTransaction = async (row: Omit<Transaction, 'id'>) => {
-    await db.transactions.add({ ...row, id: newId() });
+    guardMutation();
+    await api.createTransaction(row);
+    await refreshAfterMutation();
   };
 
   const updateTransaction = async (id: string, updates: Partial<Transaction>) => {
-    await db.transactions.update(id, updates);
+    guardMutation();
+    await api.updateTransaction(id, updates);
+    await refreshAfterMutation();
   };
 
-  const deleteTransaction = async (id: string) => {
-    await db.transactions.where('id').equals(id).delete();
+  const reverseSale = async (id: string) => {
+    guardMutation();
+    try {
+      await api.reverseSale(id);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code) {
+        throw new Error(err.code);
+      }
+      throw err;
+    }
+    await refreshAfterMutation();
   };
 
   const updateAppSettings = async (patch: Partial<Omit<AppSettings, 'id'>>) => {
-    const existing = await db.appSettings.get('main');
-    if (!existing) {
-      await db.appSettings.put({ ...DEFAULT_APP_SETTINGS, ...patch, id: 'main' });
-    } else {
-      await db.appSettings.update('main', patch);
-    }
+    guardMutation();
+    const updated = await api.updateSettings(patch);
+    setAppSettings(updated);
   };
 
   const addProductCategory = async (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    if (await nameClashes(trimmed)) {
-      throw new Error('ERR_DUPLICATE_CATEGORY');
+    guardMutation();
+    try {
+      await api.createCategory(name);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'ERR_DUPLICATE_CATEGORY') {
+        throw new Error('ERR_DUPLICATE_CATEGORY');
+      }
+      throw err;
     }
-    const row: ProductCategory = { id: newId(), name: trimmed };
-    await db.categories.add(row);
+    await refreshAfterMutation();
   };
 
   const renameProductCategory = async (id: string, newName: string) => {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    const row = await db.categories.get(id);
-    if (!row) return;
-    if (trimmed === row.name) return;
-    if (await nameClashes(trimmed, id)) {
-      throw new Error('ERR_DUPLICATE_CATEGORY');
-    }
-    await db.transaction('rw', db.products, db.categories, async () => {
-      const affected = await db.products.where('category').equals(row.name).toArray();
-      for (const p of affected) {
-        await db.products.update(p.id, { category: trimmed });
+    guardMutation();
+    try {
+      await api.renameCategory(id, newName);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'ERR_DUPLICATE_CATEGORY') {
+        throw new Error('ERR_DUPLICATE_CATEGORY');
       }
-      await db.categories.update(id, { name: trimmed });
-    });
+      throw err;
+    }
+    await refreshAfterMutation();
   };
 
   const openCashSession = async (openingCash: number) => {
-    const openCount = await db.cashSessions.filter((s) => s.closedAt == null).count();
-    if (openCount > 0) {
-      throw new Error('ERR_CASH_SESSION_OPEN');
+    guardMutation();
+    try {
+      await api.openCashSession(openingCash);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'ERR_CASH_SESSION_OPEN') {
+        throw new Error('ERR_CASH_SESSION_OPEN');
+      }
+      throw err;
     }
-    const row: CashSession = {
-      id: newId(),
-      openedAt: Date.now(),
-      closedAt: null,
-      openingCash,
-      closingCash: null,
-      totalCashSales: 0,
-      totalCardSales: 0,
-      totalTransferSales: 0,
-      totalOtherSales: 0,
-    };
-    await db.cashSessions.add(row);
+    await refreshAfterMutation();
   };
 
   const closeCashSession = async (id: string, closingCash: number) => {
-    const s = await db.cashSessions.get(id);
-    if (!s || s.closedAt != null) return;
-    const closedAt = Date.now();
-    const allTx = await db.transactions.toArray();
-    const totals = computeSessionPaymentTotals(allTx, s.openedAt, closedAt);
-    await db.cashSessions.update(id, {
-      closedAt,
-      closingCash,
-      ...totals,
-    });
+    guardMutation();
+    await api.closeCashSession(id, closingCash);
+    await refreshAfterMutation();
   };
 
   const deleteProductCategory = async (id: string) => {
-    const row = await db.categories.get(id);
-    if (!row) return;
-    const n = await db.products.where('category').equals(row.name).count();
-    if (n > 0) {
-      throw new Error(`ERR_CATEGORY_IN_USE|${n}|${encodeURIComponent(row.name)}`);
+    guardMutation();
+    try {
+      await api.deleteCategory(id);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code?.startsWith('ERR_CATEGORY_IN_USE')) {
+        throw new Error(err.code);
+      }
+      throw err;
     }
-    await db.categories.delete(id);
+    void refreshAfterMutation();
   };
+
+  const addSubcategory = async (row: { categoryId: string; name: string; code: string }) => {
+    guardMutation();
+    try {
+      await api.createSubcategory(row);
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        if (err.code === 'ERR_DUPLICATE_SUBCATEGORY') throw new Error('ERR_DUPLICATE_SUBCATEGORY');
+        if (err.code === 'ERR_DUPLICATE_SUBCATEGORY_CODE') throw new Error('ERR_DUPLICATE_SUBCATEGORY_CODE');
+      }
+      throw err;
+    }
+    await refreshAfterMutation();
+  };
+
+  const updateSubcategory = async (id: string, updates: { name?: string; code?: string }) => {
+    guardMutation();
+    try {
+      await api.updateSubcategory(id, updates);
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        if (err.code === 'ERR_DUPLICATE_SUBCATEGORY') throw new Error('ERR_DUPLICATE_SUBCATEGORY');
+        if (err.code === 'ERR_DUPLICATE_SUBCATEGORY_CODE') throw new Error('ERR_DUPLICATE_SUBCATEGORY_CODE');
+      }
+      throw err;
+    }
+    await refreshAfterMutation();
+  };
+
+  const deleteSubcategory = async (id: string) => {
+    guardMutation();
+    try {
+      await api.deleteSubcategory(id);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code?.startsWith('ERR_SUBCATEGORY_IN_USE')) {
+        throw new Error(err.code);
+      }
+      throw err;
+    }
+    void refreshAfterMutation();
+  };
+
+  const addLocation = async (name: string) => {
+    guardMutation();
+    try {
+      await api.createLocation(name);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'ERR_DUPLICATE_LOCATION') {
+        throw new Error('ERR_DUPLICATE_LOCATION');
+      }
+      throw err;
+    }
+    await refreshAfterMutation();
+  };
+
+  const updateLocation = async (id: string, name: string) => {
+    guardMutation();
+    try {
+      await api.updateLocation(id, name);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'ERR_DUPLICATE_LOCATION') {
+        throw new Error('ERR_DUPLICATE_LOCATION');
+      }
+      throw err;
+    }
+    await refreshAfterMutation();
+  };
+
+  const deleteLocation = async (id: string) => {
+    guardMutation();
+    await api.deleteLocation(id);
+    void refreshAfterMutation();
+  };
+
+  const fetchNextSku = async (categoryId: string, subcategoryId: string) => {
+    guardMutation();
+    const { sku } = await api.getNextSku(categoryId, subcategoryId);
+    return sku;
+  };
+
+  const refreshData = useCallback(async () => {
+    await refreshAll();
+  }, [refreshAll]);
+
+  const stableAppSettings = useMemo(
+    () => ({ ...DEFAULT_APP_SETTINGS, ...appSettings }),
+    [appSettings],
+  );
 
   return {
     currentScreen,
@@ -223,9 +380,16 @@ export function useAppState() {
     cart,
     transactions,
     expenses,
-    appSettings,
+    appSettings: stableAppSettings,
     productCategories,
+    productSubcategories,
+    productLocations,
     cashSessions,
+    loading,
+    apiConnected: connected,
+    apiChecking: checking,
+    retryApiConnection: verify,
+    refreshData,
     openCashSession,
     closeCashSession,
     addToCart,
@@ -235,16 +399,27 @@ export function useAppState() {
     processSale,
     addProduct,
     updateProduct,
+    receiveProductStock,
     deleteProduct,
+    importProducts,
     addExpense,
     updateExpense,
     deleteExpense,
     addTransaction,
     updateTransaction,
-    deleteTransaction,
+    reverseSale,
     updateAppSettings,
     addProductCategory,
     renameProductCategory,
     deleteProductCategory,
+    addSubcategory,
+    updateSubcategory,
+    deleteSubcategory,
+    addLocation,
+    updateLocation,
+    deleteLocation,
+    fetchNextSku,
   };
 }
+
+export { ApiConnectionError };
