@@ -14,6 +14,8 @@ export type ReceiptPrintLabels = {
   paymentCard: string;
   paymentTransfer: string;
   paymentOther: string;
+  amountPaid: string;
+  changeGiven: string;
   thankYou: string;
 };
 
@@ -84,6 +86,14 @@ export function buildReceiptPrintHtml(
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:#52525b">
       <span>${escapeHtml(labels.payment)}</span><strong style="color:#18181b">${escapeHtml(pay)}</strong>
     </div>
+    ${
+      receipt.paymentMethod === 'cash' && receipt.amountPaid != null
+        ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #d4d4d8;font-size:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:#52525b">${escapeHtml(labels.amountPaid)}</span><span>$${money(receipt.amountPaid)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-weight:800;font-size:14px"><span>${escapeHtml(labels.changeGiven)}</span><span>$${money(receipt.changeGiven ?? 0)}</span></div>
+    </div>`
+        : ''
+    }
   </div>
   <p style="text-align:center;font-size:12px;color:#52525b;margin-top:16px;padding-top:12px;border-top:1px dashed #d4d4d8">${escapeHtml(labels.thankYou)}</p>
 </div>
@@ -105,10 +115,10 @@ export function printReceiptInNewWindow(
   createdAt: number,
   locale: string,
   labels: ReceiptPrintLabels,
-): void {
+): boolean {
   const html = buildReceiptPrintHtml(receipt, customerName, orderNumber, createdAt, locale, labels);
   const w = window.open('', '_blank');
-  if (!w) return;
+  if (!w) return false;
   w.document.write(html);
   w.document.close();
   w.focus();
@@ -116,4 +126,5 @@ export function printReceiptInNewWindow(
     w.print();
     w.close();
   }, 200);
+  return true;
 }

@@ -9,7 +9,7 @@ import {
   Plus,
   Package,
   Edit2,
-  Trash2,
+  Undo2,
   ListOrdered,
   FileText,
 } from 'lucide-react';
@@ -24,6 +24,8 @@ import {
   Cell,
 } from 'recharts';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
+import { mapMutationError } from '../lib/mutationErrors';
 import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
 import { Transaction, Product, Expense, Screen, type PaymentMethod } from '../types';
@@ -34,6 +36,15 @@ function startOfLocalDay(ts: number = Date.now()): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+function canReverseSale(tx: Transaction): boolean {
+  return tx.type === 'sale' && tx.status === 'completed';
+}
+
+function statusBadgeKey(status: Transaction['status']): 'completed' | 'pending' | 'refunded' | 'reversed' {
+  if (status === 'completed' || status === 'pending' || status === 'reversed' || status === 'refunded') return status;
+  return 'completed';
 }
 
 function lastSevenDayBars(transactions: Transaction[]): { name: string; value: number }[] {
@@ -68,7 +79,7 @@ interface DashboardProps {
   onNavigate: (screen: Screen) => void;
   onAddTransaction: (row: Omit<Transaction, 'id'>) => void | Promise<void>;
   onUpdateTransaction: (id: string, patch: Partial<Transaction>) => void | Promise<void>;
-  onDeleteTransaction: (id: string) => void | Promise<void>;
+  onReverseSale: (id: string) => void | Promise<void>;
 }
 
 export function Dashboard({
@@ -79,7 +90,7 @@ export function Dashboard({
   onNavigate,
   onAddTransaction,
   onUpdateTransaction,
-  onDeleteTransaction,
+  onReverseSale,
 }: DashboardProps) {
   const { t, locale } = useI18n();
   const lowStockProducts = useMemo(() => {
@@ -110,7 +121,7 @@ export function Dashboard({
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const [deletingTx, setDeletingTx] = useState<Transaction | null>(null);
+  const [reversingTx, setReversingTx] = useState<Transaction | null>(null);
   const [receiptViewTx, setReceiptViewTx] = useState<Transaction | null>(null);
 
   const handleTxSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -141,12 +152,6 @@ export function Dashboard({
     }
     setTxModalOpen(false);
     setEditingTx(null);
-  };
-
-  const confirmDeleteTx = async () => {
-    if (!deletingTx) return;
-    await onDeleteTransaction(deletingTx.id);
-    setDeletingTx(null);
   };
 
   const transactionsFiltered = useMemo(() => {
@@ -356,14 +361,12 @@ export function Dashboard({
                       'text-[10px] font-bold px-2 py-0.5 rounded',
                       tx.status === 'completed'
                         ? 'bg-tertiary-container text-on-tertiary-container'
-                        : 'bg-surface-container-high text-on-surface-variant',
+                        : tx.status === 'reversed' || tx.status === 'refunded'
+                          ? 'bg-error-container text-on-error-container'
+                          : 'bg-surface-container-high text-on-surface-variant',
                     )}
                   >
-                    {tx.status === 'completed'
-                      ? t('dashboard.statusBadge.completed')
-                      : tx.status === 'pending'
-                        ? t('dashboard.statusBadge.pending')
-                        : t('dashboard.statusBadge.refunded')}
+                    {t(`dashboard.statusBadge.${statusBadgeKey(tx.status)}`)}
                   </span>
                 </div>
                 <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
@@ -381,6 +384,7 @@ export function Dashboard({
                   <Button
                     variant="ghost"
                     size="sm"
+                    title={t('dashboard.editTx')}
                     onClick={() => {
                       setEditingTx(tx);
                       setTxModalOpen(true);
@@ -388,9 +392,17 @@ export function Dashboard({
                   >
                     <Edit2 size={14} />
                   </Button>
-                  <Button variant="ghost" size="sm" className="text-error hover:bg-error/10" onClick={() => setDeletingTx(tx)}>
-                    <Trash2 size={14} />
-                  </Button>
+                  {canReverseSale(tx) ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-error hover:bg-error/10"
+                      title={t('dashboard.reverseTxTitle')}
+                      onClick={() => setReversingTx(tx)}
+                    >
+                      <Undo2 size={14} />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -462,9 +474,15 @@ export function Dashboard({
                 defaultValue={editingTx?.status ?? 'completed'}
                 className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
               >
-                <option value="completed">{t('dashboard.statusCompleted')}</option>
-                <option value="pending">{t('dashboard.statusPending')}</option>
-                <option value="refunded">{t('dashboard.statusRefunded')}</option>
+                {editingTx?.status === 'reversed' ? (
+                  <option value="reversed">{t('dashboard.statusReversed')}</option>
+                ) : (
+                  <>
+                    <option value="completed">{t('dashboard.statusCompleted')}</option>
+                    <option value="pending">{t('dashboard.statusPending')}</option>
+                    <option value="refunded">{t('dashboard.statusRefunded')}</option>
+                  </>
+                )}
               </select>
             </div>
           </div>
@@ -532,6 +550,7 @@ export function Dashboard({
                   variant="ghost"
                   size="sm"
                   className="p-1 h-8 w-8"
+                  title={t('dashboard.editTx')}
                   onClick={() => {
                     setLogOpen(false);
                     setEditingTx(tx);
@@ -540,28 +559,38 @@ export function Dashboard({
                 >
                   <Edit2 size={14} />
                 </Button>
-                <Button variant="ghost" size="sm" className="p-1 h-8 w-8 text-error" onClick={() => setDeletingTx(tx)}>
-                  <Trash2 size={14} />
-                </Button>
+                {canReverseSale(tx) ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="p-1 h-8 w-8 text-error"
+                    title={t('dashboard.reverseTxTitle')}
+                    onClick={() => setReversingTx(tx)}
+                  >
+                    <Undo2 size={14} />
+                  </Button>
+                ) : null}
               </div>
             </div>
           ))}
         </div>
       </Modal>
 
-      <Modal isOpen={!!deletingTx} onClose={() => setDeletingTx(null)} title={t('dashboard.deleteTxTitle')}>
-        <p className="text-on-surface-variant text-sm mb-6">
-          {t('dashboard.deleteTxBody', { order: deletingTx?.orderNumber ?? '' })}
-        </p>
-        <div className="flex gap-3">
-          <Button variant="secondary" className="flex-1" onClick={() => setDeletingTx(null)}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="danger" className="flex-1" onClick={confirmDeleteTx}>
-            {t('common.delete')}
-          </Button>
-        </div>
-      </Modal>
+      <ConfirmDeleteModal
+        target={reversingTx}
+        title={t('dashboard.reverseTxTitle')}
+        renderMessage={(tx) =>
+          tx.receipt?.lines?.length
+            ? t('dashboard.reverseTxBody', { order: tx.orderNumber })
+            : `${t('dashboard.reverseTxBody', { order: tx.orderNumber })} ${t('dashboard.reverseTxNoReceipt')}`
+        }
+        onClose={() => setReversingTx(null)}
+        onDelete={onReverseSale}
+        mapError={(err) => mapMutationError(err, t)}
+        confirmLabel={t('dashboard.reverseConfirm')}
+        busyLabel={t('dashboard.reversing')}
+        confirmVariant="danger"
+      />
 
       <ReceiptViewModal
         isOpen={!!receiptViewTx}
