@@ -31,15 +31,15 @@ export const PLACEHOLDER_PRODUCT_IMAGE =
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   id: 'main',
-  storeName: 'The Editorial Executive',
-  branch: 'Main Branch - Downtown',
-  currency: 'USD ($)',
-  taxRate: 8,
+  storeName: 'Mi tienda',
+  branch: '',
+  currency: 'CUP',
+  taxRate: 0,
   cardQrPayload: '',
   darkMode: false,
   lowStockNotifications: true,
-  managerName: 'Julian V.',
-  managerTitle: 'Store Manager',
+  managerName: '',
+  managerTitle: '',
   locale: 'es',
 };
 

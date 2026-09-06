@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { Sidebar, TopBar, MobileNavDrawer } from './components/Navigation';
+import { Button } from './components/ui';
 import { Dashboard } from './features/Dashboard';
 import { Products } from './features/Products';
 import { Import } from './features/Import';
@@ -131,21 +132,35 @@ function AppView(props: AppState) {
     deleteLocation,
     fetchNextSku,
     cashSessions,
+    licenseInfo,
+    licenseUsable,
     openCashSession,
     closeCashSession,
+    requestLicense,
+    activateLicense,
+    factoryReset,
     apiConnected,
     apiChecking,
     retryApiConnection,
     refreshData,
   } = props;
 
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'billing' | undefined>();
+
+  const licenseBlocked =
+    licenseInfo != null &&
+    (licenseInfo.status === 'expired' || licenseInfo.status === 'device_mismatch');
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', appSettings.darkMode);
   }, [appSettings.darkMode]);
 
   useEffect(() => {
-    setGlobalSearch('');
-  }, [currentScreen]);
+    if (licenseBlocked && currentScreen !== 'settings') {
+      setSettingsInitialSection('billing');
+      setCurrentScreen('settings');
+    }
+  }, [licenseBlocked, currentScreen, setCurrentScreen]);
 
   const renderScreen = () => {
     switch (currentScreen) {
@@ -243,7 +258,12 @@ function AppView(props: AppState) {
             storeCurrency={appSettings.currency}
             globalSearch={globalSearch}
             cashSessionOpen={cashSessions.some((s) => s.closedAt == null)}
+            licenseActive={licenseUsable}
             onGoToCash={() => setCurrentScreen('cash')}
+            onGoToBilling={() => {
+              setSettingsInitialSection('billing');
+              setCurrentScreen('settings');
+            }}
             addToCart={addToCart}
             removeFromCart={removeFromCart}
             updateQuantity={updateCartQuantity}
@@ -288,11 +308,16 @@ function AppView(props: AppState) {
         return (
           <Settings
             settings={appSettings}
+            licenseInfo={licenseInfo}
             onUpdate={updateAppSettings}
+            onRequestLicense={requestLicense}
+            onActivateLicense={activateLicense}
+            onFactoryReset={factoryReset}
             apiConnected={apiConnected}
             apiChecking={apiChecking}
             onRetryApiConnection={retryApiConnection}
             onDataChanged={refreshData}
+            initialSection={settingsInitialSection}
           />
         );
       default:
@@ -360,7 +385,31 @@ function AppView(props: AppState) {
               })}
         />
 
-        <div className="flex-1 min-h-0 min-w-0 p-4 sm:p-6 md:p-8 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-8 max-w-[1400px] mx-auto w-full">
+        <div className="flex-1 min-h-0 min-w-0 p-4 sm:p-6 md:p-8 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-8 max-w-[1400px] mx-auto w-full relative">
+          {licenseBlocked && currentScreen !== 'settings' ? (
+            <div className="absolute inset-0 z-40 bg-background/80 backdrop-blur-sm flex items-center justify-center p-6">
+              <div className="max-w-md text-center space-y-4">
+                <h3 className="text-xl font-black text-primary">
+                  {licenseInfo?.status === 'device_mismatch'
+                    ? t('license.deviceMismatchTitle')
+                    : t('license.expiredTitle')}
+                </h3>
+                <p className="text-sm text-on-surface-variant">
+                  {licenseInfo?.status === 'device_mismatch'
+                    ? t('license.deviceMismatchBody')
+                    : t('license.expiredBody')}
+                </p>
+                <Button
+                  onClick={() => {
+                    setSettingsInitialSection('billing');
+                    setCurrentScreen('settings');
+                  }}
+                >
+                  {t('license.goToBilling')}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {renderScreen()}
         </div>
       </main>

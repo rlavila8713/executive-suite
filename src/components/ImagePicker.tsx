@@ -3,12 +3,15 @@ import { ImagePlus, X } from 'lucide-react';
 import { Button } from './ui';
 import { readImageFileAsDataUrl } from '../lib/images';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
+import { getApiUrl } from '../api/config';
 import { cn } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 
 export interface ImagePickerProps {
   /** Current image (data URL or built-in placeholder). */
   value: string;
+  /** HTTP preview when `value` is empty/placeholder and the user has not picked a new file. */
+  previewUrl?: string | null;
   onChange: (dataUrl: string) => void;
   label?: string;
   helperText?: string;
@@ -22,6 +25,7 @@ export interface ImagePickerProps {
  */
 export function ImagePicker({
   value,
+  previewUrl,
   onChange,
   label,
   helperText,
@@ -33,6 +37,12 @@ export function ImagePicker({
   const resolvedHelper = helperText ?? t('products.imageHelper');
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const displaySrc =
+    value && value !== PLACEHOLDER_PRODUCT_IMAGE
+      ? value
+      : previewUrl
+        ? getApiUrl(previewUrl)
+        : value || PLACEHOLDER_PRODUCT_IMAGE;
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -59,7 +69,7 @@ export function ImagePicker({
             compact ? 'w-16 h-16' : 'w-24 h-24',
           )}
         >
-          <img src={value} alt="" className="w-full h-full object-cover" />
+          <img key={displaySrc} src={displaySrc} alt="" className="w-full h-full object-cover" />
         </div>
         <div className="flex flex-col gap-2 min-w-0">
           <input

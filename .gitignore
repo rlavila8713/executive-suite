@@ -10,3 +10,4 @@ coverage/
 executive-suite-release.zip
 .env*
 !.env.example
+license-private.pem

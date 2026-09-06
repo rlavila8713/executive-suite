@@ -13,15 +13,15 @@ export const DEFAULT_PRODUCT_CATEGORY_NAMES = ['Apparel', 'Footwear', 'Accessori
 
 export const DEFAULT_APP_SETTINGS = {
   id: 'main' as const,
-  storeName: 'The Editorial Executive',
-  branch: 'Main Branch - Downtown',
-  currency: 'USD ($)',
-  taxRate: 8,
+  storeName: 'Mi tienda',
+  branch: '',
+  currency: 'CUP',
+  taxRate: 0,
   cardQrPayload: '',
   darkMode: false,
   lowStockNotifications: true,
-  managerName: 'Julian V.',
-  managerTitle: 'Store Manager',
+  managerName: '',
+  managerTitle: '',
   locale: 'es' as const,
 };
 

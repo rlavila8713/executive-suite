@@ -51,6 +51,38 @@ export function migrateCatalogSchema(db: SqliteStore): void {
     }
   }
 
+  if (!hasColumn(db, 'expenses', 'locked')) {
+    db.exec(`ALTER TABLE expenses ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  const cashCols: [string, string][] = [
+    ['expected_cash', 'REAL'],
+    ['cash_variance', 'REAL'],
+    ['anomalies_json', 'TEXT'],
+  ];
+  for (const [col, def] of cashCols) {
+    if (!hasColumn(db, 'cash_sessions', col)) {
+      db.exec(`ALTER TABLE cash_sessions ADD COLUMN ${col} ${def}`);
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS license_state (
+      id TEXT PRIMARY KEY DEFAULT 'main',
+      trial_started_at INTEGER NOT NULL,
+      plan_id TEXT,
+      paid_until INTEGER,
+      device_fingerprint TEXT,
+      device_registered_at INTEGER,
+      last_payment_at INTEGER,
+      license_nonce TEXT
+    );
+  `);
+
+  if (!hasColumn(db, 'license_state', 'license_nonce')) {
+    db.exec(`ALTER TABLE license_state ADD COLUMN license_nonce TEXT`);
+  }
+
   // Backfill category codes
   const cats = db.prepare('SELECT id, name, code FROM categories').all() as {
     id: string;

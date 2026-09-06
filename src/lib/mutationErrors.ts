@@ -23,6 +23,13 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code.startsWith('ERR_PRODUCT_IN_USE')) return mapProductInUse(code, t);
   if (code === 'ERR_CASH_SESSION_OPEN') return t('reports.cashErrOpen');
   if (code === 'ERR_CASH_SESSION_REQUIRED') return t('errors.cashSessionRequired');
+  if (code === 'ERR_LICENSE_EXPIRED') return t('license.expiredBody');
+  if (code === 'ERR_DEVICE_MISMATCH') return t('license.deviceMismatchBody');
+  if (code === 'ERR_LICENSE_INVALID') return t('settings.billingActivateErr');
+  if (code === 'ERR_LICENSE_ALREADY_USED') return t('settings.billingLicenseUsed');
+  if (code === 'ERR_LICENSE_DEVICE_MISMATCH') return t('settings.billingLicenseWrongDevice');
+  if (code === 'ERR_LICENSE_REQUEST_INVALID') return t('settings.billingRequestErr');
+  if (code === 'ERR_EXPENSE_LOCKED') return t('expenses.locked');
   if (code === 'ERR_SALE_ALREADY_REVERSED') return t('errors.saleAlreadyReversed');
   if (code === 'ERR_SALE_CANNOT_REVERSE') return t('errors.saleCannotReverse');
   if (code === 'ERR_SALE_CANNOT_DELETE') return t('errors.saleCannotDelete');

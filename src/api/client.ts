@@ -3,6 +3,9 @@ import type {
   CashSession,
   CheckoutPayload,
   Expense,
+  LicenseInfo,
+  LicensePlanId,
+  LicenseRequestPayload,
   Product,
   ProductCategory,
   ProductLocation,
@@ -11,6 +14,7 @@ import type {
 } from '../types';
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
+import { getDeviceId } from '../lib/deviceId';
 
 export class ApiConnectionError extends Error {
   constructor(message = 'Cannot reach local API server') {
@@ -44,6 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         'Content-Type': 'application/json',
+        'X-Device-Id': getDeviceId(),
         ...init?.headers,
       },
     });
@@ -81,10 +86,22 @@ export type ProductImportResult = {
   errors: { row: number; message: string }[];
 };
 
+export type ProductImportValidation = {
+  summary: {
+    new: number;
+    duplicateExisting: number;
+    duplicateInFile: number;
+  };
+  rows: { row: number; status: 'new' | 'duplicate_existing' | 'duplicate_in_file'; code?: string }[];
+};
+
 export const api = {
   health: () => request<HealthResponse>('/health'),
 
-  getProducts: () => request<Product[]>('/api/products'),
+  getProducts: (options?: { includeImages?: boolean }) =>
+    request<Product[]>(
+      `/api/products${options?.includeImages === false ? '?includeImages=false' : '?includeImages=true'}`,
+    ),
   createProduct: (product: Omit<Product, 'id'>) =>
     request<Product>('/api/products', { method: 'POST', body: JSON.stringify(product) }),
   updateProduct: (id: string, updates: Partial<Product>) =>
@@ -117,6 +134,21 @@ export const api = {
     sku?: string;
   }[]) =>
     request<ProductImportResult>('/api/import/products', { method: 'POST', body: JSON.stringify({ rows }) }),
+
+  validateProductImport: (rows: {
+    name: string;
+    category: string;
+    subcategory: string;
+    price: number;
+    cost: number;
+    stock: number;
+    location?: string;
+    sku?: string;
+  }[]) =>
+    request<ProductImportValidation>('/api/import/products/validate', {
+      method: 'POST',
+      body: JSON.stringify({ rows }),
+    }),
 
   getCategories: () => request<ProductCategory[]>('/api/categories'),
   createCategory: (name: string) =>
@@ -181,4 +213,18 @@ export const api = {
   exportBackup: () => request<ExecutiveSuiteBackup>('/api/backup'),
   importBackup: (data: ExecutiveSuiteBackup) =>
     request<{ ok: boolean }>('/api/backup/import', { method: 'POST', body: JSON.stringify(data) }),
+
+  getLicense: () => request<LicenseInfo>('/api/license'),
+  requestLicense: (planId: LicensePlanId) =>
+    request<{ requestCode: string; payload: LicenseRequestPayload }>('/api/license/request', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+  activateLicense: (licenseKey: string) =>
+    request<{ license: LicenseInfo; expenseId: string; paidUntil: number }>('/api/license/activate', {
+      method: 'POST',
+      body: JSON.stringify({ licenseKey }),
+    }),
+
+  factoryReset: () => request<{ ok: boolean }>('/api/admin/factory-reset', { method: 'POST' }),
 };

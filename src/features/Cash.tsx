@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { Card, Button, Input } from '../components/ui';
 import type { CashSession, Transaction } from '../types';
 import { sessionPaymentBreakdown } from '../lib/reporting';
+import { computeSessionAnomalies, sessionHasAnomalies } from '../lib/cashAnomalies';
 import { useI18n } from '../i18n/I18nContext';
+import { cn } from '../lib/utils';
+import { AlertTriangle } from 'lucide-react';
 
 interface CashProps {
   cashSessions: CashSession[];
@@ -65,6 +68,12 @@ export function Cash({
       };
     }
     return sessionPaymentBreakdown(transactions, session.openedAt);
+  };
+
+  const anomalyLabel = (kind: string) => {
+    if (kind === 'cash_shortfall') return t('cash.anomalyShortfall');
+    if (kind === 'cash_surplus') return t('cash.anomalySurplus');
+    return t('cash.anomalyVariance');
   };
 
   const paymentLabel = (k: 'cash' | 'card' | 'transfer' | 'other') => {
@@ -168,14 +177,20 @@ export function Cash({
                 <th className="px-4 py-3 text-right">{t('reports.paymentTransfer')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.paymentOther')}</th>
                 <th className="px-4 py-3">{t('dashboard.status')}</th>
+                <th className="px-4 py-3">{t('cash.anomaliesCol')}</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {cashSessions.map((s) => {
                 const rowPay = sessionBreakdownForRow(s);
+                const anomalies = computeSessionAnomalies(s);
+                const hasAnomalies = sessionHasAnomalies(s);
                 return (
-                  <tr key={s.id} className="border-t border-black/5">
+                  <tr
+                    key={s.id}
+                    className={cn('border-t border-black/5', hasAnomalies && 'bg-amber-50/60 dark:bg-amber-950/20')}
+                  >
                     <td className="px-4 py-2 whitespace-nowrap">
                       {new Date(s.openedAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
                         dateStyle: 'short',
@@ -197,6 +212,28 @@ export function Cash({
                     <td className="px-4 py-2 text-right">${rowPay.transfer.toFixed(2)}</td>
                     <td className="px-4 py-2 text-right">${rowPay.other.toFixed(2)}</td>
                     <td className="px-4 py-2">{s.closedAt == null ? t('reports.statusOpen') : t('reports.statusClosed')}</td>
+                    <td className="px-4 py-2">
+                      {hasAnomalies ? (
+                        <div className="space-y-1">
+                          {anomalies.map((a, i) => (
+                            <div
+                              key={i}
+                              className="flex items-start gap-1.5 text-xs text-amber-800 dark:text-amber-200 font-medium"
+                            >
+                              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                              <span>
+                                {anomalyLabel(a.kind)}
+                                {s.cashVariance != null ? ` (${s.cashVariance >= 0 ? '+' : ''}${s.cashVariance.toFixed(2)})` : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : s.closedAt != null ? (
+                        <span className="text-xs text-on-tertiary-container font-medium">{t('cash.noAnomalies')}</span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-4 py-2">
                       {s.closedAt == null ? (
                         <div className="flex flex-wrap gap-2 items-center">

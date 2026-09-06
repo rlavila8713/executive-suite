@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import {
+  factoryResetDb,
   getDb,
   newId,
   rowToAppSettings,
@@ -14,8 +15,17 @@ import { computeSessionPaymentTotals } from './reporting.js';
 import { computeWeightedAverageCost } from './inventoryCost.js';
 import { DEFAULT_APP_SETTINGS } from './constants.js';
 import { registerCatalogRoutes } from './catalogRoutes.js';
-import { importProductsFromRows, type ProductImportInput } from './importCatalog.js';
+import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
+import {
+  activateLicense,
+  buildLicenseRequest,
+  getLicenseInfo,
+  LicenseError,
+  type LicensePlanId,
+} from './license.js';
+import { detectCashAnomalies } from './cashAnomalies.js';
+import { resolveProductImage } from './productImage.js';
 
 export class ApiError extends Error {
   constructor(
@@ -82,14 +92,51 @@ function countSalesUsingProduct(db: SqliteStore, productId: string, sku: string)
   return { count, name: sku };
 }
 
+function wantsImageData(query: Request['query']): boolean {
+  const value = query.includeImages;
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  return true;
+}
+
 export function registerRoutes(router: import('express').Router): void {
   // --- Products ---
   router.get(
     '/products',
-    asyncHandler(async (_req, res) => {
+    asyncHandler(async (req, res) => {
       const db = getDb();
       const rows = db.prepare('SELECT * FROM products ORDER BY id').all();
-      res.json(rows.map((r) => rowToProduct(r as Parameters<typeof rowToProduct>[0])));
+      const includeImageData = wantsImageData(req.query);
+      res.json(rows.map((r) => rowToProduct(r as Parameters<typeof rowToProduct>[0], { includeImageData })));
+    }),
+  );
+
+  router.get(
+    '/products/:id/image',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const row = db.prepare('SELECT id, image FROM products WHERE id = ?').get(req.params.id) as
+        | { id: string; image: string }
+        | undefined;
+      if (!row) throw new ApiError(404, 'Product not found');
+      const resolved = resolveProductImage(row.image);
+      if (!resolved) {
+        res.status(404).json({ error: 'Product has no image' });
+        return;
+      }
+      if (resolved.kind === 'redirect') {
+        res.redirect(302, resolved.url);
+        return;
+      }
+      res.setHeader('Content-Type', resolved.contentType);
+      // Versioned URLs (`?v=`) are immutable; unversioned requests must revalidate.
+      res.setHeader(
+        'Cache-Control',
+        typeof req.query.v === 'string' && req.query.v
+          ? 'private, max-age=31536000, immutable'
+          : 'private, no-cache',
+      );
+      res.send(resolved.data);
     }),
   );
 
@@ -275,6 +322,21 @@ export function registerRoutes(router: import('express').Router): void {
       }
       db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
       res.status(204).send();
+    }),
+  );
+
+  router.post(
+    '/import/products/validate',
+    asyncHandler(async (req, res) => {
+      const body = req.body as { rows?: ProductImportInput[] };
+      if (!Array.isArray(body.rows) || body.rows.length === 0) {
+        throw new ApiError(400, 'rows array required', 'ERR_IMPORT_EMPTY');
+      }
+      if (body.rows.length > 5000) {
+        throw new ApiError(400, 'Maximum 5000 rows per import', 'ERR_IMPORT_TOO_LARGE');
+      }
+      const db = getDb();
+      res.json(validateProductImportRows(db, body.rows));
     }),
   );
 
@@ -620,8 +682,13 @@ export function registerRoutes(router: import('express').Router): void {
     '/expenses/:id',
     asyncHandler(async (req, res) => {
       const db = getDb();
-      const existing = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id);
+      const existing = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id) as {
+        locked?: number;
+      };
       if (!existing) throw new ApiError(404, 'Expense not found');
+      if (existing.locked === 1) {
+        throw new ApiError(403, 'This expense cannot be modified', 'ERR_EXPENSE_LOCKED');
+      }
       const body = req.body as Record<string, unknown>;
       const map: Record<string, string> = { title: 'title', amount: 'amount', category: 'category', date: 'date' };
       const fields: string[] = [];
@@ -644,6 +711,13 @@ export function registerRoutes(router: import('express').Router): void {
     '/expenses/:id',
     asyncHandler(async (req, res) => {
       const db = getDb();
+      const existing = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id) as {
+        locked?: number;
+      };
+      if (!existing) throw new ApiError(404, 'Expense not found');
+      if (existing.locked === 1) {
+        throw new ApiError(403, 'This expense cannot be deleted', 'ERR_EXPENSE_LOCKED');
+      }
       const result = db.prepare('DELETE FROM expenses WHERE id = ?').run(req.params.id);
       if (result.changes === 0) throw new ApiError(404, 'Expense not found');
       res.status(204).send();
@@ -768,8 +842,12 @@ export function registerRoutes(router: import('express').Router): void {
         s.opened_at,
         closedAt,
       );
+      const expectedCash = s.opening_cash + totals.totalCashSales;
+      const variance = body.closingCash - expectedCash;
+      const anomalies = detectCashAnomalies(s.opening_cash, body.closingCash, totals.totalCashSales);
       db.prepare(
-        `UPDATE cash_sessions SET closed_at = ?, closing_cash = ?, total_cash_sales = ?, total_card_sales = ?, total_transfer_sales = ?, total_other_sales = ?
+        `UPDATE cash_sessions SET closed_at = ?, closing_cash = ?, total_cash_sales = ?, total_card_sales = ?, total_transfer_sales = ?, total_other_sales = ?,
+         expected_cash = ?, cash_variance = ?, anomalies_json = ?
          WHERE id = ?`,
       ).run(
         closedAt,
@@ -778,10 +856,76 @@ export function registerRoutes(router: import('express').Router): void {
         totals.totalCardSales,
         totals.totalTransferSales,
         totals.totalOtherSales,
+        expectedCash,
+        variance,
+        anomalies.length > 0 ? JSON.stringify(anomalies) : null,
         req.params.id,
       );
       const row = db.prepare('SELECT * FROM cash_sessions WHERE id = ?').get(req.params.id);
       res.json(rowToCashSession(row as Parameters<typeof rowToCashSession>[0]));
+    }),
+  );
+
+  // --- License ---
+  router.get(
+    '/license',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim();
+      res.json(getLicenseInfo(db, deviceId));
+    }),
+  );
+
+  router.post(
+    '/license/request',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ planId: LicensePlanId }>(req.body, ['planId']);
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim();
+      if (!deviceId) throw new ApiError(403, 'Device identification required', 'ERR_DEVICE_REQUIRED');
+      const info = getLicenseInfo(db, deviceId);
+      if (info.status === 'device_mismatch') {
+        throw new ApiError(403, 'This license is bound to another device', 'ERR_DEVICE_MISMATCH');
+      }
+      const result = buildLicenseRequest(db, deviceId, body.planId);
+      res.json(result);
+    }),
+  );
+
+  router.post(
+    '/license/activate',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ licenseKey: string }>(req.body, ['licenseKey']);
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim();
+      if (!deviceId) throw new ApiError(403, 'Device identification required', 'ERR_DEVICE_REQUIRED');
+      const info = getLicenseInfo(db, deviceId);
+      if (info.status === 'device_mismatch') {
+        throw new ApiError(403, 'This license is bound to another device', 'ERR_DEVICE_MISMATCH');
+      }
+      try {
+        const result = activateLicense(db, deviceId, body.licenseKey.trim());
+        res.status(201).json({
+          license: getLicenseInfo(db, deviceId),
+          expenseId: result.expenseId,
+          paidUntil: result.paidUntil,
+        });
+      } catch (err) {
+        if (err instanceof LicenseError) {
+          throw new ApiError(400, err.message, err.code);
+        }
+        throw err;
+      }
+    }),
+  );
+
+  // --- Admin ---
+  router.post(
+    '/admin/factory-reset',
+    asyncHandler(async (_req, res) => {
+      const db = getDb();
+      factoryResetDb(db);
+      res.json({ ok: true });
     }),
   );
 
@@ -898,10 +1042,10 @@ export function registerRoutes(router: import('express').Router): void {
         }
 
         const insertExpense = db.prepare(
-          'INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO expenses (id, title, amount, category, date, locked) VALUES (?, ?, ?, ?, ?, ?)',
         );
         for (const e of data.expenses ?? []) {
-          insertExpense.run(e.id, e.title, e.amount, e.category, e.date);
+          insertExpense.run(e.id, e.title, e.amount, e.category, e.date, e.locked ? 1 : 0);
         }
 
         const categories = data.productCategories?.length
@@ -937,8 +1081,8 @@ export function registerRoutes(router: import('express').Router): void {
         }
 
         const insertSession = db.prepare(
-          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, expected_cash, cash_variance, anomalies_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const s of data.cashSessions ?? []) {
           insertSession.run(
@@ -951,6 +1095,9 @@ export function registerRoutes(router: import('express').Router): void {
             s.totalCardSales,
             s.totalTransferSales,
             s.totalOtherSales,
+            s.expectedCash ?? null,
+            s.cashVariance ?? null,
+            s.anomalies?.length ? JSON.stringify(s.anomalies) : null,
           );
         }
 
