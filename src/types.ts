@@ -46,8 +46,10 @@ export interface Product {
   price: number;
   cost: number;
   stock: number;
-  /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — local only, no remote URLs. */
+  /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — omitted from list when includeImages=false. */
   image: string;
+  /** Relative API path to load the image over HTTP (mobile-friendly). Includes `?v=` content hash so clients refetch after a change. */
+  imageUrl?: string | null;
   categoryId: string;
   subcategoryId: string;
   subcategory: string;
@@ -115,6 +117,16 @@ export interface Transaction {
 }
 
 /** Optional cash drawer session for reconciliation (Cash reports tab). */
+export type CashAnomalyKind = 'cash_shortfall' | 'cash_surplus' | 'drawer_variance';
+
+export interface CashAnomaly {
+  kind: CashAnomalyKind;
+  expectedCash: number;
+  closingCash: number;
+  cashSales: number;
+  variance: number;
+}
+
 export interface CashSession {
   id: string;
   openedAt: number;
@@ -126,6 +138,9 @@ export interface CashSession {
   totalCardSales: number;
   totalTransferSales: number;
   totalOtherSales: number;
+  expectedCash?: number | null;
+  cashVariance?: number | null;
+  anomalies?: CashAnomaly[];
 }
 
 export interface Expense {
@@ -134,7 +149,41 @@ export interface Expense {
   amount: number;
   category: string;
   date: string;
+  /** System-generated expenses (e.g. license payments) cannot be edited or deleted. */
+  locked?: boolean;
 }
+
+export type LicensePlanId = 'monthly' | 'quarterly' | 'annual';
+
+export type LicenseStatus = 'trial' | 'active' | 'expired' | 'device_mismatch';
+
+export interface LicensePlan {
+  id: LicensePlanId;
+  name: string;
+  price: number;
+  days: number;
+}
+
+export interface LicenseInfo {
+  status: LicenseStatus;
+  planId: LicensePlanId | null;
+  trialStartedAt: number;
+  trialEndsAt: number;
+  trialDaysRemaining: number;
+  paidUntil: number | null;
+  deviceRegistered: boolean;
+  deviceId: string | null;
+  plans: LicensePlan[];
+}
+
+export type LicenseRequestPayload = {
+  v: 1;
+  deviceId: string;
+  planId: LicensePlanId;
+  storeName: string;
+  branch: string;
+  requestedAt: number;
+};
 
 /** Single-row app configuration stored locally (IndexedDB). */
 export interface AppSettings {

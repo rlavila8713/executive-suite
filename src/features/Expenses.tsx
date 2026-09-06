@@ -185,26 +185,30 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
                     ${expense.amount.toLocaleString()}
                   </td>
                   <td className="py-4 px-6 text-right">
-                    <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setEditing(expense);
-                          setModalOpen(true);
-                        }}
-                      >
-                        <Edit2 size={14} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-error hover:bg-error/10"
-                        onClick={() => setDeleting(expense)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
+                    {expense.locked ? (
+                      <span className="text-[10px] font-bold uppercase text-on-surface-variant">{t('expenses.locked')}</span>
+                    ) : (
+                      <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditing(expense);
+                            setModalOpen(true);
+                          }}
+                        >
+                          <Edit2 size={14} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-error hover:bg-error/10"
+                          onClick={() => setDeleting(expense)}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

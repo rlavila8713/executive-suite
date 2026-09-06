@@ -36,7 +36,9 @@ interface POSProps {
   storeCurrency: string;
   globalSearch?: string;
   cashSessionOpen: boolean;
+  licenseActive: boolean;
   onGoToCash: () => void;
+  onGoToBilling: () => void;
   addToCart: (product: Product) => void;
   removeFromCart: (id: string) => void;
   updateQuantity: (id: string, delta: number) => void;
@@ -55,7 +57,9 @@ export function POS({
   storeCurrency,
   globalSearch = '',
   cashSessionOpen,
+  licenseActive,
   onGoToCash,
+  onGoToBilling,
   addToCart,
   removeFromCart,
   updateQuantity,
@@ -116,6 +120,10 @@ export function POS({
   };
 
   const handleCheckoutClick = () => {
+    if (!licenseActive) {
+      setCheckoutError(t('pos.licenseBlocked'));
+      return;
+    }
     if (!cashSessionOpen) {
       setCheckoutError(t('pos.checkoutBlocked'));
       return;
@@ -129,6 +137,10 @@ export function POS({
   };
 
   const handleProcessSale = async () => {
+    if (!licenseActive) {
+      setCheckoutError(t('pos.licenseBlocked'));
+      return;
+    }
     if (!cashSessionOpen) {
       setCheckoutError(t('pos.checkoutBlocked'));
       return;
@@ -194,7 +206,20 @@ export function POS({
     <div className="flex flex-col lg:flex-row gap-3 lg:gap-4 min-h-0 w-full lg:h-[calc(100vh-8rem)] lg:max-h-[calc(100vh-8rem)] animate-in fade-in slide-in-from-bottom-4 duration-500">
       {/* Catálogo — listado compacto */}
       <section className="flex-1 lg:min-w-0 min-h-[min(42vh,24rem)] lg:min-h-0 flex flex-col gap-2 overflow-hidden">
-        {!cashSessionOpen ? (
+        {!licenseActive ? (
+          <div
+            role="alert"
+            className="shrink-0 rounded-lg border border-error/30 bg-error-container text-on-error-container px-3 py-2 flex flex-wrap items-center justify-between gap-2"
+          >
+            <div>
+              <p className="text-xs font-bold">{t('pos.licenseRequiredTitle')}</p>
+              <p className="text-[10px] mt-0.5">{t('pos.licenseRequiredBody')}</p>
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={onGoToBilling}>
+              {t('license.goToBilling')}
+            </Button>
+          </div>
+        ) : !cashSessionOpen ? (
           <div
             role="alert"
             className="shrink-0 rounded-lg border border-error/30 bg-error-container text-on-error-container px-3 py-2 flex flex-wrap items-center justify-between gap-2"
@@ -227,7 +252,7 @@ export function POS({
                 onClick={() => addToCart(product)}
                 className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-black/5 bg-surface-container-lowest hover:bg-surface-container-low text-left transition-colors"
               >
-                <ProductThumb src={product.image} className="w-10 h-10 rounded-md object-cover shrink-0" alt={product.name} />
+                <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-10 h-10 rounded-md object-cover shrink-0" alt={product.name} />
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-sm text-primary truncate leading-tight">{product.name}</p>
                   <p className="text-[10px] text-on-surface-variant truncate">{product.sku}</p>
@@ -298,6 +323,7 @@ export function POS({
                 <li key={item.id} className="flex items-center gap-2 px-2 py-2 hover:bg-surface-container-lowest/80">
                   <ProductThumb
                     src={item.image}
+                    imageUrl={item.imageUrl}
                     className="w-9 h-9 rounded-md object-cover shrink-0 hidden sm:block"
                     alt={item.name}
                   />
@@ -397,7 +423,7 @@ export function POS({
           {checkoutError ? <p className="text-xs text-error font-medium">{checkoutError}</p> : null}
 
           <Button
-            disabled={cart.length === 0 || !cashSessionOpen}
+            disabled={cart.length === 0 || !cashSessionOpen || !licenseActive}
             onClick={handleCheckoutClick}
             className="w-full py-2.5 text-sm shadow-md flex items-center justify-center gap-2"
           >

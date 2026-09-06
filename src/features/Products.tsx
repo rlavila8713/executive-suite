@@ -56,6 +56,7 @@ export function Products({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null);
   const [productImage, setProductImage] = useState<string>(PLACEHOLDER_PRODUCT_IMAGE);
+  const [imageDirty, setImageDirty] = useState(false);
   const [categoryId, setCategoryId] = useState('');
   const [subcategoryId, setSubcategoryId] = useState('');
   const [sku, setSku] = useState('');
@@ -67,7 +68,8 @@ export function Products({
 
   useEffect(() => {
     if (!isModalOpen) return;
-    setProductImage(editingProduct?.image ?? PLACEHOLDER_PRODUCT_IMAGE);
+    setProductImage(editingProduct?.image || PLACEHOLDER_PRODUCT_IMAGE);
+    setImageDirty(false);
     setCategoryId(editingProduct?.categoryId ?? '');
     setSubcategoryId(editingProduct?.subcategoryId ?? '');
     setSku(editingProduct?.sku ?? '');
@@ -135,6 +137,9 @@ export function Products({
 
     if (editingProduct) {
       const { cost: _c, stock: _s, ...catalogUpdates } = productData;
+      if (!imageDirty) {
+        delete (catalogUpdates as { image?: string }).image;
+      }
       await onUpdate(editingProduct.id, catalogUpdates);
     } else {
       await onAdd(productData);
@@ -246,7 +251,7 @@ export function Products({
                 <tr key={product.id} className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0">
                   <td className="py-4 px-6">
                     <div className="flex items-center gap-4">
-                      <ProductThumb src={product.image} alt={product.name} className="w-12 h-12 rounded-lg object-cover" />
+                      <ProductThumb src={product.image} imageUrl={product.imageUrl} alt={product.name} className="w-12 h-12 rounded-lg object-cover" />
                       <div>
                         <p className="font-bold text-primary">{product.name}</p>
                         <p className="text-xs text-on-surface-variant">{t('common.sku')}: {product.sku}</p>
@@ -306,7 +311,15 @@ export function Products({
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingProduct ? t('products.editProduct') : t('products.addProductTitle')}>
         <form key={editingProduct?.id ?? 'new'} onSubmit={handleSubmit} className="space-y-5">
-          <ImagePicker value={productImage} onChange={setProductImage} compact />
+          <ImagePicker
+            value={productImage}
+            previewUrl={!imageDirty ? editingProduct?.imageUrl : undefined}
+            onChange={(dataUrl) => {
+              setProductImage(dataUrl);
+              setImageDirty(true);
+            }}
+            compact
+          />
           <div className="space-y-1">
             <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.productName')}</label>
             <Input name="name" defaultValue={editingProduct?.name} required />

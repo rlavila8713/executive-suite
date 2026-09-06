@@ -12,6 +12,18 @@ export function initialsFromName(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+export function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
+  const index = list.findIndex((row) => row.id === item.id);
+  if (index === -1) return [...list, item];
+  const next = list.slice();
+  next[index] = item;
+  return next;
+}
+
+export function removeById<T extends { id: string }>(list: T[], id: string): T[] {
+  return list.filter((row) => row.id !== id);
+}
+
 /** Case-insensitive substring match across any of the given fields; empty query matches all. */
 export function rowMatchesSearch(query: string, fields: string[]): boolean {
   const q = query.trim().toLowerCase();

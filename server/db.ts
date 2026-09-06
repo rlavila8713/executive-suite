@@ -1,13 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import initSqlJs, { type Database as SqlDatabase } from 'sql.js';
-import {
-  DEFAULT_APP_SETTINGS,
-  DEFAULT_PRODUCT_CATEGORY_NAMES,
-  MOCK_EXPENSES,
-  MOCK_PRODUCTS,
-  MOCK_TRANSACTIONS,
-} from './constants.js';
+
+type SqlParam = number | string | Uint8Array | null;
+import { DEFAULT_APP_SETTINGS } from './constants.js';
+import { ensureLicenseRow } from './license.js';
 import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
 
 export function newId(): string {
@@ -32,7 +29,7 @@ class Statement {
   all(...params: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(this.sql);
     try {
-      if (params.length) stmt.bind(params);
+      if (params.length) stmt.bind(params as SqlParam[]);
       const rows: Record<string, unknown>[] = [];
       while (stmt.step()) {
         rows.push(stmt.getAsObject() as Record<string, unknown>);
@@ -48,7 +45,7 @@ class Statement {
   }
 
   run(...params: unknown[]): { changes: number } {
-    this.db.run(this.sql, params as (string | number | null)[]);
+    this.db.run(this.sql, params as SqlParam[]);
     const changes = this.db.getRowsModified();
     this.shouldPersist();
     return { changes };
@@ -121,6 +118,7 @@ export async function initDb(): Promise<void> {
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
     ensureSeeded(sqliteStore);
+    ensureLicenseRow(sqliteStore);
     persistDb(db);
     store = sqliteStore;
   })();
@@ -210,99 +208,49 @@ function initSchema(db: SqliteStore): void {
 }
 
 function ensureSeeded(db: SqliteStore): void {
-  const productCount = db.prepare('SELECT COUNT(*) AS c FROM products').get() as { c: number };
-  const categoryCount = db.prepare('SELECT COUNT(*) AS c FROM categories').get() as { c: number };
-  const txCount = db.prepare('SELECT COUNT(*) AS c FROM transactions').get() as { c: number };
-  const expenseCount = db.prepare('SELECT COUNT(*) AS c FROM expenses').get() as { c: number };
   const settingsCount = db.prepare('SELECT COUNT(*) AS c FROM app_settings').get() as { c: number };
 
+  if (settingsCount.c === 0) {
+    const s = DEFAULT_APP_SETTINGS;
+    db.prepare(
+      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      s.id,
+      s.storeName,
+      s.branch,
+      s.currency,
+      s.taxRate,
+      s.cardQrPayload,
+      s.darkMode ? 1 : 0,
+      s.lowStockNotifications ? 1 : 0,
+      s.managerName,
+      s.managerTitle,
+      s.locale,
+    );
+  }
+}
+
+/** Wipe all operational data for client delivery; keeps default settings and resets license trial. */
+export function factoryResetDb(db: SqliteStore): void {
   db.runInTransaction(() => {
-    if (categoryCount.c === 0) {
-      if (productCount.c === 0) {
-        for (const name of DEFAULT_PRODUCT_CATEGORY_NAMES) {
-          const catId = newId();
-          const code = codeFromCategoryName(name);
-          db.prepare('INSERT INTO categories (id, name, code) VALUES (?, ?, ?)').run(catId, name, code);
-          db.prepare('INSERT INTO subcategories (id, category_id, name, code) VALUES (?, ?, ?, ?)').run(
-            newId(),
-            catId,
-            'General',
-            'GEN',
-          );
-        }
-      } else {
-        const prods = db.prepare('SELECT DISTINCT category FROM products').all() as { category: string }[];
-        const names = [...new Set(prods.map((p) => p.category.trim()).filter(Boolean))].sort();
-        for (const name of names) {
-          const catId = newId();
-          const code = codeFromCategoryName(name);
-          db.prepare('INSERT OR IGNORE INTO categories (id, name, code) VALUES (?, ?, ?)').run(catId, name, code);
-        }
-      }
-    }
-
-    if (productCount.c === 0) {
-      const insertProduct = db.prepare(
-        'INSERT INTO products (id, name, sku, category, price, cost, stock, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      );
-      for (const p of MOCK_PRODUCTS) {
-        insertProduct.run(p.id, p.name, p.sku, p.category, p.price, p.cost, p.stock, p.image);
-      }
-    }
-
-    if (txCount.c === 0) {
-      const insertTx = db.prepare(
-        `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const tx of MOCK_TRANSACTIONS) {
-        insertTx.run(
-          tx.id,
-          tx.orderNumber,
-          tx.customer,
-          tx.amount,
-          tx.status,
-          tx.timestamp,
-          tx.type,
-          tx.createdAt,
-          tx.paymentMethod ?? null,
-          tx.receipt ? JSON.stringify(tx.receipt) : null,
-        );
-      }
-    }
-
-    if (expenseCount.c === 0) {
-      const insertExpense = db.prepare(
-        'INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)',
-      );
-      for (const e of MOCK_EXPENSES) {
-        insertExpense.run(e.id, e.title, e.amount, e.category, e.date);
-      }
-    }
-
-    if (settingsCount.c === 0) {
-      const s = DEFAULT_APP_SETTINGS;
-      db.prepare(
-        `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        s.id,
-        s.storeName,
-        s.branch,
-        s.currency,
-        s.taxRate,
-        s.cardQrPayload,
-        s.darkMode ? 1 : 0,
-        s.lowStockNotifications ? 1 : 0,
-        s.managerName,
-        s.managerTitle,
-        s.locale,
-      );
-    }
+    db.prepare('DELETE FROM products').run();
+    db.prepare('DELETE FROM transactions').run();
+    db.prepare('DELETE FROM expenses').run();
+    db.prepare('DELETE FROM categories').run();
+    db.prepare('DELETE FROM subcategories').run();
+    db.prepare('DELETE FROM locations').run();
+    db.prepare('DELETE FROM cash_sessions').run();
+    db.prepare('DELETE FROM app_settings').run();
+    ensureSeeded(db);
+    db.prepare('DELETE FROM license_state').run();
+    ensureLicenseRow(db);
   });
 }
 
 // --- Row mappers ---
+
+import { productImagePath } from './productImage.js';
 
 export type ProductRow = {
   id: string;
@@ -322,7 +270,13 @@ export type ProductRow = {
   barcode?: string | null;
 };
 
-export function rowToProduct(row: ProductRow) {
+export type RowToProductOptions = {
+  /** When false, omits embedded image data (use imageUrl on clients). Default true. */
+  includeImageData?: boolean;
+};
+
+export function rowToProduct(row: ProductRow, options: RowToProductOptions = {}) {
+  const includeImageData = options.includeImageData ?? true;
   return {
     id: row.id,
     name: row.name,
@@ -331,7 +285,8 @@ export function rowToProduct(row: ProductRow) {
     price: row.price,
     cost: row.cost,
     stock: row.stock,
-    image: row.image,
+    image: includeImageData ? row.image : '',
+    imageUrl: row.image ? productImagePath(row.id, row.image) : null,
     categoryId: row.category_id ?? '',
     subcategoryId: row.subcategory_id ?? '',
     subcategory: row.subcategory ?? '',
@@ -383,8 +338,22 @@ export function rowToTransaction(row: {
   };
 }
 
-export function rowToExpense(row: { id: string; title: string; amount: number; category: string; date: string }) {
-  return { id: row.id, title: row.title, amount: row.amount, category: row.category, date: row.date };
+export function rowToExpense(row: {
+  id: string;
+  title: string;
+  amount: number;
+  category: string;
+  date: string;
+  locked?: number;
+}) {
+  return {
+    id: row.id,
+    title: row.title,
+    amount: row.amount,
+    category: row.category,
+    date: row.date,
+    locked: row.locked === 1,
+  };
 }
 
 export function rowToCashSession(row: {
@@ -397,7 +366,19 @@ export function rowToCashSession(row: {
   total_card_sales: number;
   total_transfer_sales: number;
   total_other_sales: number;
+  expected_cash?: number | null;
+  cash_variance?: number | null;
+  anomalies_json?: string | null;
 }) {
+  let anomalies: { kind: string; expectedCash: number; closingCash: number; cashSales: number; variance: number }[] =
+    [];
+  if (row.anomalies_json) {
+    try {
+      anomalies = JSON.parse(row.anomalies_json);
+    } catch {
+      anomalies = [];
+    }
+  }
   return {
     id: row.id,
     openedAt: row.opened_at,
@@ -408,6 +389,9 @@ export function rowToCashSession(row: {
     totalCardSales: row.total_card_sales,
     totalTransferSales: row.total_transfer_sales,
     totalOtherSales: row.total_other_sales,
+    expectedCash: row.expected_cash ?? null,
+    cashVariance: row.cash_variance ?? null,
+    anomalies,
   };
 }
 

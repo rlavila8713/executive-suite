@@ -333,7 +333,7 @@ export function Inventory({
                 className="rounded-xl border border-black/5 bg-surface-container-lowest overflow-hidden flex flex-col"
               >
                 <div className="aspect-square relative bg-surface-container-high">
-                  <ProductThumb src={product.image} className="w-full h-full object-cover" alt={product.name} />
+                  <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-full h-full object-cover" alt={product.name} />
                   <span
                     className={cn(
                       'absolute top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase',
@@ -381,7 +381,7 @@ export function Inventory({
                   <tr key={product.id} className="border-b border-black/5 last:border-0 hover:bg-surface-container-low">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3 min-w-0">
-                        <ProductThumb src={product.image} className="w-9 h-9 rounded object-cover shrink-0" alt={product.name} />
+                        <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-9 h-9 rounded object-cover shrink-0" alt={product.name} />
                         <div className="min-w-0">
                           <p className="text-sm font-bold text-primary truncate">{product.name}</p>
                           <p className="text-[10px] text-on-surface-variant">{product.sku}</p>

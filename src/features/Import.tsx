@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Card, Button } from '../components/ui';
 import { useI18n } from '../i18n/I18nContext';
 import { downloadCsv } from '../lib/printDocument';
@@ -10,7 +10,8 @@ import {
   type ProductImportRow,
 } from '../lib/csvParse';
 import { mapMutationError } from '../lib/mutationErrors';
-import type { ProductImportResult } from '../api/client';
+import { api, type ProductImportResult, type ProductImportValidation } from '../api/client';
+import { cn } from '../lib/utils';
 
 interface ImportProps {
   onImport: (rows: ProductImportRow[]) => Promise<ProductImportResult>;
@@ -25,6 +26,24 @@ export function Import({ onImport }: ImportProps) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ProductImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<ProductImportValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+
+  const mapImportErrorCode = (code: string): string => {
+    if (code.startsWith('ERR_DUPLICATE_SKU|')) {
+      return t('import.errDuplicateSku', { sku: code.split('|')[1] });
+    }
+    if (code.startsWith('ERR_DUPLICATE_SKU_IN_FILE|')) {
+      return t('import.errDuplicateSkuInFile', { sku: code.split('|')[1] });
+    }
+    if (code.startsWith('ERR_DUPLICATE_PRODUCT|')) {
+      return t('import.errDuplicateProduct', { name: code.split('|')[1] });
+    }
+    if (code.startsWith('ERR_DUPLICATE_PRODUCT_IN_FILE|')) {
+      return t('import.errDuplicateProductInFile', { name: code.split('|')[1] });
+    }
+    return code;
+  };
 
   const mapParseError = (code: string): string => {
     if (code === 'EMPTY_FILE') return t('import.errEmptyFile');
@@ -62,6 +81,29 @@ export function Import({ onImport }: ImportProps) {
     }
     setRows(parsed.rows);
   };
+
+  useEffect(() => {
+    if (rows.length === 0) {
+      setValidation(null);
+      return;
+    }
+    let cancelled = false;
+    setValidating(true);
+    void api
+      .validateProductImport(rows)
+      .then((v) => {
+        if (!cancelled) setValidation(v);
+      })
+      .catch(() => {
+        if (!cancelled) setValidation(null);
+      })
+      .finally(() => {
+        if (!cancelled) setValidating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
 
   const handleImport = async () => {
     if (rows.length === 0) return;
@@ -148,11 +190,43 @@ export function Import({ onImport }: ImportProps) {
 
       {rows.length > 0 ? (
         <Card className="p-0 overflow-hidden">
-          <div className="p-4 border-b border-black/5 bg-surface-container-low flex justify-between items-center gap-3">
-            <p className="text-sm font-bold text-primary">{t('import.previewTitle', { count: rows.length })}</p>
-            <Button disabled={busy} onClick={() => void handleImport()}>
-              {busy ? t('import.importing') : t('import.runImport')}
-            </Button>
+          <div className="p-4 border-b border-black/5 bg-surface-container-low space-y-3">
+            <div className="flex justify-between items-center gap-3">
+              <p className="text-sm font-bold text-primary">{t('import.previewTitle', { count: rows.length })}</p>
+              <Button
+                disabled={busy || validating || (validation != null && validation.summary.new === 0)}
+                onClick={() => void handleImport()}
+              >
+                {busy ? t('import.importing') : t('import.runImport')}
+              </Button>
+            </div>
+            {validating ? (
+              <p className="text-xs text-on-surface-variant">{t('import.validating')}</p>
+            ) : validation ? (
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="inline-flex items-center gap-1 rounded-full bg-on-tertiary-container/15 text-on-tertiary-container px-2.5 py-1 font-semibold">
+                  <CheckCircle2 size={14} />
+                  {t('import.summaryNew', { count: validation.summary.new })}
+                </span>
+                {validation.summary.duplicateExisting > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-error/10 text-error px-2.5 py-1 font-semibold">
+                    <AlertCircle size={14} />
+                    {t('import.summaryDuplicateExisting', { count: validation.summary.duplicateExisting })}
+                  </span>
+                ) : null}
+                {validation.summary.duplicateInFile > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 px-2.5 py-1 font-semibold">
+                    <AlertTriangle size={14} />
+                    {t('import.summaryDuplicateInFile', { count: validation.summary.duplicateInFile })}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {validation && validation.summary.new === 0 ? (
+              <p className="text-sm text-error font-medium">{t('import.errAllDuplicates')}</p>
+            ) : validation && validation.summary.duplicateExisting + validation.summary.duplicateInFile > 0 ? (
+              <p className="text-xs text-on-surface-variant">{t('import.duplicateHint')}</p>
+            ) : null}
           </div>
           <div className="overflow-x-auto max-h-[24rem] overflow-y-auto">
             <table className="w-full text-left text-sm">
@@ -170,8 +244,17 @@ export function Import({ onImport }: ImportProps) {
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 100).map((r, i) => (
-                  <tr key={`${r.sku ?? r.name}-${i}`} className="border-t border-black/5">
+                {rows.slice(0, 100).map((r, i) => {
+                  const rowStatus = validation?.rows.find((v) => v.row === i + 2)?.status;
+                  return (
+                  <tr
+                    key={`${r.sku ?? r.name}-${i}`}
+                    className={cn(
+                      'border-t border-black/5',
+                      rowStatus === 'duplicate_existing' && 'bg-error/5',
+                      rowStatus === 'duplicate_in_file' && 'bg-amber-500/10',
+                    )}
+                  >
                     <td className="px-4 py-2 text-on-surface-variant">{i + 1}</td>
                     <td className="px-4 py-2 font-medium">{r.name}</td>
                     <td className="px-4 py-2">{r.category}</td>
@@ -182,7 +265,8 @@ export function Import({ onImport }: ImportProps) {
                     <td className="px-4 py-2 text-on-surface-variant">{r.location ?? '—'}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.sku ?? t('import.skuAuto')}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -228,7 +312,12 @@ export function Import({ onImport }: ImportProps) {
               <ul className="text-xs space-y-1 max-h-40 overflow-y-auto">
                 {result.errors.map((e) => (
                   <li key={`${e.row}-${e.message}`} className="text-on-surface-variant">
-                    {t('import.rowErrorLine', { row: e.row, message: e.message.startsWith('ERR_DUPLICATE_SKU') ? t('import.errDuplicateSku', { sku: e.message.split('|')[1] }) : e.message })}
+                    {t('import.rowErrorLine', {
+                      row: e.row,
+                      message: e.message.startsWith('ERR_')
+                        ? mapImportErrorCode(e.message)
+                        : e.message,
+                    })}
                   </li>
                 ))}
               </ul>

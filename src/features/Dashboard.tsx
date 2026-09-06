@@ -294,7 +294,7 @@ export function Dashboard({
             <div className="space-y-4 mt-4">
               {lowStockProducts.slice(0, 3).map((product) => (
                 <div key={product.id} className="flex items-center gap-4 bg-white/50 dark:bg-slate-800/50 p-3 rounded-lg">
-                  <ProductThumb src={product.image} alt={product.name} className="w-10 h-10 rounded object-cover" />
+                  <ProductThumb src={product.image} imageUrl={product.imageUrl} alt={product.name} className="w-10 h-10 rounded object-cover" />
                   <div className="flex-1">
                     <p className="text-xs font-bold text-primary">{product.name}</p>
                     <p className="text-[10px] text-error font-bold">{t('dashboard.itemsLeft', { count: product.stock })}</p>

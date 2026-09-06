@@ -16,6 +16,17 @@ export type ProductImportInput = {
 
 export type ImportRowError = { row: number; message: string };
 
+export type ImportRowStatus = 'new' | 'duplicate_existing' | 'duplicate_in_file';
+
+export type ProductImportValidation = {
+  summary: {
+    new: number;
+    duplicateExisting: number;
+    duplicateInFile: number;
+  };
+  rows: { row: number; status: ImportRowStatus; code?: string }[];
+};
+
 export type ProductImportResult = {
   created: {
     categories: number;
@@ -88,6 +99,86 @@ function findSubcategory(
 
 function findLocation(map: Map<string, LocationRow>, name: string): LocationRow | undefined {
   return map.get(name.trim().toLowerCase());
+}
+
+function productNaturalKey(name: string, category: string, subcategory: string): string {
+  return [name, category, subcategory].map((part) => part.trim().toLowerCase()).join('|');
+}
+
+type DuplicateCheck = { status: ImportRowStatus; code: string };
+
+function checkImportRowDuplicate(
+  row: ProductImportInput,
+  existingSkus: Set<string>,
+  existingNatural: Set<string>,
+  batchSkus: Set<string>,
+  batchNatural: Set<string>,
+): DuplicateCheck | null {
+  const sku = row.sku?.trim() ?? '';
+  const natural = productNaturalKey(row.name, row.category, row.subcategory);
+
+  if (sku) {
+    if (batchSkus.has(sku)) {
+      return { status: 'duplicate_in_file', code: `ERR_DUPLICATE_SKU_IN_FILE|${sku}` };
+    }
+    if (existingSkus.has(sku)) {
+      return { status: 'duplicate_existing', code: `ERR_DUPLICATE_SKU|${sku}` };
+    }
+  }
+
+  if (batchNatural.has(natural)) {
+    return { status: 'duplicate_in_file', code: `ERR_DUPLICATE_PRODUCT_IN_FILE|${row.name.trim()}` };
+  }
+  if (existingNatural.has(natural)) {
+    return { status: 'duplicate_existing', code: `ERR_DUPLICATE_PRODUCT|${row.name.trim()}` };
+  }
+
+  return null;
+}
+
+function loadExistingImportKeys(db: SqliteStore): { skus: Set<string>; natural: Set<string> } {
+  const skus = new Set(
+    (db.prepare('SELECT sku FROM products').all() as { sku: string }[]).map((p) => p.sku),
+  );
+  const natural = new Set(
+    (db.prepare('SELECT name, category, subcategory FROM products').all() as {
+      name: string;
+      category: string;
+      subcategory: string;
+    }[]).map((p) => productNaturalKey(p.name, p.category, p.subcategory)),
+  );
+  return { skus, natural: natural };
+}
+
+export function validateProductImportRows(db: SqliteStore, rows: ProductImportInput[]): ProductImportValidation {
+  const { skus: existingSkus, natural: existingNatural } = loadExistingImportKeys(db);
+  const batchSkus = new Set<string>();
+  const batchNatural = new Set<string>();
+
+  const validation: ProductImportValidation = {
+    summary: { new: 0, duplicateExisting: 0, duplicateInFile: 0 },
+    rows: [],
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 2;
+    const row = rows[i];
+    const dup = checkImportRowDuplicate(row, existingSkus, existingNatural, batchSkus, batchNatural);
+
+    if (dup) {
+      validation.summary[dup.status === 'duplicate_in_file' ? 'duplicateInFile' : 'duplicateExisting']++;
+      validation.rows.push({ row: rowNum, status: dup.status, code: dup.code });
+    } else {
+      validation.summary.new++;
+      validation.rows.push({ row: rowNum, status: 'new' });
+    }
+
+    const sku = row.sku?.trim() ?? '';
+    if (sku) batchSkus.add(sku);
+    batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
+  }
+
+  return validation;
 }
 
 function ensureCategory(
@@ -184,13 +275,24 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
     locMap.set(l.name.trim().toLowerCase(), l);
   }
 
-  const reservedSkus = new Set<string>();
+  const { skus: existingSkus, natural: existingNatural } = loadExistingImportKeys(db);
+  const batchSkus = new Set<string>();
+  const batchNatural = new Set<string>();
 
   db.runInTransaction(() => {
     for (let i = 0; i < rows.length; i++) {
       const rowNum = i + 2;
       const row = rows[i];
       try {
+        const dup = checkImportRowDuplicate(row, existingSkus, existingNatural, batchSkus, batchNatural);
+        if (dup) {
+          result.errors.push({ row: rowNum, message: dup.code });
+          const sku = row.sku?.trim() ?? '';
+          if (sku) batchSkus.add(sku);
+          batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
+          continue;
+        }
+
         const cat = ensureCategory(db, catMap, row.category, result.created);
         const sub = ensureSubcategory(db, catMap, subMap, row.category, row.subcategory, result.created);
 
@@ -200,16 +302,11 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
         }
 
         let sku = row.sku?.trim() ?? '';
-        if (sku) {
-          const clash = db.prepare('SELECT id FROM products WHERE sku = ?').get(sku);
-          if (clash || reservedSkus.has(sku)) {
-            result.errors.push({ row: rowNum, message: `ERR_DUPLICATE_SKU|${sku}` });
-            continue;
-          }
-        } else {
-          sku = nextSkuForSubcategory(db, cat, sub, reservedSkus);
+        if (!sku) {
+          sku = nextSkuForSubcategory(db, cat, sub, batchSkus);
         }
-        reservedSkus.add(sku);
+        batchSkus.add(sku);
+        batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
 
         const id = newId();
         db.prepare(
