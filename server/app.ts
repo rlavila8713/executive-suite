@@ -4,6 +4,29 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { registerRoutes, ApiError } from './routes.js';
 import { getLanAddresses } from './lan.js';
+import { getDb } from './db.js';
+import { isLicenseActive, registerDevice } from './license.js';
+
+const LICENSE_EXEMPT_PATHS = new Set([
+  '/license',
+  '/settings',
+  '/health',
+]);
+
+const LICENSE_WRITE_EXEMPT = new Set([
+  '/license/request',
+  '/license/activate',
+]);
+
+function normalizeApiPath(req: Request): string {
+  const base = req.baseUrl ?? '';
+  const full = req.path.startsWith(base) ? req.path : `${base}${req.path}`;
+  return full.replace(/^\/api/, '') || '/';
+}
+
+function isReadOnlyMethod(method: string): boolean {
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+}
 
 function readPackageVersion(): string {
   try {
@@ -31,6 +54,30 @@ export function createApp(): Express {
       next();
     });
   }
+
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const deviceId = req.header('X-Device-Id')?.trim();
+    if (!deviceId) {
+      res.status(403).json({ error: 'Device identification required', code: 'ERR_DEVICE_REQUIRED' });
+      return;
+    }
+
+    try {
+      const db = getDb();
+      registerDevice(db, deviceId);
+      const apiPath = normalizeApiPath(req);
+
+      if (!LICENSE_EXEMPT_PATHS.has(apiPath) && !isReadOnlyMethod(req.method)) {
+        if (!LICENSE_WRITE_EXEMPT.has(apiPath) && !isLicenseActive(db, deviceId)) {
+          res.status(403).json({ error: 'License expired or inactive', code: 'ERR_LICENSE_EXPIRED' });
+          return;
+        }
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
 
   app.get('/health', (_req, res) => {
     const port = Number(process.env.PORT ?? 4000);

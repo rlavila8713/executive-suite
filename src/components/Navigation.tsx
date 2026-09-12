@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
+import { ApiImage } from './ApiImage';
 import { useI18n } from '../i18n/I18nContext';
 
 type MenuItem = {
@@ -139,11 +140,52 @@ function NavMenu({
   );
 }
 
+function StoreBrandHeader({
+  storeName,
+  branchLabel,
+  storeLogoUrl,
+}: {
+  storeName: string;
+  branchLabel: string;
+  storeLogoUrl?: string | null;
+}) {
+  const initials = initialsFromName(storeName);
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <div
+        className="w-11 h-11 rounded-full bg-primary text-white flex items-center justify-center text-[11px] font-bold shrink-0 overflow-hidden ring-2 ring-white/80 dark:ring-slate-800/80"
+        aria-hidden={!!storeLogoUrl}
+      >
+        {storeLogoUrl ? (
+          <ApiImage
+            key={storeLogoUrl}
+            apiPath={storeLogoUrl}
+            alt=""
+            className="w-full h-full object-cover"
+            fallback={<span>{initials}</span>}
+          />
+        ) : (
+          initials
+        )}
+      </div>
+      <div className="min-w-0">
+        <h1 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wide font-headline line-clamp-2 leading-snug">
+          {storeName}
+        </h1>
+        {branchLabel.trim() ? (
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold line-clamp-2 mt-1">{branchLabel}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 interface SidebarProps {
   currentScreen: Screen;
   onNavigate: (screen: Screen) => void;
   storeName?: string;
   branchLabel?: string;
+  storeLogoUrl?: string | null;
   managerName?: string;
   managerTitle?: string;
 }
@@ -153,6 +195,7 @@ export function Sidebar({
   onNavigate,
   storeName = 'Executive Suite',
   branchLabel = 'Main Branch',
+  storeLogoUrl = null,
   managerName = 'Manager',
   managerTitle = 'Staff',
 }: SidebarProps) {
@@ -161,10 +204,7 @@ export function Sidebar({
   return (
     <aside className="no-print hidden md:flex h-screen w-[15.5rem] fixed left-0 top-0 bg-slate-100 dark:bg-slate-900 flex-col z-50 border-r border-black/5 dark:border-white/5">
       <div className="shrink-0 px-4 pt-5 pb-4 border-b border-slate-200/80 dark:border-slate-700/60">
-        <h1 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wide font-headline line-clamp-2 leading-snug">
-          {storeName}
-        </h1>
-        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold line-clamp-2 mt-1">{branchLabel}</p>
+        <StoreBrandHeader storeName={storeName} branchLabel={branchLabel} storeLogoUrl={storeLogoUrl} />
       </div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 no-scrollbar">
@@ -201,6 +241,7 @@ export function MobileNavDrawer({
   onNavigate,
   storeName = 'Executive Suite',
   branchLabel = 'Main Branch',
+  storeLogoUrl = null,
   managerName = 'Manager',
   managerTitle = 'Staff',
 }: MobileNavDrawerProps) {
@@ -234,10 +275,7 @@ export function MobileNavDrawer({
       <aside className="absolute left-0 top-0 bottom-0 w-[min(18.5rem,88vw)] bg-slate-100 dark:bg-slate-900 shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
         <div className="shrink-0 flex items-start justify-between gap-2 px-4 pt-4 pb-3 border-b border-slate-200/80 dark:border-slate-700/60">
           <div className="min-w-0 pr-8">
-            <h1 className="text-sm font-black text-slate-800 dark:text-slate-100 uppercase tracking-wide font-headline line-clamp-2">
-              {storeName}
-            </h1>
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold line-clamp-2 mt-1">{branchLabel}</p>
+            <StoreBrandHeader storeName={storeName} branchLabel={branchLabel} storeLogoUrl={storeLogoUrl} />
           </div>
           <button
             type="button"

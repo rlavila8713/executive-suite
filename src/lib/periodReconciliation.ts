@@ -63,6 +63,10 @@ function lineCogs(line: SaleReceiptLine, productById: Map<string, Product>): num
   return unitCost * line.quantity;
 }
 
+function finiteMoney(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 function receiptIssues(tx: Transaction, receipt: SaleReceipt): ReceiptIntegrityIssue[] {
   const issues: ReceiptIntegrityIssue[] = [];
 
@@ -116,6 +120,15 @@ export function reconcilePeriod(
       reversedAmount += Math.abs(tx.amount);
       const method = resolveTransactionPaymentMethod(tx);
       payments[method] -= Math.abs(tx.amount);
+      const receipt = tx.receipt;
+      if (receipt) {
+        subtotal -= finiteMoney(receipt.subtotal);
+        tax -= finiteMoney(receipt.tax);
+        for (const line of receipt.lines) {
+          unitsReturned += line.quantity;
+          cogs -= lineCogs(line, productById);
+        }
+      }
       continue;
     }
 
@@ -154,6 +167,8 @@ export function reconcilePeriod(
         cogs += lineCogs(line, productById);
       }
     } else {
+      subtotal -= finiteMoney(receipt.subtotal);
+      tax -= finiteMoney(receipt.tax);
       for (const line of receipt.lines) {
         unitsReturned += line.quantity;
         cogs -= lineCogs(line, productById);
@@ -197,7 +212,7 @@ export function reconcilePeriod(
     issues,
     paymentsTotal: Math.round(paymentsTotal * 100) / 100,
     netUnits: unitsSold - unitsReturned,
-    operatingResult: Math.round((netSales - expensesTotal) * 100) / 100,
+    operatingResult: Math.round((grossProfit - expensesTotal) * 100) / 100,
     grossMarginPercent: subtotal === 0 ? 0 : (grossProfit / subtotal) * 100,
     paymentsMatchSales: moneyEquals(paymentsTotal, netSales),
     receiptsBalanced: issues.length === 0,
