@@ -34,6 +34,7 @@ interface POSProps {
   storeName: string;
   storeBranch: string;
   storeCurrency: string;
+  storeLogoUrl?: string | null;
   globalSearch?: string;
   cashSessionOpen: boolean;
   licenseActive: boolean;
@@ -55,6 +56,7 @@ export function POS({
   storeName,
   storeBranch,
   storeCurrency,
+  storeLogoUrl = null,
   globalSearch = '',
   cashSessionOpen,
   licenseActive,
@@ -154,6 +156,7 @@ export function POS({
     const receipt: SaleReceipt = {
       storeName: storeName.trim() || t('receipt.defaultStore'),
       branch: storeBranch.trim(),
+      ...(storeLogoUrl ? { storeLogoUrl } : {}),
       currency: storeCurrency.trim() || 'USD',
       lines: cart.map((item) => ({
         name: item.name,

@@ -39,10 +39,10 @@ function apiIsFreshSeed(products: Product[], categories: ProductCategory[]): boo
 }
 
 /** Current export format. Imports still accept schema version 1–3. */
-export const BACKUP_SCHEMA_VERSION = 4;
+export const BACKUP_SCHEMA_VERSION = 5;
 
 export type ExecutiveSuiteBackup = {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
   exportedAt: string;
   app: 'executive-suite';
   products: Product[];
@@ -169,6 +169,10 @@ function isAppSettings(x: unknown): x is AppSettings {
   if (!isRecord(x)) return false;
   const localeOk = x.locale === undefined || x.locale === 'es' || x.locale === 'en';
   const cardQrOk = x.cardQrPayload === undefined || typeof x.cardQrPayload === 'string';
+  const storeLogoOk =
+    x.storeLogo === undefined || typeof x.storeLogo === 'string';
+  const storeLogoUrlOk =
+    x.storeLogoUrl === undefined || x.storeLogoUrl === null || typeof x.storeLogoUrl === 'string';
   return (
     x.id === 'main' &&
     typeof x.storeName === 'string' &&
@@ -176,6 +180,8 @@ function isAppSettings(x: unknown): x is AppSettings {
     typeof x.currency === 'string' &&
     typeof x.taxRate === 'number' &&
     cardQrOk &&
+    storeLogoOk &&
+    storeLogoUrlOk &&
     typeof x.darkMode === 'boolean' &&
     typeof x.lowStockNotifications === 'boolean' &&
     typeof x.managerName === 'string' &&
@@ -200,8 +206,8 @@ export function parseBackupJson(text: string): ExecutiveSuiteBackup {
   if (raw.app !== 'executive-suite') {
     throw new Error('This file is not an Executive Suite backup.');
   }
-  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4) {
-    throw new Error(`Unsupported backup version: ${String(raw.schemaVersion)}. Expected 1, 2, 3, or 4.`);
+  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== 5) {
+    throw new Error(`Unsupported backup version: ${String(raw.schemaVersion)}. Expected 1, 2, 3, 4, or 5.`);
   }
   if (raw.productCategories !== undefined && raw.productCategories !== null) {
     if (!Array.isArray(raw.productCategories) || !raw.productCategories.every(isProductCategory)) {

@@ -170,6 +170,7 @@ function AppView(props: AppState) {
             transactions={transactions}
             products={products}
             expenses={expenses}
+            cashSessions={cashSessions}
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
@@ -256,6 +257,7 @@ function AppView(props: AppState) {
             storeName={appSettings.storeName}
             storeBranch={appSettings.branch}
             storeCurrency={appSettings.currency}
+            storeLogoUrl={appSettings.storeLogoUrl}
             globalSearch={globalSearch}
             cashSessionOpen={cashSessions.some((s) => s.closedAt == null)}
             licenseActive={licenseUsable}
@@ -326,6 +328,7 @@ function AppView(props: AppState) {
             transactions={transactions}
             products={products}
             expenses={expenses}
+            cashSessions={cashSessions}
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
@@ -351,6 +354,7 @@ function AppView(props: AppState) {
         onNavigate={setCurrentScreen}
         storeName={appSettings.storeName}
         branchLabel={appSettings.branch}
+        storeLogoUrl={appSettings.storeLogoUrl}
         managerName={appSettings.managerName}
         managerTitle={appSettings.managerTitle}
       />
@@ -362,6 +366,7 @@ function AppView(props: AppState) {
         onNavigate={setCurrentScreen}
         storeName={appSettings.storeName}
         branchLabel={appSettings.branch}
+        storeLogoUrl={appSettings.storeLogoUrl}
         managerName={appSettings.managerName}
         managerTitle={appSettings.managerTitle}
       />

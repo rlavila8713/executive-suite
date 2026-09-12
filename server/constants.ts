@@ -18,6 +18,7 @@ export const DEFAULT_APP_SETTINGS = {
   currency: 'CUP',
   taxRate: 0,
   cardQrPayload: '',
+  storeLogoUrl: null,
   darkMode: false,
   lowStockNotifications: true,
   managerName: '',

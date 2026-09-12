@@ -16,7 +16,6 @@ const LICENSE_EXEMPT_PATHS = new Set([
 const LICENSE_WRITE_EXEMPT = new Set([
   '/license/request',
   '/license/activate',
-  '/admin/factory-reset',
 ]);
 
 function normalizeApiPath(req: Request): string {
@@ -65,17 +64,8 @@ export function createApp(): Express {
 
     try {
       const db = getDb();
-      const reg = registerDevice(db, deviceId);
+      registerDevice(db, deviceId);
       const apiPath = normalizeApiPath(req);
-
-      if (!reg.ok) {
-        if (apiPath !== '/license' || !isReadOnlyMethod(req.method)) {
-          res.status(403).json({ error: 'This license is bound to another device', code: 'ERR_DEVICE_MISMATCH' });
-          return;
-        }
-        next();
-        return;
-      }
 
       if (!LICENSE_EXEMPT_PATHS.has(apiPath) && !isReadOnlyMethod(req.method)) {
         if (!LICENSE_WRITE_EXEMPT.has(apiPath) && !isLicenseActive(db, deviceId)) {

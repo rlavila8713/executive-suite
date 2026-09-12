@@ -1,5 +1,5 @@
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
-import { getApiUrl } from '../api/config';
+import { ApiImage } from './ApiImage';
 import { cn } from '../lib/utils';
 
 export function ProductThumb({
@@ -13,11 +13,21 @@ export function ProductThumb({
   alt: string;
   className?: string;
 }) {
-  const resolvedSrc = imageUrl ? getApiUrl(imageUrl) : src || PLACEHOLDER_PRODUCT_IMAGE;
+  if (imageUrl) {
+    return (
+      <ApiImage
+        key={imageUrl}
+        apiPath={imageUrl}
+        alt={alt}
+        className={cn(className)}
+        fallback={<img src={src || PLACEHOLDER_PRODUCT_IMAGE} alt={alt} className={cn(className)} />}
+      />
+    );
+  }
   return (
     <img
-      key={resolvedSrc}
-      src={resolvedSrc}
+      key={src || PLACEHOLDER_PRODUCT_IMAGE}
+      src={src || PLACEHOLDER_PRODUCT_IMAGE}
       alt={alt}
       className={cn(className)}
       onError={(e) => {

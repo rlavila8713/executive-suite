@@ -31,6 +31,7 @@ export function buildReceiptPrintHtml(
   createdAt: number,
   locale: string,
   labels: ReceiptPrintLabels,
+  logoSrc?: string | null,
 ): string {
   const dateStr = new Date(createdAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
     dateStyle: 'medium',
@@ -67,6 +68,11 @@ export function buildReceiptPrintHtml(
 </head><body>
 <div style="max-width:280px;margin:0 auto">
   <div style="text-align:center;border-bottom:1px dashed #d4d4d8;padding-bottom:12px;margin-bottom:12px">
+    ${
+      logoSrc
+        ? `<div style="display:flex;justify-content:center;margin-bottom:8px"><img src="${escapeHtml(logoSrc)}" alt="" style="width:56px;height:56px;border-radius:9999px;object-fit:cover;border:1px solid #e4e4e7"/></div>`
+        : ''
+    }
     <div style="font-size:18px;font-weight:800">${escapeHtml(receipt.storeName)}</div>
     ${receipt.branch.trim() ? `<div style="font-size:12px;color:#52525b;margin-top:4px">${escapeHtml(receipt.branch)}</div>` : ''}
     <div style="font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:#71717a;margin-top:8px">${escapeHtml(receipt.currency)}</div>
@@ -115,8 +121,9 @@ export function printReceiptInNewWindow(
   createdAt: number,
   locale: string,
   labels: ReceiptPrintLabels,
+  logoSrc?: string | null,
 ): boolean {
-  const html = buildReceiptPrintHtml(receipt, customerName, orderNumber, createdAt, locale, labels);
+  const html = buildReceiptPrintHtml(receipt, customerName, orderNumber, createdAt, locale, labels, logoSrc);
   const w = window.open('', '_blank');
   if (!w) return false;
   w.document.write(html);
