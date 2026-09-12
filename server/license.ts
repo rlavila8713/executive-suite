@@ -77,29 +77,23 @@ function getLicenseRow(db: SqliteStore): LicenseRow {
   return db.prepare('SELECT * FROM license_state WHERE id = ?').get('main') as LicenseRow;
 }
 
-export function registerDevice(db: SqliteStore, deviceId: string): { ok: true } | { ok: false; reason: 'device_mismatch' } {
+/** Records the first device that requested billing; does not block other API clients. */
+export function registerDevice(db: SqliteStore, deviceId: string): { ok: true } {
   const row = getLicenseRow(db);
   if (!row.device_fingerprint) {
     db.prepare(
       'UPDATE license_state SET device_fingerprint = ?, device_registered_at = ? WHERE id = ?',
     ).run(deviceId, Date.now(), 'main');
-    return { ok: true };
-  }
-  if (row.device_fingerprint !== deviceId) {
-    return { ok: false, reason: 'device_mismatch' };
   }
   return { ok: true };
 }
 
-export function isDeviceAuthorized(db: SqliteStore, deviceId: string | undefined): boolean {
-  if (!deviceId?.trim()) return false;
-  const row = getLicenseRow(db);
-  if (!row.device_fingerprint) return true;
-  return row.device_fingerprint === deviceId;
+/** License is server-scoped — any LAN client may use the API when the store license is active. */
+export function isDeviceAuthorized(_db: SqliteStore, _deviceId?: string): boolean {
+  return true;
 }
 
-function computeStatus(row: LicenseRow, deviceOk: boolean): LicenseStatus {
-  if (!deviceOk) return 'device_mismatch';
+function computeStatus(row: LicenseRow): LicenseStatus {
   const now = Date.now();
   const trialEndsAt = row.trial_started_at + TRIAL_DAYS * MS_PER_DAY;
   if (row.paid_until != null && row.paid_until > now) return 'active';
@@ -109,11 +103,10 @@ function computeStatus(row: LicenseRow, deviceOk: boolean): LicenseStatus {
 
 export function getLicenseInfo(db: SqliteStore, deviceId?: string): LicenseInfo {
   const row = getLicenseRow(db);
-  const deviceOk = isDeviceAuthorized(db, deviceId);
   const now = Date.now();
   const trialEndsAt = row.trial_started_at + TRIAL_DAYS * MS_PER_DAY;
   const trialDaysRemaining = Math.max(0, Math.ceil((trialEndsAt - now) / MS_PER_DAY));
-  const status = computeStatus(row, deviceOk);
+  const status = computeStatus(row);
 
   return {
     status,
@@ -192,10 +185,6 @@ export function activateLicense(
   }
 
   const row = getLicenseRow(db);
-  if (row.license_nonce === payload.nonce) {
-    throw new LicenseError('This license key was already used', 'ERR_LICENSE_ALREADY_USED');
-  }
-
   const now = Date.now();
   const base = row.paid_until != null && row.paid_until > now ? row.paid_until : now;
   const paidUntil = base + payload.days * MS_PER_DAY;
@@ -204,9 +193,14 @@ export function activateLicense(
   const title = `Licencia ${plan.name}`;
 
   db.runInTransaction(() => {
+    const redeemed = db.prepare('SELECT nonce FROM license_redemptions WHERE nonce = ?').get(payload.nonce);
+    if (redeemed) {
+      throw new LicenseError('This license key was already used', 'ERR_LICENSE_ALREADY_USED');
+    }
     db.prepare(
       'UPDATE license_state SET plan_id = ?, paid_until = ?, last_payment_at = ?, license_nonce = ? WHERE id = ?',
     ).run(payload.planId, paidUntil, now, payload.nonce, 'main');
+    db.prepare('INSERT INTO license_redemptions (nonce, redeemed_at) VALUES (?, ?)').run(payload.nonce, now);
     db.prepare(
       'INSERT INTO expenses (id, title, amount, category, date, locked) VALUES (?, ?, ?, ?, ?, 1)',
     ).run(expenseId, title, payload.price, LICENSE_EXPENSE_CATEGORY, today);

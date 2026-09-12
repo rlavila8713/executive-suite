@@ -152,9 +152,12 @@ export function paymentMethodBreakdown(transactions: Transaction[], range: DateR
     other: 0,
   });
   const out = init();
-  for (const tx of completedSalesInRange(transactions, range)) {
+  for (const tx of transactions) {
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    const sign = isCompletedSale(tx) ? 1 : isReturnRow(tx) || isReversedSale(tx) ? -1 : 0;
+    if (sign === 0) continue;
     const m = resolveTransactionPaymentMethod(tx);
-    out[m] += Math.abs(tx.amount);
+    out[m] += sign * Math.abs(tx.amount);
   }
   (Object.keys(out) as PaymentMethod[]).forEach((k) => {
     out[k] = Math.round(out[k] * 100) / 100;

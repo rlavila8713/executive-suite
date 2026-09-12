@@ -28,7 +28,8 @@ import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { mapMutationError } from '../lib/mutationErrors';
 import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
-import { Transaction, Product, Expense, Screen, type PaymentMethod } from '../types';
+import { CashStatusCard } from '../components/CashStatusCard';
+import { CashSession, Transaction, Product, Expense, Screen, type PaymentMethod } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -38,8 +39,8 @@ function startOfLocalDay(ts: number = Date.now()): number {
   return d.getTime();
 }
 
-function canReverseSale(tx: Transaction): boolean {
-  return tx.type === 'sale' && tx.status === 'completed';
+function canReverseSale(tx: Transaction, reversedSourceIds: Set<string>): boolean {
+  return tx.type === 'sale' && tx.status === 'completed' && !reversedSourceIds.has(tx.id);
 }
 
 function statusBadgeKey(status: Transaction['status']): 'completed' | 'pending' | 'refunded' | 'reversed' {
@@ -75,6 +76,7 @@ interface DashboardProps {
   transactions: Transaction[];
   products: Product[];
   expenses: Expense[];
+  cashSessions: CashSession[];
   headerSearch?: string;
   onNavigate: (screen: Screen) => void;
   onAddTransaction: (row: Omit<Transaction, 'id'>) => void | Promise<void>;
@@ -86,6 +88,7 @@ export function Dashboard({
   transactions,
   products,
   expenses,
+  cashSessions,
   headerSearch = '',
   onNavigate,
   onAddTransaction,
@@ -101,6 +104,10 @@ export function Dashboard({
     );
   }, [products, headerSearch]);
   const chartData = useMemo(() => lastSevenDayBars(transactions), [transactions]);
+  const reversedSourceIds = useMemo(
+    () => new Set(transactions.flatMap((tx) => (tx.sourceSaleId ? [tx.sourceSaleId] : []))),
+    [transactions],
+  );
   const maxBar = useMemo(() => Math.max(...chartData.map((d) => d.value), 1), [chartData]);
 
   const todayRevenue = useMemo(() => {
@@ -111,7 +118,6 @@ export function Dashboard({
       )
       .reduce((s, tx) => s + Math.abs(tx.amount), 0);
   }, [transactions]);
-
   const expenseMonthly = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses]);
   const budgetPct =
     expenseMonthly > 0 ? Math.min(100, Math.round((expenseMonthly / (expenseMonthly * 1.5)) * 100)) : 0;
@@ -203,8 +209,8 @@ export function Dashboard({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="md:col-span-2 relative overflow-hidden rounded-xl bg-gradient-to-br from-primary to-primary-container p-8 text-white shadow-lg">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
+        <div className="md:col-span-3 relative overflow-hidden rounded-xl bg-gradient-to-br from-primary to-primary-container p-8 text-white shadow-lg">
           <div className="relative z-10">
             <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-70 mb-2">{t('dashboard.todayRevenue')}</p>
             <h3 className="text-5xl font-black font-headline tracking-tighter mb-4">
@@ -218,7 +224,14 @@ export function Dashboard({
           <div className="absolute top-0 right-0 w-48 h-48 bg-white/5 rounded-full -mr-12 -mt-12 blur-3xl" />
         </div>
 
-        <Card className="bg-surface-container-low flex flex-col justify-between">
+        <CashStatusCard
+          className="md:col-span-3"
+          cashSessions={cashSessions}
+          transactions={transactions}
+          onNavigate={onNavigate}
+        />
+
+        <Card className="md:col-span-3 bg-surface-container-low flex flex-col justify-between">
           <div>
             <div className="flex justify-between items-start mb-4">
               <div className="p-2 bg-white dark:bg-slate-800 rounded-lg shadow-sm">
@@ -239,7 +252,7 @@ export function Dashboard({
           </div>
         </Card>
 
-        <div className="rounded-xl bg-tertiary-container p-6 text-white flex flex-col justify-between shadow-sm">
+        <div className="md:col-span-3 rounded-xl bg-tertiary-container p-6 text-white flex flex-col justify-between shadow-sm">
           <div>
             <div className="flex justify-between items-start mb-4">
               <div className="p-2 bg-primary rounded-lg shadow-sm">
@@ -392,7 +405,7 @@ export function Dashboard({
                   >
                     <Edit2 size={14} />
                   </Button>
-                  {canReverseSale(tx) ? (
+                  {canReverseSale(tx, reversedSourceIds) ? (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -559,7 +572,7 @@ export function Dashboard({
                 >
                   <Edit2 size={14} />
                 </Button>
-                {canReverseSale(tx) ? (
+                {canReverseSale(tx, reversedSourceIds) ? (
                   <Button
                     variant="ghost"
                     size="sm"

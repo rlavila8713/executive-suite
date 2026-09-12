@@ -44,3 +44,9 @@ export function productImagePath(productId: string, image?: string | null): stri
   const version = productImageVersion(image);
   return version ? `${path}?v=${version}` : path;
 }
+
+export function isPlaceholderProductImage(image: string | null | undefined): boolean {
+  const value = (image ?? '').trim();
+  if (!value) return true;
+  return value.startsWith('data:image/svg+xml');
+}

@@ -83,6 +83,8 @@ export interface SaleReceiptLine {
 export interface SaleReceipt {
   storeName: string;
   branch: string;
+  /** Versioned API path for store logo at sale time (`/api/settings/logo?v=…`). */
+  storeLogoUrl?: string;
   /** Display label (e.g. USD or $). */
   currency: string;
   lines: SaleReceiptLine[];
@@ -108,6 +110,8 @@ export interface Transaction {
   type: 'sale' | 'return';
   /** Used for ordering in the local database (newest first). */
   createdAt: number;
+  /** Original sale id when this is an immutable return/reversal movement. */
+  sourceSaleId?: string;
   /** Set for POS sales: printable ticket data. */
   receipt?: SaleReceipt;
   /**
@@ -198,6 +202,10 @@ export interface AppSettings {
    * Shown when the cashier taps Card; generated locally, no external service.
    */
   cardQrPayload: string;
+  /** Versioned API path when a store logo is set; null otherwise. */
+  storeLogoUrl: string | null;
+  /** Raw data URL — sent on PATCH to upload or clear the logo. */
+  storeLogo?: string;
   darkMode: boolean;
   lowStockNotifications: boolean;
   managerName: string;

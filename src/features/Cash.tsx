@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Card, Button, Input } from '../components/ui';
-import type { CashSession, Transaction } from '../types';
+import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import type { CashAnomaly, CashAnomalyKind, CashSession, Transaction } from '../types';
 import { sessionPaymentBreakdown } from '../lib/reporting';
 import { computeSessionAnomalies, sessionHasAnomalies } from '../lib/cashAnomalies';
 import { useI18n } from '../i18n/I18nContext';
 import { cn } from '../lib/utils';
-import { AlertTriangle } from 'lucide-react';
+import { mapMutationError } from '../lib/mutationErrors';
 
 interface CashProps {
   cashSessions: CashSession[];
@@ -16,6 +17,23 @@ interface CashProps {
 }
 
 const ZERO_PAYMENTS = { cash: 0, card: 0, transfer: 0, other: 0 };
+const SESSION_TABLE_COLS = 11;
+
+function money(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+function anomalyTitle(kind: CashAnomalyKind, t: (k: string) => string): string {
+  if (kind === 'cash_shortfall') return t('cash.anomalyShortfallTitle');
+  if (kind === 'cash_surplus') return t('cash.anomalySurplusTitle');
+  return t('cash.anomalyVarianceTitle');
+}
+
+function anomalyDetail(kind: CashAnomalyKind, t: (k: string) => string): string {
+  if (kind === 'cash_shortfall') return t('cash.anomalyShortfall');
+  if (kind === 'cash_surplus') return t('cash.anomalySurplus');
+  return t('cash.anomalyVariance');
+}
 
 export function Cash({
   cashSessions,
@@ -29,6 +47,7 @@ export function Cash({
   const [closingById, setClosingById] = useState<Record<string, string>>({});
   const [cashMsg, setCashMsg] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [expandedAlerts, setExpandedAlerts] = useState<Record<string, boolean>>({});
 
   const openSession = cashSessions.find((s) => s.closedAt == null) ?? null;
 
@@ -70,10 +89,10 @@ export function Cash({
     return sessionPaymentBreakdown(transactions, session.openedAt);
   };
 
-  const anomalyLabel = (kind: string) => {
-    if (kind === 'cash_shortfall') return t('cash.anomalyShortfall');
-    if (kind === 'cash_surplus') return t('cash.anomalySurplus');
-    return t('cash.anomalyVariance');
+  const anomalyLabel = (kind: CashAnomalyKind) => anomalyTitle(kind, t);
+
+  const toggleAlerts = (sessionId: string) => {
+    setExpandedAlerts((prev) => ({ ...prev, [sessionId]: !prev[sessionId] }));
   };
 
   const paymentLabel = (k: 'cash' | 'card' | 'transfer' | 'other') => {
@@ -95,7 +114,7 @@ export function Cash({
       setOpeningInput('');
       await onRefresh?.();
     } catch (e) {
-      setCashMsg(e instanceof Error && e.message === 'ERR_CASH_SESSION_OPEN' ? t('reports.cashErrOpen') : String(e));
+      setCashMsg(mapMutationError(e, t));
     }
   };
 
@@ -112,7 +131,7 @@ export function Cash({
       setClosingById((m) => ({ ...m, [id]: '' }));
       await onRefresh?.();
     } catch (e) {
-      setCashMsg(String(e));
+      setCashMsg(mapMutationError(e, t));
     }
   };
 
@@ -177,7 +196,7 @@ export function Cash({
                 <th className="px-4 py-3 text-right">{t('reports.paymentTransfer')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.paymentOther')}</th>
                 <th className="px-4 py-3">{t('dashboard.status')}</th>
-                <th className="px-4 py-3">{t('cash.anomaliesCol')}</th>
+                <th className="px-4 py-3 w-[7rem]">{t('cash.alertsCol')}</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -186,9 +205,10 @@ export function Cash({
                 const rowPay = sessionBreakdownForRow(s);
                 const anomalies = computeSessionAnomalies(s);
                 const hasAnomalies = sessionHasAnomalies(s);
+                const alertsOpen = !!expandedAlerts[s.id];
                 return (
+                  <Fragment key={s.id}>
                   <tr
-                    key={s.id}
                     className={cn('border-t border-black/5', hasAnomalies && 'bg-amber-50/60 dark:bg-amber-950/20')}
                   >
                     <td className="px-4 py-2 whitespace-nowrap">
@@ -214,22 +234,25 @@ export function Cash({
                     <td className="px-4 py-2">{s.closedAt == null ? t('reports.statusOpen') : t('reports.statusClosed')}</td>
                     <td className="px-4 py-2">
                       {hasAnomalies ? (
-                        <div className="space-y-1">
-                          {anomalies.map((a, i) => (
-                            <div
-                              key={i}
-                              className="flex items-start gap-1.5 text-xs text-amber-800 dark:text-amber-200 font-medium"
-                            >
-                              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                              <span>
-                                {anomalyLabel(a.kind)}
-                                {s.cashVariance != null ? ` (${s.cashVariance >= 0 ? '+' : ''}${s.cashVariance.toFixed(2)})` : ''}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggleAlerts(s.id)}
+                          aria-expanded={alertsOpen}
+                          aria-label={alertsOpen ? t('cash.collapseAlerts') : t('cash.expandAlerts')}
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold',
+                            'bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100',
+                            'hover:bg-amber-200 dark:hover:bg-amber-900/70 transition-colors',
+                          )}
+                        >
+                          {alertsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <AlertTriangle size={14} />
+                          <span>{anomalies.length}</span>
+                        </button>
                       ) : s.closedAt != null ? (
-                        <span className="text-xs text-on-tertiary-container font-medium">{t('cash.noAnomalies')}</span>
+                        <span className="inline-flex items-center rounded-full bg-tertiary-container/20 px-2.5 py-1 text-[10px] font-bold uppercase text-on-tertiary-container">
+                          {t('cash.alertsOk')}
+                        </span>
                       ) : (
                         '—'
                       )}
@@ -250,12 +273,84 @@ export function Cash({
                       ) : null}
                     </td>
                   </tr>
+                  {hasAnomalies && alertsOpen ? (
+                    <tr
+                      key={`${s.id}-alerts`}
+                      className="border-t border-amber-200/60 dark:border-amber-800/40 bg-amber-50/40 dark:bg-amber-950/15"
+                    >
+                      <td colSpan={SESSION_TABLE_COLS} className="px-4 py-3">
+                        <div className="space-y-2">
+                          {anomalies.map((a, i) => (
+                            <CashAnomalyDetail
+                              key={`${s.id}-a-${i}`}
+                              anomaly={a}
+                              title={anomalyLabel(a.kind)}
+                              detail={anomalyDetail(a.kind, t)}
+                              expectedLabel={t('cash.anomalyExpected')}
+                              countedLabel={t('cash.anomalyCounted')}
+                              cashSalesLabel={t('cash.anomalyCashSales')}
+                            />
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>
           </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+function CashAnomalyDetail({
+  anomaly,
+  title,
+  detail,
+  expectedLabel,
+  countedLabel,
+  cashSalesLabel,
+}: {
+  anomaly: CashAnomaly;
+  title: string;
+  detail: string;
+  expectedLabel: string;
+  countedLabel: string;
+  cashSalesLabel: string;
+}) {
+  const varianceStr = `${anomaly.variance >= 0 ? '+' : ''}${money(anomaly.variance)}`;
+
+  return (
+    <div
+      className="rounded-xl border border-amber-200/80 dark:border-amber-800/50 bg-white/80 dark:bg-amber-950/30 px-4 py-3"
+      title={detail}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2 gap-y-1">
+        <div className="flex items-start gap-2 min-w-0">
+          <AlertTriangle size={16} className="shrink-0 text-amber-700 dark:text-amber-300 mt-0.5" />
+          <p className="text-sm font-bold text-amber-950 dark:text-amber-50">{title}</p>
+        </div>
+        <p className="text-sm font-black tabular-nums text-amber-900 dark:text-amber-100 shrink-0">
+          {varianceStr}
+        </p>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 pl-6">
+        <span className="inline-flex items-center rounded-md bg-surface-container-low px-2 py-1 text-[11px] text-on-surface-variant">
+          <span className="font-semibold text-on-surface-variant/80 mr-1">{expectedLabel}</span>
+          {money(anomaly.expectedCash)}
+        </span>
+        <span className="inline-flex items-center rounded-md bg-surface-container-low px-2 py-1 text-[11px] text-on-surface-variant">
+          <span className="font-semibold text-on-surface-variant/80 mr-1">{countedLabel}</span>
+          {money(anomaly.closingCash)}
+        </span>
+        <span className="inline-flex items-center rounded-md bg-surface-container-low px-2 py-1 text-[11px] text-on-surface-variant">
+          <span className="font-semibold text-on-surface-variant/80 mr-1">{cashSalesLabel}</span>
+          {money(anomaly.cashSales)}
+        </span>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import type { SaleReceipt } from '../types';
 import { useI18n } from '../i18n/I18nContext';
+import { ApiImage } from './ApiImage';
 
 function money(n: number): string {
   return n.toFixed(2);
@@ -39,6 +40,15 @@ export function SaleReceiptPanel({
       className={`receipt-ticket bg-white text-zinc-900 dark:bg-white dark:text-zinc-900 rounded-lg border border-zinc-200 p-5 text-[13px] leading-snug font-mono ${className}`}
     >
       <div className="text-center border-b border-dashed border-zinc-300 pb-3 mb-3">
+        {receipt.storeLogoUrl ? (
+          <div className="flex justify-center mb-2">
+            <ApiImage
+              apiPath={receipt.storeLogoUrl}
+              alt=""
+              className="h-14 w-14 rounded-full object-cover border border-zinc-200"
+            />
+          </div>
+        ) : null}
         <p className="font-headline font-extrabold text-lg tracking-tight text-zinc-900">{receipt.storeName}</p>
         {receipt.branch.trim() ? <p className="text-xs text-zinc-600 mt-1">{receipt.branch}</p> : null}
         <p className="text-[10px] uppercase tracking-widest text-zinc-500 mt-2">{receipt.currency}</p>

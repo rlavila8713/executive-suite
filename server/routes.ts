@@ -26,6 +26,7 @@ import {
 } from './license.js';
 import { detectCashAnomalies } from './cashAnomalies.js';
 import { resolveProductImage } from './productImage.js';
+import { normalizeStoreLogo } from './storeLogo.js';
 
 export class ApiError extends Error {
   constructor(
@@ -59,11 +60,32 @@ function nameClashes(db: SqliteStore, name: string, exceptId?: string): boolean 
   return rows.some((c) => c.id !== exceptId && c.name.trim().toLowerCase() === lower);
 }
 
-function getOpenCashSessionId(db: SqliteStore): string | undefined {
-  const row = db.prepare('SELECT id FROM cash_sessions WHERE closed_at IS NULL LIMIT 1').get() as
-    | { id: string }
+type OpenCashSession = { id: string; opened_at: number };
+
+function localDayKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/** A sale must belong to a session opened today, and the local clock may not move behind its opening. */
+function requireCurrentDayCashSession(db: SqliteStore, now: number = Date.now()): OpenCashSession {
+  const session = db.prepare('SELECT id, opened_at FROM cash_sessions WHERE closed_at IS NULL LIMIT 1').get() as
+    | OpenCashSession
     | undefined;
-  return row?.id;
+  if (!session) throw new ApiError(409, 'Cash session must be open before selling', 'ERR_CASH_SESSION_REQUIRED');
+  if (now < session.opened_at) {
+    throw new ApiError(409, 'System clock is earlier than the cash session opening', 'ERR_CASH_CLOCK_ROLLBACK');
+  }
+  const lastMovement = db
+    .prepare('SELECT MAX(created_at) AS timestamp FROM transactions WHERE created_at >= ?')
+    .get(session.opened_at) as { timestamp: number | null } | undefined;
+  if (lastMovement?.timestamp != null && now < lastMovement.timestamp) {
+    throw new ApiError(409, 'System clock is earlier than a recorded cash movement', 'ERR_CASH_CLOCK_ROLLBACK');
+  }
+  if (localDayKey(session.opened_at) !== localDayKey(now)) {
+    throw new ApiError(409, 'Close the previous daily cash session before selling', 'ERR_CASH_SESSION_DAILY_CLOSE_REQUIRED');
+  }
+  return session;
 }
 
 type ReceiptLineRef = { productId?: string; sku?: string; quantity?: number };
@@ -454,9 +476,12 @@ export function registerRoutes(router: import('express').Router): void {
       const body = req.body as Record<string, unknown>;
       const id = newId();
       const db = getDb();
+      if ((body.type === 'sale' && body.status === 'completed') || body.type === 'return') {
+        requireCurrentDayCashSession(db);
+      }
       db.prepare(
-        `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         body.orderNumber,
@@ -468,6 +493,7 @@ export function registerRoutes(router: import('express').Router): void {
         body.createdAt ?? Date.now(),
         body.paymentMethod ?? null,
         body.receipt ? JSON.stringify(body.receipt) : null,
+        body.sourceSaleId ?? null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -479,9 +505,12 @@ export function registerRoutes(router: import('express').Router): void {
     asyncHandler(async (req, res) => {
       const db = getDb();
       const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
-        | { status: string }
+        | { status: string; type: string }
         | undefined;
       if (!existing) throw new ApiError(404, 'Transaction not found');
+      if ((existing.type === 'sale' && existing.status === 'completed') || existing.type === 'return') {
+        throw new ApiError(409, 'Settled transactions cannot be edited', 'ERR_SETTLED_TRANSACTION_IMMUTABLE');
+      }
       const body = req.body as Record<string, unknown>;
       if (body.status === 'reversed' && existing.status !== 'reversed') {
         throw new ApiError(409, 'Use reverse endpoint to restore inventory', 'ERR_SALE_CANNOT_REVERSE');
@@ -533,6 +562,10 @@ export function registerRoutes(router: import('express').Router): void {
             type: string;
             status: string;
             receipt_json: string | null;
+            order_number: string;
+            customer: string;
+            amount: number;
+            payment_method: string | null;
           }
         | undefined;
       if (!existing) throw new ApiError(404, 'Sale not found');
@@ -545,8 +578,17 @@ export function registerRoutes(router: import('express').Router): void {
       if (existing.status !== 'completed') {
         throw new ApiError(409, 'Only completed sales can be reversed', 'ERR_SALE_CANNOT_REVERSE');
       }
+      const alreadyReversed = db
+        .prepare('SELECT id FROM transactions WHERE source_sale_id = ? LIMIT 1')
+        .get(existing.id);
+      if (alreadyReversed) {
+        throw new ApiError(409, 'Sale already reversed', 'ERR_SALE_ALREADY_REVERSED');
+      }
+      requireCurrentDayCashSession(db);
 
       const lines = parseReceiptLines(existing.receipt_json);
+      const reversalId = newId();
+      const createdAt = Date.now();
       db.runInTransaction(() => {
         for (const line of lines) {
           const qty = Number(line.quantity);
@@ -566,10 +608,25 @@ export function registerRoutes(router: import('express').Router): void {
             db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(product.stock + qty, product.id);
           }
         }
-        db.prepare('UPDATE transactions SET status = ? WHERE id = ?').run('reversed', req.params.id);
+        db.prepare(
+          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          reversalId,
+          `#R-${existing.order_number.replace(/^#/, '')}`,
+          existing.customer,
+          -Math.abs(existing.amount),
+          'refunded',
+          'Just now',
+          'return',
+          createdAt,
+          existing.payment_method,
+          existing.receipt_json,
+          existing.id,
+        );
       });
 
-      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(reversalId);
       res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
     }),
   );
@@ -590,9 +647,7 @@ export function registerRoutes(router: import('express').Router): void {
       if (!body.receipt?.lines?.length) throw new ApiError(400, 'Receipt lines required');
 
       const db = getDb();
-      if (!getOpenCashSessionId(db)) {
-        throw new ApiError(409, 'Cash session must be open before selling', 'ERR_CASH_SESSION_REQUIRED');
-      }
+      requireCurrentDayCashSession(db);
       const amount = body.amount && body.amount > 0 ? body.amount : (body.receipt.total ?? 0);
       const newTransaction = {
         id: newId(),
@@ -609,8 +664,8 @@ export function registerRoutes(router: import('express').Router): void {
 
       db.runInTransaction(() => {
         db.prepare(
-          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           newTransaction.id,
           newTransaction.orderNumber,
@@ -622,6 +677,7 @@ export function registerRoutes(router: import('express').Router): void {
           newTransaction.createdAt,
           newTransaction.paymentMethod,
           JSON.stringify(newTransaction.receipt),
+          null,
         );
 
         for (const line of body.receipt!.lines) {
@@ -726,6 +782,33 @@ export function registerRoutes(router: import('express').Router): void {
 
   // --- Settings ---
   router.get(
+    '/settings/logo',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const row = db.prepare('SELECT store_logo FROM app_settings WHERE id = ?').get('main') as
+        | { store_logo: string }
+        | undefined;
+      const resolved = resolveProductImage(row?.store_logo);
+      if (!resolved) {
+        res.status(404).json({ error: 'Store has no logo' });
+        return;
+      }
+      if (resolved.kind === 'redirect') {
+        res.redirect(302, resolved.url);
+        return;
+      }
+      res.setHeader('Content-Type', resolved.contentType);
+      res.setHeader(
+        'Cache-Control',
+        typeof req.query.v === 'string' && req.query.v
+          ? 'private, max-age=31536000, immutable'
+          : 'private, no-cache',
+      );
+      res.send(resolved.data);
+    }),
+  );
+
+  router.get(
     '/settings',
     asyncHandler(async (_req, res) => {
       const db = getDb();
@@ -746,9 +829,15 @@ export function registerRoutes(router: import('express').Router): void {
       const existing = db.prepare('SELECT * FROM app_settings WHERE id = ?').get('main');
       if (!existing) {
         const s = { ...DEFAULT_APP_SETTINGS, ...body, id: 'main' };
+        let storeLogo = '';
+        try {
+          storeLogo = normalizeStoreLogo(body.storeLogo ?? '');
+        } catch (err) {
+          throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo');
+        }
         db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           'main',
           s.storeName,
@@ -761,6 +850,7 @@ export function registerRoutes(router: import('express').Router): void {
           s.managerName,
           s.managerTitle,
           s.locale,
+          storeLogo,
         );
       } else {
         const map: Record<string, string> = {
@@ -783,6 +873,14 @@ export function registerRoutes(router: import('express').Router): void {
             let val = body[key];
             if (key === 'darkMode' || key === 'lowStockNotifications') val = val ? 1 : 0;
             values.push(val);
+          }
+        }
+        if (body.storeLogo !== undefined) {
+          try {
+            fields.push('store_logo = ?');
+            values.push(normalizeStoreLogo(body.storeLogo));
+          } catch (err) {
+            throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo');
           }
         }
         if (fields.length > 0) {
@@ -816,6 +914,12 @@ export function registerRoutes(router: import('express').Router): void {
       if (openCount.c > 0) throw new ApiError(409, 'Cash session already open', 'ERR_CASH_SESSION_OPEN');
       const id = newId();
       const openedAt = Date.now();
+      const lastActivity = db.prepare('SELECT MAX(COALESCE(closed_at, opened_at)) AS timestamp FROM cash_sessions').get() as
+        | { timestamp: number | null }
+        | undefined;
+      if (lastActivity?.timestamp != null && openedAt < lastActivity.timestamp) {
+        throw new ApiError(409, 'System clock cannot precede a prior cash session', 'ERR_CASH_CLOCK_ROLLBACK');
+      }
       db.prepare(
         `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales)
          VALUES (?, ?, NULL, ?, NULL, 0, 0, 0, 0)`,
@@ -835,6 +939,15 @@ export function registerRoutes(router: import('express').Router): void {
         | undefined;
       if (!s || s.closed_at != null) throw new ApiError(404, 'Open cash session not found');
       const closedAt = Date.now();
+      if (closedAt < s.opened_at) {
+        throw new ApiError(409, 'System clock is earlier than the cash session opening', 'ERR_CASH_CLOCK_ROLLBACK');
+      }
+      const lastMovement = db
+        .prepare('SELECT MAX(created_at) AS timestamp FROM transactions WHERE created_at >= ?')
+        .get(s.opened_at) as { timestamp: number | null } | undefined;
+      if (lastMovement?.timestamp != null && closedAt < lastMovement.timestamp) {
+        throw new ApiError(409, 'System clock is earlier than a recorded cash movement', 'ERR_CASH_CLOCK_ROLLBACK');
+      }
       const allTx = db.prepare('SELECT * FROM transactions').all();
       const transactions = allTx.map((r) => rowToTransaction(r as Parameters<typeof rowToTransaction>[0]));
       const totals = computeSessionPaymentTotals(
@@ -883,10 +996,6 @@ export function registerRoutes(router: import('express').Router): void {
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim();
       if (!deviceId) throw new ApiError(403, 'Device identification required', 'ERR_DEVICE_REQUIRED');
-      const info = getLicenseInfo(db, deviceId);
-      if (info.status === 'device_mismatch') {
-        throw new ApiError(403, 'This license is bound to another device', 'ERR_DEVICE_MISMATCH');
-      }
       const result = buildLicenseRequest(db, deviceId, body.planId);
       res.json(result);
     }),
@@ -899,10 +1008,6 @@ export function registerRoutes(router: import('express').Router): void {
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim();
       if (!deviceId) throw new ApiError(403, 'Device identification required', 'ERR_DEVICE_REQUIRED');
-      const info = getLicenseInfo(db, deviceId);
-      if (info.status === 'device_mismatch') {
-        throw new ApiError(403, 'This license is bound to another device', 'ERR_DEVICE_MISMATCH');
-      }
       try {
         const result = activateLicense(db, deviceId, body.licenseKey.trim());
         res.status(201).json({
@@ -955,10 +1060,15 @@ export function registerRoutes(router: import('express').Router): void {
         .prepare('SELECT * FROM cash_sessions')
         .all()
         .map((r) => rowToCashSession(r as Parameters<typeof rowToCashSession>[0]));
-      const settingsRow = db.prepare('SELECT * FROM app_settings WHERE id = ?').get('main');
+      const settingsRow = db.prepare('SELECT * FROM app_settings WHERE id = ?').get('main') as
+        | { store_logo?: string }
+        | undefined;
       const appSettings = settingsRow
-        ? rowToAppSettings(settingsRow as Parameters<typeof rowToAppSettings>[0])
-        : DEFAULT_APP_SETTINGS;
+        ? {
+            ...rowToAppSettings(settingsRow as Parameters<typeof rowToAppSettings>[0]),
+            storeLogo: settingsRow.store_logo ?? '',
+          }
+        : { ...DEFAULT_APP_SETTINGS, storeLogo: '' };
 
       res.json({
         schemaVersion: 4,
@@ -1023,8 +1133,8 @@ export function registerRoutes(router: import('express').Router): void {
         }
 
         const insertTx = db.prepare(
-          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const tx of data.transactions ?? []) {
           insertTx.run(
@@ -1038,6 +1148,7 @@ export function registerRoutes(router: import('express').Router): void {
             tx.createdAt,
             tx.paymentMethod ?? null,
             tx.receipt ? JSON.stringify(tx.receipt) : null,
+            tx.sourceSaleId ?? null,
           );
         }
 
@@ -1102,9 +1213,15 @@ export function registerRoutes(router: import('express').Router): void {
         }
 
         const s = { ...DEFAULT_APP_SETTINGS, ...(data.appSettings ?? {}), id: 'main' };
+        let storeLogo = '';
+        try {
+          storeLogo = normalizeStoreLogo((data.appSettings as { storeLogo?: string } | undefined)?.storeLogo ?? '');
+        } catch (err) {
+          throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo in backup');
+        }
         db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           'main',
           s.storeName,
@@ -1117,6 +1234,7 @@ export function registerRoutes(router: import('express').Router): void {
           s.managerName,
           s.managerTitle,
           s.locale,
+          storeLogo,
         );
       });
 

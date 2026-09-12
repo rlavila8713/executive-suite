@@ -55,6 +55,11 @@ export function migrateCatalogSchema(db: SqliteStore): void {
     db.exec(`ALTER TABLE expenses ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`);
   }
 
+  if (!hasColumn(db, 'transactions', 'source_sale_id')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN source_sale_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_source_sale_id ON transactions(source_sale_id)`);
+
   const cashCols: [string, string][] = [
     ['expected_cash', 'REAL'],
     ['cash_variance', 'REAL'],
@@ -81,6 +86,26 @@ export function migrateCatalogSchema(db: SqliteStore): void {
 
   if (!hasColumn(db, 'license_state', 'license_nonce')) {
     db.exec(`ALTER TABLE license_state ADD COLUMN license_nonce TEXT`);
+  }
+
+  if (!hasColumn(db, 'app_settings', 'store_logo')) {
+    db.exec(`ALTER TABLE app_settings ADD COLUMN store_logo TEXT NOT NULL DEFAULT ''`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS license_redemptions (
+      nonce TEXT PRIMARY KEY,
+      redeemed_at INTEGER NOT NULL
+    );
+  `);
+  const currentLicense = db.prepare('SELECT license_nonce, last_payment_at FROM license_state WHERE id = ?').get('main') as
+    | { license_nonce: string | null; last_payment_at: number | null }
+    | undefined;
+  if (currentLicense?.license_nonce) {
+    db.prepare('INSERT OR IGNORE INTO license_redemptions (nonce, redeemed_at) VALUES (?, ?)').run(
+      currentLicense.license_nonce,
+      currentLicense.last_payment_at ?? Date.now(),
+    );
   }
 
   // Backfill category codes
