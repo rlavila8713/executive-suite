@@ -166,7 +166,8 @@ function initSchema(db: SqliteStore): void {
       type TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       payment_method TEXT,
-      receipt_json TEXT
+      receipt_json TEXT,
+      source_sale_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
 
@@ -189,7 +190,8 @@ function initSchema(db: SqliteStore): void {
       low_stock_notifications INTEGER NOT NULL DEFAULT 1,
       manager_name TEXT NOT NULL,
       manager_title TEXT NOT NULL,
-      locale TEXT NOT NULL DEFAULT 'es'
+      locale TEXT NOT NULL DEFAULT 'es',
+      store_logo TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS cash_sessions (
@@ -213,8 +215,8 @@ function ensureSeeded(db: SqliteStore): void {
   if (settingsCount.c === 0) {
     const s = DEFAULT_APP_SETTINGS;
     db.prepare(
-      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       s.id,
       s.storeName,
@@ -227,11 +229,12 @@ function ensureSeeded(db: SqliteStore): void {
       s.managerName,
       s.managerTitle,
       s.locale,
+      '',
     );
   }
 }
 
-/** Wipe all operational data for client delivery; keeps default settings and resets license trial. */
+/** Wipe operational data while preserving the device-bound license and original trial clock. */
 export function factoryResetDb(db: SqliteStore): void {
   db.runInTransaction(() => {
     db.prepare('DELETE FROM products').run();
@@ -243,14 +246,13 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
-    db.prepare('DELETE FROM license_state').run();
-    ensureLicenseRow(db);
   });
 }
 
 // --- Row mappers ---
 
-import { productImagePath } from './productImage.js';
+import { productImagePath, isPlaceholderProductImage } from './productImage.js';
+import { storeLogoPath } from './storeLogo.js';
 
 export type ProductRow = {
   id: string;
@@ -286,7 +288,10 @@ export function rowToProduct(row: ProductRow, options: RowToProductOptions = {})
     cost: row.cost,
     stock: row.stock,
     image: includeImageData ? row.image : '',
-    imageUrl: row.image ? productImagePath(row.id, row.image) : null,
+    imageUrl:
+      row.image && !isPlaceholderProductImage(row.image)
+        ? productImagePath(row.id, row.image)
+        : null,
     categoryId: row.category_id ?? '',
     subcategoryId: row.subcategory_id ?? '',
     subcategory: row.subcategory ?? '',
@@ -323,6 +328,7 @@ export function rowToTransaction(row: {
   created_at: number;
   payment_method: string | null;
   receipt_json: string | null;
+  source_sale_id?: string | null;
 }) {
   return {
     id: row.id,
@@ -335,6 +341,7 @@ export function rowToTransaction(row: {
     createdAt: row.created_at,
     paymentMethod: row.payment_method ?? undefined,
     receipt: row.receipt_json ? JSON.parse(row.receipt_json) : undefined,
+    sourceSaleId: row.source_sale_id ?? undefined,
   };
 }
 
@@ -407,7 +414,9 @@ export function rowToAppSettings(row: {
   manager_name: string;
   manager_title: string;
   locale: string;
+  store_logo?: string;
 }) {
+  const storeLogo = row.store_logo ?? '';
   return {
     id: 'main' as const,
     storeName: row.store_name,
@@ -415,6 +424,7 @@ export function rowToAppSettings(row: {
     currency: row.currency,
     taxRate: row.tax_rate,
     cardQrPayload: row.card_qr_payload,
+    storeLogoUrl: storeLogoPath(storeLogo),
     darkMode: row.dark_mode === 1,
     lowStockNotifications: row.low_stock_notifications === 1,
     managerName: row.manager_name,

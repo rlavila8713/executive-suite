@@ -3,7 +3,7 @@ import { ImagePlus, X } from 'lucide-react';
 import { Button } from './ui';
 import { readImageFileAsDataUrl } from '../lib/images';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
-import { getApiUrl } from '../api/config';
+import { ApiImage } from './ApiImage';
 import { cn } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -18,6 +18,10 @@ export interface ImagePickerProps {
   disabled?: boolean;
   /** Compact layout for tight modals */
   compact?: boolean;
+  /** Custom file reader (e.g. stricter logo limits). */
+  readFile?: (file: File) => Promise<string>;
+  /** Label for the clear/remove button. */
+  clearLabel?: string;
 }
 
 /**
@@ -31,6 +35,8 @@ export function ImagePicker({
   helperText,
   disabled,
   compact,
+  readFile,
+  clearLabel,
 }: ImagePickerProps) {
   const { t } = useI18n();
   const resolvedLabel = label ?? t('products.imageLabel');
@@ -41,8 +47,9 @@ export function ImagePicker({
     value && value !== PLACEHOLDER_PRODUCT_IMAGE
       ? value
       : previewUrl
-        ? getApiUrl(previewUrl)
+        ? null
         : value || PLACEHOLDER_PRODUCT_IMAGE;
+  const showApiPreview = !displaySrc && !!previewUrl;
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -50,7 +57,7 @@ export function ImagePicker({
     if (!file) return;
     setError(null);
     try {
-      const dataUrl = await readImageFileAsDataUrl(file);
+      const dataUrl = await (readFile ?? readImageFileAsDataUrl)(file);
       onChange(dataUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('imagePicker.loadFailed'));
@@ -65,11 +72,23 @@ export function ImagePicker({
       <div className={cn('flex flex-wrap gap-3 items-start', compact && 'gap-2')}>
         <div
           className={cn(
-            'rounded-lg border border-black/10 bg-surface-container-high overflow-hidden shrink-0',
+            'relative rounded-lg border border-black/10 bg-surface-container-high overflow-hidden shrink-0',
             compact ? 'w-16 h-16' : 'w-24 h-24',
           )}
         >
-          <img key={displaySrc} src={displaySrc} alt="" className="w-full h-full object-cover" />
+          {displaySrc ? (
+            <img key={displaySrc} src={displaySrc} alt="" className="w-full h-full object-cover" />
+          ) : showApiPreview ? (
+            <ApiImage
+              key={previewUrl}
+              apiPath={previewUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              fallback={<img src={PLACEHOLDER_PRODUCT_IMAGE} alt="" className="w-full h-full object-cover" />}
+            />
+          ) : (
+            <img src={PLACEHOLDER_PRODUCT_IMAGE} alt="" className="w-full h-full object-cover" />
+          )}
         </div>
         <div className="flex flex-col gap-2 min-w-0">
           <input
@@ -104,7 +123,7 @@ export function ImagePicker({
             }}
           >
             <X size={14} />
-            {t('imagePicker.usePlaceholder')}
+            {clearLabel ?? t('imagePicker.usePlaceholder')}
           </Button>
         </div>
       </div>

@@ -24,10 +24,14 @@ function isCompletedSale(tx: Transaction): boolean {
   return tx.type === 'sale' && tx.status === 'completed';
 }
 
-function completedSalesInRange(transactions: Transaction[], range: DateRangeMs): Transaction[] {
+function isReversal(tx: Transaction): boolean {
+  return tx.type === 'return' || (tx.type === 'sale' && (tx.status === 'reversed' || tx.status === 'refunded' || tx.amount < 0));
+}
+
+function settledTransactionsInRange(transactions: Transaction[], range: DateRangeMs): Transaction[] {
   return transactions.filter(
     (tx) =>
-      isCompletedSale(tx) &&
+      (isCompletedSale(tx) || isReversal(tx)) &&
       tx.createdAt >= range.start &&
       tx.createdAt <= range.end,
   );
@@ -35,9 +39,9 @@ function completedSalesInRange(transactions: Transaction[], range: DateRangeMs):
 
 function paymentMethodBreakdown(transactions: Transaction[], range: DateRangeMs): Record<PaymentMethod, number> {
   const out: Record<PaymentMethod, number> = { cash: 0, card: 0, transfer: 0, other: 0 };
-  for (const tx of completedSalesInRange(transactions, range)) {
+  for (const tx of transactions) {
     const m = resolveTransactionPaymentMethod(tx);
-    out[m] += Math.abs(tx.amount);
+    out[m] += (isCompletedSale(tx) ? 1 : -1) * Math.abs(tx.amount);
   }
   (Object.keys(out) as PaymentMethod[]).forEach((k) => {
     out[k] = Math.round(out[k] * 100) / 100;
@@ -56,7 +60,7 @@ export function computeSessionPaymentTotals(
   totalOtherSales: number;
 } {
   const range: DateRangeMs = { start: openedAt, end: closedAt };
-  const slice = completedSalesInRange(transactions, range);
+  const slice = settledTransactionsInRange(transactions, range);
   const b = paymentMethodBreakdown(slice, range);
   return {
     totalCashSales: b.cash,

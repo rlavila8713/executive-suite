@@ -23,6 +23,8 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code.startsWith('ERR_PRODUCT_IN_USE')) return mapProductInUse(code, t);
   if (code === 'ERR_CASH_SESSION_OPEN') return t('reports.cashErrOpen');
   if (code === 'ERR_CASH_SESSION_REQUIRED') return t('errors.cashSessionRequired');
+  if (code === 'ERR_CASH_SESSION_DAILY_CLOSE_REQUIRED') return t('errors.cashSessionDailyCloseRequired');
+  if (code === 'ERR_CASH_CLOCK_ROLLBACK') return t('errors.cashClockRollback');
   if (code === 'ERR_LICENSE_EXPIRED') return t('license.expiredBody');
   if (code === 'ERR_DEVICE_MISMATCH') return t('license.deviceMismatchBody');
   if (code === 'ERR_LICENSE_INVALID') return t('settings.billingActivateErr');
@@ -33,6 +35,7 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_SALE_ALREADY_REVERSED') return t('errors.saleAlreadyReversed');
   if (code === 'ERR_SALE_CANNOT_REVERSE') return t('errors.saleCannotReverse');
   if (code === 'ERR_SALE_CANNOT_DELETE') return t('errors.saleCannotDelete');
+  if (code === 'ERR_SETTLED_TRANSACTION_IMMUTABLE') return t('errors.settledTransactionImmutable');
   if (code === 'ERR_INVALID_RECEIVE_QTY') return t('inventory.receiveInvalidQty');
   if (code === 'ERR_INVALID_RECEIVE_COST') return t('inventory.receiveInvalidCost');
   if (code === 'ERR_INVALID_RECEIVE_PRICE') return t('inventory.receiveInvalidPrice');

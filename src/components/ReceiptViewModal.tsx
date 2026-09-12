@@ -5,6 +5,7 @@ import { Modal, Button } from './ui';
 import { SaleReceiptPanel } from './SaleReceiptPanel';
 import { useI18n } from '../i18n/I18nContext';
 import { printReceiptInNewWindow, type ReceiptPrintLabels } from '../lib/receiptPrintHtml';
+import { fetchAuthenticatedImageDataUrl } from '../lib/apiImage';
 
 export type ReceiptViewModalProps = {
   isOpen: boolean;
@@ -40,8 +41,11 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
     [t],
   );
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!transaction?.receipt) return;
+    const logoSrc = transaction.receipt.storeLogoUrl
+      ? await fetchAuthenticatedImageDataUrl(transaction.receipt.storeLogoUrl)
+      : null;
     const ok = printReceiptInNewWindow(
       transaction.receipt,
       transaction.customer,
@@ -49,6 +53,7 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
       transaction.createdAt,
       locale,
       printLabels,
+      logoSrc,
     );
     if (!ok) window.alert(t('pos.popupBlocked'));
   };

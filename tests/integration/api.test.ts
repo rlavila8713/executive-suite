@@ -62,14 +62,12 @@ describe('Executive Suite API integration', () => {
       assert.equal(body.code, 'ERR_DEVICE_REQUIRED');
     });
 
-    it('binds first device and rejects a second device', async () => {
+    it('allows multiple API clients on the same store server', async () => {
       const first = await api('/api/settings');
       assert.equal(first.status, 200);
 
       const second = await api('/api/products', { deviceId: 'other-device-xyz' });
-      assert.equal(second.status, 403);
-      const err = second.body as { code: string };
-      assert.equal(err.code, 'ERR_DEVICE_MISMATCH');
+      assert.equal(second.status, 200);
     });
   });
 
@@ -87,6 +85,21 @@ describe('Executive Suite API integration', () => {
       const patched = patch.body as { storeName: string; branch: string };
       assert.equal(patched.storeName, 'Tienda Test');
       assert.equal(patched.branch, 'Centro');
+    });
+
+    it('saves store logo and serves it via /settings/logo', async () => {
+      const tinyPng =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const patch = await api<{ storeLogoUrl: string | null }>('/api/settings', {
+        method: 'PATCH',
+        body: { storeLogo: tinyPng },
+      });
+      assert.equal(patch.status, 200);
+      assert.ok(patch.body.storeLogoUrl?.includes('/api/settings/logo'));
+
+      const logo = await api<string>(patch.body.storeLogoUrl!, { headers: {} });
+      assert.equal(logo.status, 200);
+      assert.ok(typeof logo.body === 'string' || logo.body);
     });
   });
 
@@ -173,6 +186,82 @@ describe('Executive Suite API integration', () => {
       // No cash sales but closing > opening — may flag surplus
       assert.ok(Array.isArray(closed.body.anomalies));
     });
+
+    it('requires closing yesterday’s session before allowing a new sale', async () => {
+      const opened = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(opened.status, 201);
+
+      const db = getDb();
+      db.prepare('UPDATE cash_sessions SET opened_at = ? WHERE id = ?').run(
+        Date.now() - 24 * 60 * 60 * 1000,
+        opened.body.id,
+      );
+      const blocked = await api('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Cliente', amount: 10,
+          receipt: { lines: [{ sku: 'NO-STOCK', quantity: 1 }], total: 10, paymentMethod: 'cash' },
+        },
+      });
+      assert.equal(blocked.status, 409);
+      assert.equal((blocked.body as { code: string }).code, 'ERR_CASH_SESSION_DAILY_CLOSE_REQUIRED');
+
+      const closed = await api(`/api/cash-sessions/${opened.body.id}/close`, {
+        method: 'POST', body: { closingCash: 0 },
+      });
+      assert.equal(closed.status, 200);
+    });
+
+    it('refuses to open a session when the system clock predates recorded cash activity', async () => {
+      const db = getDb();
+      const future = Date.now() + 24 * 60 * 60 * 1000;
+      db.prepare(
+        `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales)
+         VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0)`,
+      ).run('future-cash-session', future, future);
+
+      const blocked = await api('/api/cash-sessions', { method: 'POST', body: { openingCash: 0 } });
+      assert.equal(blocked.status, 409);
+      assert.equal((blocked.body as { code: string }).code, 'ERR_CASH_CLOCK_ROLLBACK');
+
+      db.prepare('DELETE FROM cash_sessions WHERE id = ?').run('future-cash-session');
+    });
+
+    it('rejects a clock rollback within an open session after a cash movement', async () => {
+      const opened = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST', body: { openingCash: 0 },
+      });
+      assert.equal(opened.status, 201);
+      const sale = await api<{ id: string }>('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Cliente', amount: 10,
+          receipt: { lines: [{ sku: 'NO-STOCK', quantity: 1 }], total: 10, paymentMethod: 'cash' },
+        },
+      });
+      assert.equal(sale.status, 201);
+
+      const db = getDb();
+      db.prepare('UPDATE transactions SET created_at = ? WHERE id = ?').run(Date.now() + 60_000, sale.body.id);
+      const blocked = await api('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Cliente', amount: 10,
+          receipt: { lines: [{ sku: 'NO-STOCK', quantity: 1 }], total: 10, paymentMethod: 'cash' },
+        },
+      });
+      assert.equal(blocked.status, 409);
+      assert.equal((blocked.body as { code: string }).code, 'ERR_CASH_CLOCK_ROLLBACK');
+
+      db.prepare('UPDATE transactions SET created_at = ? WHERE id = ?').run(Date.now(), sale.body.id);
+      const closed = await api(`/api/cash-sessions/${opened.body.id}/close`, {
+        method: 'POST', body: { closingCash: 10 },
+      });
+      assert.equal(closed.status, 200);
+    });
   });
 
   describe('sales', () => {
@@ -207,7 +296,7 @@ describe('Executive Suite API integration', () => {
       assert.equal(err.code, 'ERR_CASH_SESSION_REQUIRED');
     });
 
-    it('completes sale and deducts stock', async () => {
+    it('completes a sale and records its reversal as a new immutable return', async () => {
       const product = await api<{ id: string; sku: string; stock: number }>('/api/products', {
         method: 'POST',
         body: {
@@ -245,6 +334,35 @@ describe('Executive Suite API integration', () => {
       const refreshed = await api<{ stock: number }>(`/api/products/${product.body.id}`);
       assert.equal(refreshed.status, 200);
       assert.equal(refreshed.body.stock, 7);
+
+      const reversal = await api<{
+        id: string;
+        amount: number;
+        type: string;
+        status: string;
+        sourceSaleId?: string;
+      }>(`/api/transactions/${sale.body.id}/reverse`, { method: 'POST' });
+      assert.equal(reversal.status, 200);
+      assert.equal(reversal.body.amount, -25);
+      assert.equal(reversal.body.type, 'return');
+      assert.equal(reversal.body.status, 'refunded');
+      assert.equal(reversal.body.sourceSaleId, sale.body.id);
+
+      const restored = await api<{ stock: number }>(`/api/products/${product.body.id}`);
+      assert.equal(restored.body.stock, 8);
+      const transactions = await api<{ id: string; status: string }[]>('/api/transactions');
+      assert.equal(transactions.body.find((tx) => tx.id === sale.body.id)?.status, 'completed');
+
+      const duplicate = await api(`/api/transactions/${sale.body.id}/reverse`, { method: 'POST' });
+      assert.equal(duplicate.status, 409);
+      assert.equal((duplicate.body as { code: string }).code, 'ERR_SALE_ALREADY_REVERSED');
+
+      const closed = await api<{ totalCashSales: number }>(`/api/cash-sessions/${session.body.id}/close`, {
+        method: 'POST',
+        body: { closingCash: 0 },
+      });
+      assert.equal(closed.status, 200);
+      assert.equal(closed.body.totalCashSales, 0);
     });
   });
 
@@ -289,7 +407,7 @@ describe('Executive Suite API integration', () => {
       assert.equal(activated.body.license.planId, 'monthly');
       assert.ok(activated.body.paidUntil > Date.now());
 
-      const expenses = await api<{ title: string; locked: boolean; category: string }[]>('/api/expenses');
+      const expenses = await api<{ id: string; title: string; locked: boolean; category: string }[]>('/api/expenses');
       assert.equal(expenses.status, 200);
       const licenseExpense = expenses.body.find((e) => e.category === 'Licencia de uso');
       assert.ok(licenseExpense);
@@ -308,6 +426,18 @@ describe('Executive Suite API integration', () => {
       assert.equal(reuse.status, 400);
       const reuseErr = reuse.body as { code: string };
       assert.equal(reuseErr.code, 'ERR_LICENSE_ALREADY_USED');
+
+      const renewalKey = makeLicenseKey(TEST_DEVICE_ID, 'quarterly', privateKey);
+      const renewal = await api('/api/license/activate', { method: 'POST', body: { licenseKey: renewalKey } });
+      assert.equal(renewal.status, 201);
+
+      // A prior key remains redeemed even after a later plan activation.
+      const reusedAfterRenewal = await api('/api/license/activate', {
+        method: 'POST',
+        body: { licenseKey },
+      });
+      assert.equal(reusedAfterRenewal.status, 400);
+      assert.equal((reusedAfterRenewal.body as { code: string }).code, 'ERR_LICENSE_ALREADY_USED');
     });
 
     it('rejects license for wrong device', async () => {
@@ -338,6 +468,10 @@ describe('Executive Suite API integration', () => {
       const err = blocked.body as { code: string };
       assert.equal(err.code, 'ERR_LICENSE_EXPIRED');
 
+      const resetBlocked = await api('/api/admin/factory-reset', { method: 'POST' });
+      assert.equal(resetBlocked.status, 403);
+      assert.equal((resetBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
       // License activate still allowed when expired
       const privateKey = readPrivateKey();
       if (privateKey) {
@@ -356,7 +490,11 @@ describe('Executive Suite API integration', () => {
       assert.ok(Array.isArray(backup.body.products));
     });
 
-    it('factory reset clears operational data', async () => {
+    it('factory reset clears operational data without restarting the trial', async () => {
+      const db = getDb();
+      const trialStartedAt = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      db.prepare('UPDATE license_state SET trial_started_at = ?, paid_until = NULL').run(trialStartedAt);
+
       await api('/api/products', {
         method: 'POST',
         body: { name: 'Temp', sku: 'TMP-1', category: 'X', price: 1, cost: 1, stock: 1 },
@@ -371,6 +509,10 @@ describe('Executive Suite API integration', () => {
 
       const settings = await api<{ storeName: string }>('/api/settings');
       assert.equal(settings.body.storeName, 'Mi tienda');
+
+      const license = await api<{ status: string; trialStartedAt: number }>('/api/license');
+      assert.equal(license.body.status, 'trial');
+      assert.equal(license.body.trialStartedAt, trialStartedAt);
     });
   });
 });

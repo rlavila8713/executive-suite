@@ -259,9 +259,9 @@ export function useAppState() {
   const reverseSale = async (id: string) => {
     guardMutation();
     try {
-      const reversed = await api.reverseSale(id);
+      const reversal = await api.reverseSale(id);
       beginLocalCommit();
-      setTransactions((prev) => upsertById(prev, reversed));
+      setTransactions((prev) => upsertById(prev, reversal));
     } catch (err) {
       if (err instanceof ApiRequestError && err.code) {
         throw new Error(err.code);

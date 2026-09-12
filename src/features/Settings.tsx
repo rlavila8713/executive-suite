@@ -12,6 +12,9 @@ import {
   Download,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { ImagePicker } from '../components/ImagePicker';
+import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
+import { readStoreLogoFileAsDataUrl } from '../lib/images';
 import { AppSettings, type AppLocale, type LicenseInfo, type LicensePlanId, type LicenseRequestPayload } from '../types';
 import { cn } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
@@ -73,6 +76,7 @@ export function Settings({
   const [apiUrlDraft, setApiUrlDraft] = useState(getApiBaseUrl());
   const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [serverMessage, setServerMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [storeLogoDraft, setStoreLogoDraft] = useState<string | null>(null);
 
   const [draft, setDraft] = useState({
     storeName: settings.storeName,
@@ -226,13 +230,18 @@ export function Settings({
   };
 
   const saveStore = async () => {
-    await onUpdate({
+    const patch: Partial<Omit<AppSettings, 'id'>> = {
       storeName: draft.storeName,
       branch: draft.branch,
       currency: draft.currency,
       taxRate: draft.taxRate,
       cardQrPayload: draft.cardQrPayload,
-    });
+    };
+    if (storeLogoDraft !== null) {
+      patch.storeLogo = storeLogoDraft;
+    }
+    await onUpdate(patch);
+    setStoreLogoDraft(null);
   };
 
   const saveProfile = async () => {
@@ -386,6 +395,17 @@ export function Settings({
                     <p className="text-xs text-on-surface-variant mt-1.5">{t('settings.taxRateCardOnlyNote')}</p>
                   </div>
                 </div>
+                <ImagePicker
+                  label={t('settings.storeLogoLabel')}
+                  helperText={t('settings.storeLogoHelp')}
+                  clearLabel={t('settings.storeLogoRemove')}
+                  value={storeLogoDraft ?? ''}
+                  previewUrl={storeLogoDraft === null ? settings.storeLogoUrl : null}
+                  readFile={readStoreLogoFileAsDataUrl}
+                  onChange={(dataUrl) =>
+                    setStoreLogoDraft(dataUrl === PLACEHOLDER_PRODUCT_IMAGE ? '' : dataUrl)
+                  }
+                />
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
                     {t('settings.cardQrPayloadLabel')}

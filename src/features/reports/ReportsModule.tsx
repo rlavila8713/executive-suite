@@ -12,6 +12,7 @@ import { Card, Button, Input } from '../../components/ui';
 import type { CashSession, Expense, Product, Transaction } from '../../types';
 import { cn } from '../../lib/utils';
 import { useI18n } from '../../i18n/I18nContext';
+import { mapMutationError } from '../../lib/mutationErrors';
 import {
   dateRangeFromInputs,
   expensesTotalInRange,
@@ -159,7 +160,7 @@ export function ReportsModule({
       await onOpenCashSession(v);
       setOpeningInput('0');
     } catch (e) {
-      setCashMsg(e instanceof Error && e.message === 'ERR_CASH_SESSION_OPEN' ? t('reports.cashErrOpen') : String(e));
+      setCashMsg(mapMutationError(e, t));
     }
   };
 
@@ -171,7 +172,7 @@ export function ReportsModule({
       await onCloseCashSession(id, v);
       setClosingById((m) => ({ ...m, [id]: '' }));
     } catch (e) {
-      setCashMsg(String(e));
+      setCashMsg(mapMutationError(e, t));
     }
   };
 
