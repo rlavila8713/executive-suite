@@ -254,6 +254,8 @@ function AppView(props: AppState) {
             cart={cart}
             taxRatePercent={appSettings.taxRate}
             cardQrPayload={appSettings.cardQrPayload}
+            transferAccountNumber={appSettings.transferAccountNumber}
+            transferPhoneNumber={appSettings.transferPhoneNumber}
             storeName={appSettings.storeName}
             storeBranch={appSettings.branch}
             storeCurrency={appSettings.currency}

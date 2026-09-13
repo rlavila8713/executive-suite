@@ -2,6 +2,7 @@ import type {
   AppSettings,
   CashSession,
   CheckoutPayload,
+  ConnectedDevice,
   Expense,
   LicenseInfo,
   LicensePlanId,
@@ -49,6 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         'Content-Type': 'application/json',
         'X-Device-Id': getDeviceId(),
+        'X-Client-Kind': 'web',
         ...init?.headers,
       },
     });
@@ -227,4 +229,13 @@ export const api = {
     }),
 
   factoryReset: () => request<{ ok: boolean }>('/api/admin/factory-reset', { method: 'POST' }),
+
+  getConnectedDevices: () => request<ConnectedDevice[]>('/api/devices'),
+  revokeConnectedDevice: (deviceId: string) =>
+    request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' }),
+  assignDeviceOperator: (deviceId: string, operatorName: string) =>
+    request<ConnectedDevice>(`/api/devices/${encodeURIComponent(deviceId)}/operator`, {
+      method: 'PATCH',
+      body: JSON.stringify({ operatorName }),
+    }),
 };

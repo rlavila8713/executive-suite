@@ -58,9 +58,11 @@ export function useAppState() {
     setCashSessions(cs);
     setLicenseInfo(lic);
     setCart((prev) =>
-      prev.map((item) => {
+      prev.flatMap((item) => {
         const fresh = p.find((product) => product.id === item.id);
-        return fresh ? { ...fresh, quantity: item.quantity } : item;
+        if (!fresh) return [item];
+        if (fresh.stock <= 0) return [];
+        return [{ ...fresh, quantity: Math.min(item.quantity, fresh.stock) }];
       }),
     );
   }, []);
@@ -123,8 +125,11 @@ export function useAppState() {
   );
 
   const addToCart = (product: Product) => {
+    if (product.stock <= 0) return;
     setCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
+      const currentQty = existing?.quantity ?? 0;
+      if (currentQty >= product.stock) return prev;
       if (existing) {
         return prev.map((item) =>
           item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item,
@@ -141,11 +146,9 @@ export function useAppState() {
   const updateCartQuantity = (productId: string, delta: number) => {
     setCart((prev) =>
       prev.map((item) => {
-        if (item.id === productId) {
-          const newQty = Math.max(1, item.quantity + delta);
-          return { ...item, quantity: newQty };
-        }
-        return item;
+        if (item.id !== productId) return item;
+        const next = Math.max(1, item.quantity + delta);
+        return { ...item, quantity: Math.min(next, Math.max(1, item.stock)) };
       }),
     );
   };

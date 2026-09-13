@@ -108,6 +108,43 @@ export function migrateCatalogSchema(db: SqliteStore): void {
     );
   }
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS connected_devices (
+      device_id TEXT PRIMARY KEY,
+      client_kind TEXT NOT NULL DEFAULT 'unknown',
+      user_agent TEXT NOT NULL DEFAULT '',
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      revoked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_connected_devices_last_seen ON connected_devices(last_seen_at);
+  `);
+
+  if (!hasColumn(db, 'connected_devices', 'operator_name')) {
+    db.exec(`ALTER TABLE connected_devices ADD COLUMN operator_name TEXT NOT NULL DEFAULT ''`);
+  }
+
+  if (!hasColumn(db, 'transactions', 'operator_name')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN operator_name TEXT`);
+  }
+  if (!hasColumn(db, 'transactions', 'source_device_id')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN source_device_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_operator_name ON transactions(operator_name)`);
+
+  const paymentCols: [string, string][] = [
+    ['transfer_bank', "TEXT NOT NULL DEFAULT ''"],
+    ['transfer_account_holder', "TEXT NOT NULL DEFAULT ''"],
+    ['transfer_account_number', "TEXT NOT NULL DEFAULT ''"],
+    ['transfer_phone_number', "TEXT NOT NULL DEFAULT ''"],
+    ['transfer_qr_extra', "TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [col, def] of paymentCols) {
+    if (!hasColumn(db, 'app_settings', col)) {
+      db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${def}`);
+    }
+  }
+
   // Backfill category codes
   const cats = db.prepare('SELECT id, name, code FROM categories').all() as {
     id: string;

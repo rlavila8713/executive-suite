@@ -10,12 +10,25 @@ import {
   HardDrive,
   Upload,
   Download,
+  Monitor,
+  Smartphone,
+  HelpCircle,
+  Wallet,
+  QrCode,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
 import { ImagePicker } from '../components/ImagePicker';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
 import { readStoreLogoFileAsDataUrl } from '../lib/images';
-import { AppSettings, type AppLocale, type LicenseInfo, type LicensePlanId, type LicenseRequestPayload } from '../types';
+import {
+  AppSettings,
+  type AppLocale,
+  type ConnectedDevice,
+  type LicenseInfo,
+  type LicensePlanId,
+  type LicenseRequestPayload,
+} from '../types';
+import { mapMutationError } from '../lib/mutationErrors';
 import { cn } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import {
@@ -28,8 +41,10 @@ import {
 import { api } from '../api/client';
 import { getApiBaseUrl, setApiBaseUrl, DEFAULT_API_BASE_URL } from '../api/config';
 import type { HealthResponse } from '../api/client';
+import { CardQrModal } from '../components/CardQrModal';
+import { buildServerConnectQrPayload, isValidTransferPhone, normalizeTransferPhone } from '../lib/paymentQr';
 
-type Section = 'general' | 'profile' | 'notifications' | 'security' | 'regional' | 'billing' | 'data' | 'server';
+type Section = 'general' | 'payments' | 'profile' | 'notifications' | 'security' | 'regional' | 'billing' | 'data' | 'server';
 
 interface SettingsProps {
   settings: AppSettings;
@@ -76,7 +91,15 @@ export function Settings({
   const [apiUrlDraft, setApiUrlDraft] = useState(getApiBaseUrl());
   const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [serverMessage, setServerMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [connectedDevices, setConnectedDevices] = useState<ConnectedDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [revokeBusyId, setRevokeBusyId] = useState<string | null>(null);
   const [storeLogoDraft, setStoreLogoDraft] = useState<string | null>(null);
+  const [operatorDrafts, setOperatorDrafts] = useState<Record<string, string>>({});
+  const [operatorBusyId, setOperatorBusyId] = useState<string | null>(null);
+  const [serverQrOpen, setServerQrOpen] = useState(false);
+  const [serverQrUrl, setServerQrUrl] = useState('');
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState({
     storeName: settings.storeName,
@@ -84,6 +107,11 @@ export function Settings({
     currency: settings.currency,
     taxRate: settings.taxRate,
     cardQrPayload: settings.cardQrPayload,
+    transferBank: settings.transferBank,
+    transferAccountHolder: settings.transferAccountHolder,
+    transferAccountNumber: settings.transferAccountNumber,
+    transferPhoneNumber: settings.transferPhoneNumber,
+    transferQrExtra: settings.transferQrExtra,
     managerName: settings.managerName,
     managerTitle: settings.managerTitle,
   });
@@ -94,6 +122,11 @@ export function Settings({
     currency: settings.currency,
     taxRate: settings.taxRate,
     cardQrPayload: settings.cardQrPayload,
+    transferBank: settings.transferBank,
+    transferAccountHolder: settings.transferAccountHolder,
+    transferAccountNumber: settings.transferAccountNumber,
+    transferPhoneNumber: settings.transferPhoneNumber,
+    transferQrExtra: settings.transferQrExtra,
     managerName: settings.managerName,
     managerTitle: settings.managerTitle,
   });
@@ -107,6 +140,11 @@ export function Settings({
         prev.currency !== b.currency ||
         prev.taxRate !== b.taxRate ||
         prev.cardQrPayload !== b.cardQrPayload ||
+        prev.transferBank !== b.transferBank ||
+        prev.transferAccountHolder !== b.transferAccountHolder ||
+        prev.transferAccountNumber !== b.transferAccountNumber ||
+        prev.transferPhoneNumber !== b.transferPhoneNumber ||
+        prev.transferQrExtra !== b.transferQrExtra ||
         prev.managerName !== b.managerName ||
         prev.managerTitle !== b.managerTitle;
       const matchesIncoming =
@@ -115,6 +153,11 @@ export function Settings({
         prev.currency === settings.currency &&
         prev.taxRate === settings.taxRate &&
         prev.cardQrPayload === settings.cardQrPayload &&
+        prev.transferBank === settings.transferBank &&
+        prev.transferAccountHolder === settings.transferAccountHolder &&
+        prev.transferAccountNumber === settings.transferAccountNumber &&
+        prev.transferPhoneNumber === settings.transferPhoneNumber &&
+        prev.transferQrExtra === settings.transferQrExtra &&
         prev.managerName === settings.managerName &&
         prev.managerTitle === settings.managerTitle;
       if (dirty && !matchesIncoming) return prev;
@@ -124,6 +167,11 @@ export function Settings({
         currency: settings.currency,
         taxRate: settings.taxRate,
         cardQrPayload: settings.cardQrPayload,
+        transferBank: settings.transferBank,
+        transferAccountHolder: settings.transferAccountHolder,
+        transferAccountNumber: settings.transferAccountNumber,
+        transferPhoneNumber: settings.transferPhoneNumber,
+        transferQrExtra: settings.transferQrExtra,
         managerName: settings.managerName,
         managerTitle: settings.managerTitle,
       };
@@ -133,6 +181,11 @@ export function Settings({
         currency: settings.currency,
         taxRate: settings.taxRate,
         cardQrPayload: settings.cardQrPayload,
+        transferBank: settings.transferBank,
+        transferAccountHolder: settings.transferAccountHolder,
+        transferAccountNumber: settings.transferAccountNumber,
+        transferPhoneNumber: settings.transferPhoneNumber,
+        transferQrExtra: settings.transferQrExtra,
         managerName: settings.managerName,
         managerTitle: settings.managerTitle,
       };
@@ -219,8 +272,108 @@ export function Settings({
     }
   };
 
+  const loadConnectedDevices = async () => {
+    if (!apiConnected) {
+      setConnectedDevices([]);
+      return;
+    }
+    setDevicesLoading(true);
+    try {
+      const devices = await api.getConnectedDevices();
+      setConnectedDevices(devices);
+      setOperatorDrafts((prev) => {
+        const next = { ...prev };
+        for (const device of devices) {
+          if (!(device.deviceId in next)) next[device.deviceId] = device.operatorName;
+        }
+        return next;
+      });
+    } catch {
+      setConnectedDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
+  const handleRevokeDevice = async (device: ConnectedDevice) => {
+    if (!window.confirm(t('settings.serverDeviceDisconnectConfirm'))) return;
+    setRevokeBusyId(device.deviceId);
+    setServerMessage(null);
+    try {
+      await api.revokeConnectedDevice(device.deviceId);
+      setServerMessage({ type: 'ok', text: t('settings.serverDeviceDisconnectOk') });
+      await loadConnectedDevices();
+    } catch (e) {
+      setServerMessage({ type: 'err', text: mapMutationError(e, t) });
+    } finally {
+      setRevokeBusyId(null);
+    }
+  };
+
+  const handleSaveOperator = async (device: ConnectedDevice) => {
+    const name = (operatorDrafts[device.deviceId] ?? device.operatorName).trim();
+    setOperatorBusyId(device.deviceId);
+    setServerMessage(null);
+    try {
+      const updated = await api.assignDeviceOperator(device.deviceId, name);
+      setConnectedDevices((prev) => prev.map((d) => (d.deviceId === updated.deviceId ? updated : d)));
+      setOperatorDrafts((prev) => ({ ...prev, [device.deviceId]: updated.operatorName }));
+      setServerMessage({ type: 'ok', text: t('settings.serverOperatorSaved') });
+    } catch (e) {
+      setServerMessage({ type: 'err', text: mapMutationError(e, t) });
+    } finally {
+      setOperatorBusyId(null);
+    }
+  };
+
+  const openServerQr = () => {
+    const lan = healthInfo?.lanUrls?.[0];
+    const url = (lan || apiUrlDraft.trim() || getApiBaseUrl()).replace(/\/$/, '');
+    setServerQrUrl(url);
+    setServerQrOpen(true);
+  };
+
+  const formatDeviceTime = (timestamp: number) =>
+    new Date(timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+
+  const formatSessionDuration = (firstSeenAt: number, lastSeenAt: number) => {
+    const ms = Math.max(0, lastSeenAt - firstSeenAt);
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 1) return '< 1 min';
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const rem = minutes % 60;
+    if (hours < 24) return rem > 0 ? `${hours} h ${rem} min` : `${hours} h`;
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days} d ${remHours} h` : `${days} d`;
+  };
+
+  const deviceKindLabel = (kind: ConnectedDevice['clientKind']) => {
+    if (kind === 'mobile') return t('settings.serverDeviceMobile');
+    if (kind === 'web') return t('settings.serverDeviceWeb');
+    return t('settings.serverDeviceUnknown');
+  };
+
+  const deviceKindIcon = (kind: ConnectedDevice['clientKind']) => {
+    if (kind === 'mobile') return <Smartphone size={16} className="shrink-0" />;
+    if (kind === 'web') return <Monitor size={16} className="shrink-0" />;
+    return <HelpCircle size={16} className="shrink-0" />;
+  };
+
+  const shortDeviceId = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id);
+
   useEffect(() => {
-    if (section === 'server') void loadHealth();
+    if (section === 'server') {
+      void loadHealth();
+      void loadConnectedDevices();
+    }
+  }, [section, apiConnected]);
+
+  useEffect(() => {
+    if (section !== 'server' || !apiConnected) return;
+    const id = window.setInterval(() => void loadConnectedDevices(), 10_000);
+    return () => window.clearInterval(id);
   }, [section, apiConnected]);
 
   const saveApiUrl = () => {
@@ -234,14 +387,35 @@ export function Settings({
       storeName: draft.storeName,
       branch: draft.branch,
       currency: draft.currency,
-      taxRate: draft.taxRate,
-      cardQrPayload: draft.cardQrPayload,
     };
     if (storeLogoDraft !== null) {
       patch.storeLogo = storeLogoDraft;
     }
     await onUpdate(patch);
     setStoreLogoDraft(null);
+  };
+
+  const savePayments = async () => {
+    const account = draft.transferAccountNumber.trim();
+    const phone = normalizeTransferPhone(draft.transferPhoneNumber);
+    if (account && !isValidTransferPhone(phone)) {
+      setPaymentsError(t('settings.transferPhoneInvalid'));
+      return;
+    }
+    if (phone && !account) {
+      setPaymentsError(t('settings.transferPhoneNeedsAccount'));
+      return;
+    }
+    setPaymentsError(null);
+    await onUpdate({
+      taxRate: draft.taxRate,
+      cardQrPayload: draft.cardQrPayload,
+      transferBank: draft.transferBank,
+      transferAccountHolder: draft.transferAccountHolder,
+      transferAccountNumber: account,
+      transferPhoneNumber: phone,
+      transferQrExtra: draft.transferQrExtra,
+    });
   };
 
   const saveProfile = async () => {
@@ -308,6 +482,7 @@ export function Settings({
 
   const nav = [
     { id: 'general' as const, label: t('settings.navGeneral'), icon: Store },
+    { id: 'payments' as const, label: t('settings.navPayments'), icon: Wallet },
     { id: 'profile' as const, label: t('settings.navProfile'), icon: User },
     { id: 'notifications' as const, label: t('settings.navNotifications'), icon: Bell },
     { id: 'security' as const, label: t('settings.navSecurity'), icon: Shield },
@@ -381,19 +556,6 @@ export function Settings({
                       onChange={(e) => setDraft((d) => ({ ...d, currency: e.target.value }))}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      {t('settings.taxRate')}
-                    </label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={draft.taxRate}
-                      onChange={(e) => setDraft((d) => ({ ...d, taxRate: parseFloat(e.target.value) || 0 }))}
-                    />
-                    <p className="text-xs text-on-surface-variant mt-1.5">{t('settings.taxRateCardOnlyNote')}</p>
-                  </div>
                 </div>
                 <ImagePicker
                   label={t('settings.storeLogoLabel')}
@@ -406,22 +568,112 @@ export function Settings({
                     setStoreLogoDraft(dataUrl === PLACEHOLDER_PRODUCT_IMAGE ? '' : dataUrl)
                   }
                 />
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                    {t('settings.cardQrPayloadLabel')}
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={draft.cardQrPayload}
-                    onChange={(e) => setDraft((d) => ({ ...d, cardQrPayload: e.target.value }))}
-                    className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-lowest transition-all outline-none resize-y min-h-[5rem]"
-                    spellCheck={false}
-                    autoComplete="off"
-                  />
-                  <p className="text-xs text-on-surface-variant">{t('settings.cardQrPayloadHelp')}</p>
-                </div>
                 <div className="pt-4 flex justify-end">
                   <Button onClick={saveStore}>{t('settings.saveChanges')}</Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {section === 'payments' && (
+            <Card title={t('settings.paymentsTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2 mb-6">{t('settings.paymentsBody')}</p>
+              <div className="space-y-8 mt-2">
+                <div className="space-y-4 rounded-xl border border-black/5 p-4 bg-surface-container-lowest">
+                  <p className="text-sm font-bold">{t('settings.transferSection')}</p>
+                  <p className="text-xs text-on-surface-variant">{t('settings.transferSectionHelp')}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.transferBank')}
+                      </label>
+                      <Input
+                        value={draft.transferBank}
+                        onChange={(e) => setDraft((d) => ({ ...d, transferBank: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.transferAccountHolder')}
+                      </label>
+                      <Input
+                        value={draft.transferAccountHolder}
+                        onChange={(e) => setDraft((d) => ({ ...d, transferAccountHolder: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.transferAccountNumber')}
+                      </label>
+                      <Input
+                        value={draft.transferAccountNumber}
+                        onChange={(e) => setDraft((d) => ({ ...d, transferAccountNumber: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.transferPhoneNumber')}
+                      </label>
+                      <div className="flex items-stretch">
+                        <span className="inline-flex items-center px-3 rounded-l-lg bg-surface-container-high text-sm font-semibold text-on-surface-variant select-none">
+                          +53
+                        </span>
+                        <Input
+                          className="rounded-l-none"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={8}
+                          placeholder="51234567"
+                          value={draft.transferPhoneNumber}
+                          onChange={(e) => {
+                            const next = normalizeTransferPhone(e.target.value).slice(0, 8);
+                            setDraft((d) => ({ ...d, transferPhoneNumber: next }));
+                            if (paymentsError) setPaymentsError(null);
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-on-surface-variant mt-1.5">{t('settings.transferPhoneHelp')}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.taxRate')}
+                      </label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={draft.taxRate}
+                        onChange={(e) => setDraft((d) => ({ ...d, taxRate: parseFloat(e.target.value) || 0 }))}
+                      />
+                      <p className="text-xs text-on-surface-variant mt-1.5">{t('settings.taxRateTransferNote')}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 rounded-xl border border-black/5 p-4 bg-surface-container-lowest">
+                  <p className="text-sm font-bold">{t('settings.onlineSection')}</p>
+                  <p className="text-xs text-on-surface-variant">{t('settings.onlineSectionHelp')}</p>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                      {t('settings.onlineQrPayloadLabel')}
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={draft.cardQrPayload}
+                      onChange={(e) => setDraft((d) => ({ ...d, cardQrPayload: e.target.value }))}
+                      className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-lowest transition-all outline-none resize-y min-h-[5rem]"
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                    <p className="text-xs text-on-surface-variant">{t('settings.onlineQrPayloadHelp')}</p>
+                  </div>
+                </div>
+
+                {paymentsError ? (
+                  <p className="text-sm text-error font-medium">{paymentsError}</p>
+                ) : null}
+                <div className="pt-2 flex justify-end">
+                  <Button onClick={() => void savePayments()}>{t('settings.saveChanges')}</Button>
                 </div>
               </div>
             </Card>
@@ -738,6 +990,9 @@ export function Settings({
                   <Button variant="secondary" disabled={apiChecking} onClick={() => void loadHealth()}>
                     {apiChecking ? t('settings.serverChecking') : t('settings.serverTest')}
                   </Button>
+                  <Button variant="secondary" className="flex items-center gap-2" onClick={openServerQr}>
+                    <QrCode size={16} /> {t('settings.serverQr')}
+                  </Button>
                 </div>
                 <div className="p-4 bg-surface-container-low rounded-xl space-y-2">
                   <p className="text-sm font-bold">
@@ -767,6 +1022,123 @@ export function Settings({
                         </div>
                       )}
                     </>
+                  )}
+                </div>
+
+                <div className="pt-6 border-t border-black/5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-bold">{t('settings.serverConnectedDevices')}</p>
+                      <p className="text-xs text-on-surface-variant mt-1">{t('settings.serverConnectedDevicesHint')}</p>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={!apiConnected || devicesLoading}
+                      onClick={() => void loadConnectedDevices()}
+                    >
+                      {devicesLoading ? t('settings.serverChecking') : t('settings.serverDeviceRefresh')}
+                    </Button>
+                  </div>
+
+                  {!apiConnected ? null : connectedDevices.length === 0 && !devicesLoading ? (
+                    <p className="text-sm text-on-surface-variant">{t('settings.serverDeviceNone')}</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {connectedDevices.map((device) => {
+                        const statusLabel = device.revokedAt != null
+                          ? t('settings.serverDeviceRevoked')
+                          : device.online
+                            ? t('settings.serverDeviceOnline')
+                            : t('settings.serverDeviceOffline');
+                        const statusClass = device.revokedAt != null
+                          ? 'bg-error-container/20 text-on-error-container'
+                          : device.online
+                            ? 'bg-tertiary-container/20 text-on-tertiary-container'
+                            : 'bg-surface-container-high text-on-surface-variant';
+
+                        return (
+                          <div
+                            key={device.deviceId}
+                            className="rounded-xl border border-black/5 bg-surface-container-lowest p-4 space-y-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex items-center gap-1.5 text-sm font-bold">
+                                    {deviceKindIcon(device.clientKind)}
+                                    {deviceKindLabel(device.clientKind)}
+                                  </span>
+                                  {device.isCurrent ? (
+                                    <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
+                                      {t('settings.serverDeviceThisDevice')}
+                                    </span>
+                                  ) : null}
+                                  <span className={cn('inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', statusClass)}>
+                                    {statusLabel}
+                                  </span>
+                                </div>
+                                <p className="text-xs font-mono text-on-surface-variant break-all" title={device.deviceId}>
+                                  {shortDeviceId(device.deviceId)}
+                                </p>
+                              </div>
+                              {!device.isCurrent && device.revokedAt == null ? (
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  disabled={revokeBusyId === device.deviceId}
+                                  onClick={() => void handleRevokeDevice(device)}
+                                >
+                                  {t('settings.serverDeviceDisconnect')}
+                                </Button>
+                              ) : null}
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                                {t('settings.serverOperatorName')}
+                              </label>
+                              <div className="flex flex-wrap gap-2">
+                                <Input
+                                  value={operatorDrafts[device.deviceId] ?? device.operatorName}
+                                  onChange={(e) =>
+                                    setOperatorDrafts((prev) => ({ ...prev, [device.deviceId]: e.target.value }))
+                                  }
+                                  placeholder={t('settings.serverOperatorPlaceholder')}
+                                  className="flex-1 min-w-[10rem]"
+                                  disabled={device.revokedAt != null}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={device.revokedAt != null || operatorBusyId === device.deviceId}
+                                  onClick={() => void handleSaveOperator(device)}
+                                >
+                                  {t('settings.serverOperatorSave')}
+                                </Button>
+                              </div>
+                              <p className="text-[10px] text-on-surface-variant">{t('settings.serverOperatorHelp')}</p>
+                            </div>
+                            <dl className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                              <div>
+                                <dt className="font-bold text-on-surface-variant">{t('settings.serverDeviceFirstSeen')}</dt>
+                                <dd className="mt-0.5">{formatDeviceTime(device.firstSeenAt)}</dd>
+                              </div>
+                              <div>
+                                <dt className="font-bold text-on-surface-variant">{t('settings.serverDeviceLastSeen')}</dt>
+                                <dd className="mt-0.5">{formatDeviceTime(device.lastSeenAt)}</dd>
+                              </div>
+                              <div>
+                                <dt className="font-bold text-on-surface-variant">{t('settings.serverDeviceSessionDuration')}</dt>
+                                <dd className="mt-0.5">
+                                  {formatSessionDuration(device.firstSeenAt, device.revokedAt ?? device.lastSeenAt)}
+                                </dd>
+                              </div>
+                            </dl>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               </div>
@@ -857,6 +1229,15 @@ export function Settings({
           </Button>
         </div>
       </Modal>
+
+      <CardQrModal
+        open={serverQrOpen}
+        onClose={() => setServerQrOpen(false)}
+        payload={buildServerConnectQrPayload(serverQrUrl)}
+        title={t('settings.serverQrTitle')}
+        hint={t('settings.serverQrHint', { url: serverQrUrl })}
+        empty={t('settings.serverQrEmpty')}
+      />
     </div>
   );
 }

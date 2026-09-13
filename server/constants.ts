@@ -18,6 +18,11 @@ export const DEFAULT_APP_SETTINGS = {
   currency: 'CUP',
   taxRate: 0,
   cardQrPayload: '',
+  transferBank: '',
+  transferAccountHolder: '',
+  transferAccountNumber: '',
+  transferPhoneNumber: '',
+  transferQrExtra: '',
   storeLogoUrl: null,
   darkMode: false,
   lowStockNotifications: true,
@@ -25,6 +30,14 @@ export const DEFAULT_APP_SETTINGS = {
   managerTitle: '',
   locale: 'es' as const,
 };
+
+export function normalizeTransferPhone(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('53') && digits.length >= 10) {
+    digits = digits.slice(2);
+  }
+  return digits;
+}
 
 const MOCK_TX_ANCHOR = 1_730_000_000_000;
 
