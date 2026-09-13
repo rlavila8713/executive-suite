@@ -71,6 +71,54 @@ describe('Executive Suite API integration', () => {
     });
   });
 
+  describe('connected devices', () => {
+    it('lists devices seen on the API and marks the current one', async () => {
+      await api('/api/settings', {
+        deviceId: 'mobile-client-1',
+        headers: { 'User-Agent': 'Dart/3.0 (flutter)', 'X-Client-Kind': 'mobile' },
+      });
+
+      const list = await api<
+        {
+          deviceId: string;
+          clientKind: string;
+          online: boolean;
+          isCurrent: boolean;
+        }[]
+      >('/api/devices');
+      assert.equal(list.status, 200);
+
+      const mobile = list.body.find((d) => d.deviceId === 'mobile-client-1');
+      assert.ok(mobile);
+      assert.equal(mobile.clientKind, 'mobile');
+      assert.equal(mobile.online, true);
+
+      const current = list.body.find((d) => d.isCurrent);
+      assert.ok(current);
+      assert.equal(current.deviceId, TEST_DEVICE_ID);
+    });
+
+    it('revokes a device and blocks further API access', async () => {
+      const victim = 'revoke-me-device';
+      await api('/api/settings', { deviceId: victim });
+
+      const revoke = await api('/api/devices/revoke-me-device/revoke', { method: 'POST' });
+      assert.equal(revoke.status, 200);
+
+      const blocked = await api('/api/settings', { deviceId: victim });
+      assert.equal(blocked.status, 403);
+      const body = blocked.body as { code: string };
+      assert.equal(body.code, 'ERR_DEVICE_REVOKED');
+    });
+
+    it('cannot revoke the current device', async () => {
+      const res = await api(`/api/devices/${TEST_DEVICE_ID}/revoke`, { method: 'POST' });
+      assert.equal(res.status, 400);
+      const body = res.body as { code: string };
+      assert.equal(body.code, 'ERR_DEVICE_REVOKE_SELF');
+    });
+  });
+
   describe('settings', () => {
     it('GET and PATCH app settings', async () => {
       const get0 = await api<{ storeName: string }>('/api/settings');
@@ -79,12 +127,15 @@ describe('Executive Suite API integration', () => {
 
       const patch = await api('/api/settings', {
         method: 'PATCH',
-        body: { storeName: 'Tienda Test', branch: 'Centro' },
+        body: { storeName: 'Tienda Test', branch: 'Centro', transferBank: 'BANDEC', transferAccountNumber: '123', transferPhoneNumber: '+53 5 123 4567' },
       });
       assert.equal(patch.status, 200);
-      const patched = patch.body as { storeName: string; branch: string };
+      const patched = patch.body as { storeName: string; branch: string; transferBank: string; transferAccountNumber: string; transferPhoneNumber: string };
       assert.equal(patched.storeName, 'Tienda Test');
       assert.equal(patched.branch, 'Centro');
+      assert.equal(patched.transferBank, 'BANDEC');
+      assert.equal(patched.transferAccountNumber, '123');
+      assert.equal(patched.transferPhoneNumber, '51234567');
     });
 
     it('saves store logo and serves it via /settings/logo', async () => {
@@ -363,6 +414,150 @@ describe('Executive Suite API integration', () => {
       });
       assert.equal(closed.status, 200);
       assert.equal(closed.body.totalCashSales, 0);
+    });
+
+    it('rejects selling more units than available stock', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Agua',
+          sku: 'AGU-01',
+          category: 'Bebidas',
+          price: 5,
+          cost: 1,
+          stock: 1,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const blocked = await api('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Ana',
+          amount: 10,
+          receipt: {
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 2, name: 'Agua' }],
+            total: 10,
+            paymentMethod: 'cash',
+          },
+        },
+      });
+      assert.equal(blocked.status, 409);
+      assert.ok(String((blocked.body as { code: string }).code).startsWith('ERR_INSUFFICIENT_STOCK'));
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+  });
+
+  describe('operators', () => {
+    it('stamps the assigned operator on mobile sales and ignores client-supplied names', async () => {
+      const mobileId = 'mobile-seller-1';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+
+      const assigned = await api<{ operatorName: string }>(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorName: 'María' },
+      });
+      assert.equal(assigned.status, 200);
+      assert.equal(assigned.body.operatorName, 'María');
+
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Jugo',
+          sku: 'JUG-01',
+          category: 'Bebidas',
+          price: 12,
+          cost: 4,
+          stock: 3,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const sale = await api<{ operatorName?: string; receipt?: { operatorName?: string } }>('/api/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+        body: {
+          customerName: 'Luis',
+          amount: 12,
+          receipt: {
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+            total: 12,
+            paymentMethod: 'cash',
+            operatorName: 'Hacker',
+          },
+        },
+      });
+      assert.equal(sale.status, 201);
+      assert.equal(sale.body.operatorName, 'María');
+      assert.equal(sale.body.receipt?.operatorName, 'María');
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 12 } });
+    });
+
+    it('blocks mobile sales until an operator is assigned', async () => {
+      const mobileId = 'mobile-no-operator';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const blocked = await api('/api/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+        body: {
+          customerName: 'Luis',
+          amount: 5,
+          receipt: {
+            lines: [{ sku: 'NO-STOCK', quantity: 1 }],
+            total: 5,
+            paymentMethod: 'cash',
+          },
+        },
+      });
+      assert.equal(blocked.status, 409);
+      assert.equal((blocked.body as { code: string }).code, 'ERR_OPERATOR_REQUIRED');
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+
+    it('rejects operator assignment from a mobile client', async () => {
+      const mobileId = 'mobile-cannot-assign';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const res = await api(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+        body: { operatorName: 'Yo mismo' },
+      });
+      assert.equal(res.status, 403);
+      assert.equal((res.body as { code: string }).code, 'ERR_OPERATOR_ASSIGN_FORBIDDEN');
     });
   });
 

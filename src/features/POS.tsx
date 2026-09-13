@@ -8,6 +8,7 @@ import {
   ArrowRight,
   ShoppingCart,
   ChevronDown,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { Button, Input, Modal } from '../components/ui';
 import { CardQrModal } from '../components/CardQrModal';
@@ -17,6 +18,7 @@ import type { CheckoutPayload, Product, ProductCategory, ProductSubcategory, Car
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
+import { buildOnlineQrPayload, buildTransferQrPayload } from '../lib/paymentQr';
 import {
   CatalogFilterModal,
   catalogFilterLabel,
@@ -31,6 +33,8 @@ interface POSProps {
   cart: CartItem[];
   taxRatePercent: number;
   cardQrPayload: string;
+  transferAccountNumber: string;
+  transferPhoneNumber: string;
   storeName: string;
   storeBranch: string;
   storeCurrency: string;
@@ -53,6 +57,8 @@ export function POS({
   cart,
   taxRatePercent,
   cardQrPayload,
+  transferAccountNumber,
+  transferPhoneNumber,
   storeName,
   storeBranch,
   storeCurrency,
@@ -69,8 +75,8 @@ export function POS({
 }: POSProps) {
   const { t } = useI18n();
   const [receiptModalTx, setReceiptModalTx] = useState<Transaction | null>(null);
-  const [cardQrOpen, setCardQrOpen] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
+  const [payQrOpen, setPayQrOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>({ kind: 'all' });
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [customerName, setCustomerName] = useState('');
@@ -92,12 +98,12 @@ export function POS({
   useEffect(() => {
     if (cart.length === 0) {
       setPaymentMethod('cash');
-      setCardQrOpen(false);
+      setPayQrOpen(false);
     }
   }, [cart.length]);
 
   const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-  const tax = paymentMethod === 'card' ? subtotal * (taxRatePercent / 100) : 0;
+  const tax = paymentMethod === 'transfer' ? subtotal * (taxRatePercent / 100) : 0;
   const total = subtotal + tax;
 
   const amountPaid = useMemo(() => {
@@ -169,7 +175,7 @@ export function POS({
       })),
       subtotal,
       tax,
-      taxRatePercent: paymentMethod === 'card' ? taxRatePercent : 0,
+      taxRatePercent: paymentMethod === 'transfer' ? taxRatePercent : 0,
       total,
       paymentMethod,
       ...(paymentMethod === 'cash' && amountPaid != null
@@ -188,7 +194,7 @@ export function POS({
       if (saved) setReceiptModalTx(saved);
       setCustomerName('');
       setPaymentMethod('cash');
-      setCardQrOpen(false);
+      setPayQrOpen(false);
       setCashPayOpen(false);
       setAmountPaidInput('');
     } catch (err) {
@@ -202,6 +208,24 @@ export function POS({
     const rateStr = taxRatePercent % 1 === 0 ? taxRatePercent.toFixed(0) : taxRatePercent.toFixed(2);
     return t('pos.salesTax', { rate: rateStr });
   }, [taxRatePercent, t]);
+
+  const payQrPayload = useMemo(() => {
+    if (paymentMethod === 'transfer') {
+      return buildTransferQrPayload({
+        accountNumber: transferAccountNumber,
+        phoneNumber: transferPhoneNumber,
+      });
+    }
+    if (paymentMethod === 'card') {
+      return buildOnlineQrPayload(cardQrPayload);
+    }
+    return '';
+  }, [
+    paymentMethod,
+    transferAccountNumber,
+    transferPhoneNumber,
+    cardQrPayload,
+  ]);
 
   const filterLabel = catalogFilterLabel(catalogFilter, t('pos.allItems'));
 
@@ -248,12 +272,22 @@ export function POS({
 
         <div className="flex-1 min-h-0 overflow-y-auto pr-0.5 no-scrollbar">
           <div className="space-y-1">
-            {filteredProducts.map((product) => (
+            {filteredProducts.map((product) => {
+              const outOfStock = product.stock <= 0;
+              const inCart = cart.find((item) => item.id === product.id)?.quantity ?? 0;
+              const atLimit = !outOfStock && inCart >= product.stock;
+              return (
               <button
                 key={product.id}
                 type="button"
+                disabled={outOfStock || atLimit}
                 onClick={() => addToCart(product)}
-                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-black/5 bg-surface-container-lowest hover:bg-surface-container-low text-left transition-colors"
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-black/5 text-left transition-colors',
+                  outOfStock || atLimit
+                    ? 'bg-surface-container-low opacity-60 cursor-not-allowed'
+                    : 'bg-surface-container-lowest hover:bg-surface-container-low',
+                )}
               >
                 <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-10 h-10 rounded-md object-cover shrink-0" alt={product.name} />
                 <div className="flex-1 min-w-0">
@@ -271,11 +305,12 @@ export function POS({
                     {product.stock > 0 ? t('pos.inStock') : t('pos.outOfStock')}
                   </p>
                 </div>
-                <div className="bg-primary text-white p-1 rounded-md shrink-0">
+                <div className={cn('p-1 rounded-md shrink-0', outOfStock ? 'bg-surface-container-high text-on-surface-variant' : 'bg-primary text-white')}>
                   <Plus size={14} />
                 </div>
               </button>
-            ))}
+              );
+            })}
             {filteredProducts.length === 0 ? (
               <p className="text-center text-sm text-on-surface-variant py-6">{t('pos.noProducts')}</p>
             ) : null}
@@ -357,8 +392,9 @@ export function POS({
                         <span className="px-2 text-xs font-bold tabular-nums min-w-[1.5rem] text-center">{item.quantity}</span>
                         <button
                           type="button"
+                          disabled={item.quantity >= item.stock}
                           onClick={() => updateQuantity(item.id, 1)}
-                          className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant"
+                          className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant disabled:opacity-40"
                         >
                           <Plus size={12} />
                         </button>
@@ -380,22 +416,22 @@ export function POS({
             <span className="text-on-surface-variant">{t('pos.subtotal')}</span>
             <span className="font-semibold text-right tabular-nums">${subtotal.toFixed(2)}</span>
             <span className="text-on-surface-variant truncate">
-              {paymentMethod === 'card' ? taxLabel : t('pos.taxCashRow')}
+              {paymentMethod === 'transfer' ? taxLabel : t('pos.taxCashRow')}
             </span>
             <span className="font-semibold text-right tabular-nums">${tax.toFixed(2)}</span>
             <span className="font-bold text-primary pt-1">{t('pos.totalAmount')}</span>
             <span className="font-black text-lg text-primary text-right tabular-nums pt-0.5">${total.toFixed(2)}</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
               onClick={() => {
                 setPaymentMethod('cash');
-                setCardQrOpen(false);
+                setPayQrOpen(false);
               }}
               className={cn(
-                'flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold border transition-colors',
+                'flex items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-bold border transition-colors',
                 paymentMethod === 'cash'
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-black/10 bg-surface-container-lowest text-on-surface-variant',
@@ -406,23 +442,42 @@ export function POS({
             <button
               type="button"
               onClick={() => {
-                setPaymentMethod('card');
-                setCardQrOpen(true);
+                setPaymentMethod('transfer');
+                setPayQrOpen(true);
               }}
               className={cn(
-                'flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold border transition-colors',
+                'flex items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-bold border transition-colors',
+                paymentMethod === 'transfer'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-black/10 bg-surface-container-lowest text-on-surface-variant',
+              )}
+            >
+              <ArrowLeftRight size={14} /> {t('pos.transfer')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentMethod('card');
+                setPayQrOpen(true);
+              }}
+              className={cn(
+                'flex items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-bold border transition-colors',
                 paymentMethod === 'card'
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-black/10 bg-surface-container-lowest text-on-surface-variant',
               )}
             >
-              <CreditCard size={14} /> {t('pos.card')}
+              <CreditCard size={14} /> {t('pos.online')}
             </button>
           </div>
 
           {paymentMethod === 'cash' ? (
             <p className="text-[10px] text-on-surface-variant leading-snug">{t('pos.taxCashNote')}</p>
-          ) : null}
+          ) : paymentMethod === 'transfer' ? (
+            <p className="text-[10px] text-on-surface-variant leading-snug">{t('pos.taxTransferNote')}</p>
+          ) : (
+            <p className="text-[10px] text-on-surface-variant leading-snug">{t('pos.taxOnlineNote')}</p>
+          )}
           {checkoutError ? <p className="text-xs text-error font-medium">{checkoutError}</p> : null}
 
           <Button
@@ -500,7 +555,14 @@ export function POS({
         </div>
       </Modal>
 
-      <CardQrModal open={cardQrOpen} onClose={() => setCardQrOpen(false)} payload={cardQrPayload} />
+      <CardQrModal
+        open={payQrOpen}
+        onClose={() => setPayQrOpen(false)}
+        payload={payQrPayload}
+        title={paymentMethod === 'transfer' ? t('pos.transferQrTitle') : t('pos.onlineQrTitle')}
+        hint={paymentMethod === 'transfer' ? t('pos.transferQrHint') : t('pos.onlineQrHint')}
+        empty={paymentMethod === 'transfer' ? t('pos.transferQrEmpty') : t('pos.onlineQrEmpty')}
+      />
 
       <ReceiptViewModal
         isOpen={!!receiptModalTx}

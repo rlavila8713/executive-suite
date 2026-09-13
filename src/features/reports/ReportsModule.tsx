@@ -13,6 +13,7 @@ import type { CashSession, Expense, Product, Transaction } from '../../types';
 import { cn } from '../../lib/utils';
 import { useI18n } from '../../i18n/I18nContext';
 import { mapMutationError } from '../../lib/mutationErrors';
+import { transactionOperatorName, uniqueOperatorNames } from '../../lib/operators';
 import {
   dateRangeFromInputs,
   expensesTotalInRange,
@@ -74,12 +75,22 @@ export function ReportsModule({
   const [openingInput, setOpeningInput] = useState('0');
   const [closingById, setClosingById] = useState<Record<string, string>>({});
   const [cashMsg, setCashMsg] = useState<string | null>(null);
+  const [operatorFilter, setOperatorFilter] = useState('');
+
+  const operatorNames = useMemo(() => uniqueOperatorNames(transactions), [transactions]);
+  const scopedTransactions = useMemo(
+    () =>
+      operatorFilter
+        ? transactions.filter((tx) => transactionOperatorName(tx) === operatorFilter)
+        : transactions,
+    [transactions, operatorFilter],
+  );
 
   const range = useMemo(() => dateRangeFromInputs(startStr, endStr), [startStr, endStr]);
   const prevRange = useMemo(() => previousPeriodOfSameLength(range), [range]);
 
-  const revenue = useMemo(() => salesRevenueInRange(transactions, range), [transactions, range]);
-  const prevRevenue = useMemo(() => salesRevenueInRange(transactions, prevRange), [transactions, prevRange]);
+  const revenue = useMemo(() => salesRevenueInRange(scopedTransactions, range), [scopedTransactions, range]);
+  const prevRevenue = useMemo(() => salesRevenueInRange(scopedTransactions, prevRange), [scopedTransactions, prevRange]);
   const changePct = useMemo(() => {
     if (prevRevenue <= 0) return revenue > 0 ? 100 : 0;
     return ((revenue - prevRevenue) / prevRevenue) * 100;
@@ -87,23 +98,23 @@ export function ReportsModule({
 
   const orders = useMemo(
     () =>
-      transactions.filter(
+      scopedTransactions.filter(
         (tx) =>
           tx.type === 'sale' &&
           tx.status === 'completed' &&
           tx.createdAt >= range.start &&
           tx.createdAt <= range.end,
       ).length,
-    [transactions, range],
+    [scopedTransactions, range],
   );
 
   const expensesR = useMemo(() => expensesTotalInRange(expenses, range), [expenses, range]);
-  const payBreak = useMemo(() => paymentMethodBreakdown(transactions, range), [transactions, range]);
+  const payBreak = useMemo(() => paymentMethodBreakdown(scopedTransactions, range), [scopedTransactions, range]);
 
   const paymentLabel = useCallback(
     (k: 'cash' | 'card' | 'transfer' | 'other') => {
       if (k === 'cash') return t('reports.paymentCash');
-      if (k === 'card') return t('reports.paymentCard');
+      if (k === 'card') return t('reports.paymentOnline');
       if (k === 'transfer') return t('reports.paymentTransfer');
       return t('reports.paymentOther');
     },
@@ -120,22 +131,22 @@ export function ReportsModule({
   );
 
   const series = useMemo(
-    () => groupSalesByBucket(transactions, range, bucket, locale === 'es' ? 'es' : 'en-US'),
-    [transactions, range, bucket, locale],
+    () => groupSalesByBucket(scopedTransactions, range, bucket, locale === 'es' ? 'es' : 'en-US'),
+    [scopedTransactions, range, bucket, locale],
   );
 
-  const profit = useMemo(() => profitGrossInRange(transactions, products, range), [transactions, products, range]);
+  const profit = useMemo(() => profitGrossInRange(scopedTransactions, products, range), [scopedTransactions, products, range]);
   const netOp = useMemo(() => profit.grossProfit - expensesR, [profit.grossProfit, expensesR]);
 
-  const top = useMemo(() => topSellingProducts(transactions, range, 15), [transactions, range]);
-  const slow = useMemo(() => slowMovingProducts(transactions, products, range, 15), [transactions, products, range]);
+  const top = useMemo(() => topSellingProducts(scopedTransactions, range, 15), [scopedTransactions, range]);
+  const slow = useMemo(() => slowMovingProducts(scopedTransactions, products, range, 15), [scopedTransactions, products, range]);
 
   const valCost = useMemo(() => inventoryValuationAtCost(products), [products]);
   const valRetail = useMemo(() => inventoryValuationAtRetail(products), [products]);
   const lowStock = useMemo(() => products.filter((p) => p.stock <= 5).length, [products]);
   const turnover = useMemo(
-    () => inventoryTurnoverRatio(transactions, products, range),
-    [transactions, products, range],
+    () => inventoryTurnoverRatio(scopedTransactions, products, range),
+    [scopedTransactions, products, range],
   );
 
   const openSession = cashSessions.find((s) => s.closedAt == null) ?? null;
@@ -229,18 +240,35 @@ export function ReportsModule({
               <Input type="date" value={endStr} onChange={(e) => setEndStr(e.target.value)} className="mt-1" />
             </div>
             {tab === 'sales' ? (
-              <div>
-                <label className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.groupBy')}</label>
-                <select
-                  value={bucket}
-                  onChange={(e) => setBucket(e.target.value as SalesBucket)}
-                  className="mt-1 w-full rounded-lg border border-black/10 bg-surface-container-high px-3 py-2 text-sm"
-                >
-                  <option value="day">{t('reports.groupDay')}</option>
-                  <option value="week">{t('reports.groupWeek')}</option>
-                  <option value="month">{t('reports.groupMonth')}</option>
-                </select>
-              </div>
+              <>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.groupBy')}</label>
+                  <select
+                    value={bucket}
+                    onChange={(e) => setBucket(e.target.value as SalesBucket)}
+                    className="mt-1 w-full rounded-lg border border-black/10 bg-surface-container-high px-3 py-2 text-sm"
+                  >
+                    <option value="day">{t('reports.groupDay')}</option>
+                    <option value="week">{t('reports.groupWeek')}</option>
+                    <option value="month">{t('reports.groupMonth')}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.operatorFilter')}</label>
+                  <select
+                    value={operatorFilter}
+                    onChange={(e) => setOperatorFilter(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-black/10 bg-surface-container-high px-3 py-2 text-sm"
+                  >
+                    <option value="">{t('reports.operatorAll')}</option>
+                    {operatorNames.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
             ) : (
               <div className="hidden sm:block" />
             )}

@@ -97,7 +97,7 @@ export function Cash({
 
   const paymentLabel = (k: 'cash' | 'card' | 'transfer' | 'other') => {
     if (k === 'cash') return t('reports.paymentCash');
-    if (k === 'card') return t('reports.paymentCard');
+    if (k === 'card') return t('reports.paymentOnline');
     if (k === 'transfer') return t('reports.paymentTransfer');
     return t('reports.paymentOther');
   };
@@ -192,7 +192,7 @@ export function Cash({
                 <th className="px-4 py-3 text-right">{t('reports.cashOpening')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.cashClosing')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.paymentCash')}</th>
-                <th className="px-4 py-3 text-right">{t('reports.paymentCard')}</th>
+                <th className="px-4 py-3 text-right">{t('reports.paymentOnline')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.paymentTransfer')}</th>
                 <th className="px-4 py-3 text-right">{t('reports.paymentOther')}</th>
                 <th className="px-4 py-3">{t('dashboard.status')}</th>

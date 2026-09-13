@@ -27,6 +27,12 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_CASH_CLOCK_ROLLBACK') return t('errors.cashClockRollback');
   if (code === 'ERR_LICENSE_EXPIRED') return t('license.expiredBody');
   if (code === 'ERR_DEVICE_MISMATCH') return t('license.deviceMismatchBody');
+  if (code === 'ERR_DEVICE_REVOKED') return t('errors.deviceRevoked');
+  if (code === 'ERR_DEVICE_REVOKE_SELF') return t('settings.serverDeviceDisconnectSelf');
+  if (code === 'ERR_DEVICE_NOT_FOUND') return t('settings.serverDeviceDisconnectErr');
+  if (code === 'ERR_OPERATOR_REQUIRED') return t('errors.operatorRequired');
+  if (code === 'ERR_OPERATOR_ASSIGN_FORBIDDEN') return t('errors.operatorAssignForbidden');
+  if (code.startsWith('ERR_INSUFFICIENT_STOCK')) return mapInsufficientStock(code, t);
   if (code === 'ERR_LICENSE_INVALID') return t('settings.billingActivateErr');
   if (code === 'ERR_LICENSE_ALREADY_USED') return t('settings.billingLicenseUsed');
   if (code === 'ERR_LICENSE_DEVICE_MISMATCH') return t('settings.billingLicenseWrongDevice');
@@ -42,6 +48,12 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_IMPORT_EMPTY') return t('import.errNoData');
   if (code === 'ERR_IMPORT_TOO_LARGE') return t('import.errTooLarge');
   return code;
+}
+
+function mapInsufficientStock(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return name ? t('errors.insufficientStockNamed', { name }) : t('errors.insufficientStock');
 }
 
 function mapProductInUse(code: string, t: TranslateFn): string {

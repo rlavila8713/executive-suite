@@ -98,6 +98,8 @@ export interface SaleReceipt {
   amountPaid?: number;
   /** Efectivo: vuelto entregado (amountPaid - total). */
   changeGiven?: number;
+  /** Operator assigned to the selling device at checkout (server-stamped). */
+  operatorName?: string;
 }
 
 export interface Transaction {
@@ -118,6 +120,10 @@ export interface Transaction {
    * Payment channel for reporting. If omitted (legacy), derived from `receipt.paymentMethod` when present.
    */
   paymentMethod?: PaymentMethod;
+  /** Seller assigned to the terminal that created this sale (immutable snapshot). */
+  operatorName?: string;
+  /** Device id that created this sale (audit). */
+  sourceDeviceId?: string;
 }
 
 /** Optional cash drawer session for reconciliation (Cash reports tab). */
@@ -189,19 +195,41 @@ export type LicenseRequestPayload = {
   requestedAt: number;
 };
 
+export type ConnectedClientKind = 'mobile' | 'web' | 'unknown';
+
+export interface ConnectedDevice {
+  deviceId: string;
+  clientKind: ConnectedClientKind;
+  userAgent: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  revokedAt: number | null;
+  /** Display name assigned by the store (not editable from the mobile app). */
+  operatorName: string;
+  online: boolean;
+  isCurrent: boolean;
+}
+
 /** Single-row app configuration stored locally (IndexedDB). */
 export interface AppSettings {
   id: 'main';
   storeName: string;
   branch: string;
   currency: string;
-  /** Percent applied to the cart total only when the customer pays by card (not cash). */
+  /** Percent applied to the cart total only for bank transfers (not cash or online). */
   taxRate: number;
   /**
-   * Plain text encoded in the POS “Card” QR (e.g. store card number, payment link, or terminal ID).
-   * Shown when the cashier taps Card; generated locally, no external service.
+   * Payload encoded in the POS “Pago en línea” QR (payment URL, wallet id, etc.).
+   * Generated locally; no tax is added for this method.
    */
   cardQrPayload: string;
+  transferBank: string;
+  transferAccountHolder: string;
+  transferAccountNumber: string;
+  /** National 8-digit phone for Transfermóvil (no +53). */
+  transferPhoneNumber: string;
+  /** Optional extra lines (not encoded in the Transfermóvil QR). */
+  transferQrExtra: string;
   /** Versioned API path when a store logo is set; null otherwise. */
   storeLogoUrl: string | null;
   /** Raw data URL — sent on PATCH to upload or clear the logo. */

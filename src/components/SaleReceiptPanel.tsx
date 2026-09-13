@@ -67,6 +67,12 @@ export function SaleReceiptPanel({
           <span className="text-zinc-500">{t('receipt.customer')}</span>
           <span className="text-right truncate max-w-[60%]">{customerName}</span>
         </div>
+        {receipt.operatorName?.trim() ? (
+          <div className="flex justify-between gap-2">
+            <span className="text-zinc-500">{t('receipt.operator')}</span>
+            <span className="text-right truncate max-w-[60%]">{receipt.operatorName}</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="border-b border-dashed border-zinc-300 pb-3 mb-3 space-y-3">
@@ -103,7 +109,7 @@ export function SaleReceiptPanel({
           <span>{t('receipt.payment')}</span>
           <span className="font-bold text-zinc-900">
             {receipt.paymentMethod === 'card'
-              ? t('receipt.paymentCard')
+              ? t('receipt.paymentOnline')
               : receipt.paymentMethod === 'transfer'
                 ? t('receipt.paymentTransfer')
                 : receipt.paymentMethod === 'other'

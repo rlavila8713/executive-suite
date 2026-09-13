@@ -32,11 +32,13 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
       payment: t('receipt.payment'),
       paymentCash: t('receipt.paymentCash'),
       paymentCard: t('receipt.paymentCard'),
+      paymentOnline: t('receipt.paymentOnline'),
       paymentTransfer: t('receipt.paymentTransfer'),
       paymentOther: t('receipt.paymentOther'),
       amountPaid: t('receipt.amountPaid'),
       changeGiven: t('receipt.changeGiven'),
       thankYou: t('receipt.thankYou'),
+      operator: t('receipt.operator'),
     }),
     [t],
   );
