@@ -167,7 +167,9 @@ function initSchema(db: SqliteStore): void {
       created_at INTEGER NOT NULL,
       payment_method TEXT,
       receipt_json TEXT,
-      source_sale_id TEXT
+      source_sale_id TEXT,
+      operator_name TEXT,
+      source_device_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
 
@@ -186,6 +188,11 @@ function initSchema(db: SqliteStore): void {
       currency TEXT NOT NULL,
       tax_rate REAL NOT NULL,
       card_qr_payload TEXT NOT NULL DEFAULT '',
+      transfer_bank TEXT NOT NULL DEFAULT '',
+      transfer_account_holder TEXT NOT NULL DEFAULT '',
+      transfer_account_number TEXT NOT NULL DEFAULT '',
+      transfer_phone_number TEXT NOT NULL DEFAULT '',
+      transfer_qr_extra TEXT NOT NULL DEFAULT '',
       dark_mode INTEGER NOT NULL DEFAULT 0,
       low_stock_notifications INTEGER NOT NULL DEFAULT 1,
       manager_name TEXT NOT NULL,
@@ -215,8 +222,8 @@ function ensureSeeded(db: SqliteStore): void {
   if (settingsCount.c === 0) {
     const s = DEFAULT_APP_SETTINGS;
     db.prepare(
-      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       s.id,
       s.storeName,
@@ -224,6 +231,11 @@ function ensureSeeded(db: SqliteStore): void {
       s.currency,
       s.taxRate,
       s.cardQrPayload,
+      s.transferBank,
+      s.transferAccountHolder,
+      s.transferAccountNumber,
+      s.transferPhoneNumber,
+      s.transferQrExtra,
       s.darkMode ? 1 : 0,
       s.lowStockNotifications ? 1 : 0,
       s.managerName,
@@ -244,6 +256,7 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM subcategories').run();
     db.prepare('DELETE FROM locations').run();
     db.prepare('DELETE FROM cash_sessions').run();
+    db.prepare('DELETE FROM connected_devices').run();
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
   });
@@ -329,6 +342,8 @@ export function rowToTransaction(row: {
   payment_method: string | null;
   receipt_json: string | null;
   source_sale_id?: string | null;
+  operator_name?: string | null;
+  source_device_id?: string | null;
 }) {
   return {
     id: row.id,
@@ -342,6 +357,8 @@ export function rowToTransaction(row: {
     paymentMethod: row.payment_method ?? undefined,
     receipt: row.receipt_json ? JSON.parse(row.receipt_json) : undefined,
     sourceSaleId: row.source_sale_id ?? undefined,
+    operatorName: row.operator_name ?? undefined,
+    sourceDeviceId: row.source_device_id ?? undefined,
   };
 }
 
@@ -409,6 +426,11 @@ export function rowToAppSettings(row: {
   currency: string;
   tax_rate: number;
   card_qr_payload: string;
+  transfer_bank?: string;
+  transfer_account_holder?: string;
+  transfer_account_number?: string;
+  transfer_phone_number?: string;
+  transfer_qr_extra?: string;
   dark_mode: number;
   low_stock_notifications: number;
   manager_name: string;
@@ -424,6 +446,11 @@ export function rowToAppSettings(row: {
     currency: row.currency,
     taxRate: row.tax_rate,
     cardQrPayload: row.card_qr_payload,
+    transferBank: row.transfer_bank ?? '',
+    transferAccountHolder: row.transfer_account_holder ?? '',
+    transferAccountNumber: row.transfer_account_number ?? '',
+    transferPhoneNumber: row.transfer_phone_number ?? '',
+    transferQrExtra: row.transfer_qr_extra ?? '',
     storeLogoUrl: storeLogoPath(storeLogo),
     darkMode: row.dark_mode === 1,
     lowStockNotifications: row.low_stock_notifications === 1,

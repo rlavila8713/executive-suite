@@ -13,7 +13,7 @@ import {
 } from './db.js';
 import { computeSessionPaymentTotals } from './reporting.js';
 import { computeWeightedAverageCost } from './inventoryCost.js';
-import { DEFAULT_APP_SETTINGS } from './constants.js';
+import { DEFAULT_APP_SETTINGS, normalizeTransferPhone } from './constants.js';
 import { registerCatalogRoutes } from './catalogRoutes.js';
 import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
@@ -27,6 +27,16 @@ import {
 import { detectCashAnomalies } from './cashAnomalies.js';
 import { resolveProductImage } from './productImage.js';
 import { normalizeStoreLogo } from './storeLogo.js';
+import {
+  getDeviceOperatorName,
+  inferClientKind,
+  listConnectedDevices,
+  revokeConnectedDevice,
+  setDeviceOperatorName,
+} from './connectedDevices.js';
+
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class ApiError extends Error {
   constructor(
@@ -479,10 +489,7 @@ export function registerRoutes(router: import('express').Router): void {
       if ((body.type === 'sale' && body.status === 'completed') || body.type === 'return') {
         requireCurrentDayCashSession(db);
       }
-      db.prepare(
-        `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
+      db.prepare(TX_INSERT_SQL).run(
         id,
         body.orderNumber,
         body.customer,
@@ -494,6 +501,8 @@ export function registerRoutes(router: import('express').Router): void {
         body.paymentMethod ?? null,
         body.receipt ? JSON.stringify(body.receipt) : null,
         body.sourceSaleId ?? null,
+        typeof body.operatorName === 'string' ? body.operatorName : null,
+        typeof body.sourceDeviceId === 'string' ? body.sourceDeviceId : null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -566,6 +575,8 @@ export function registerRoutes(router: import('express').Router): void {
             customer: string;
             amount: number;
             payment_method: string | null;
+            operator_name?: string | null;
+            source_device_id?: string | null;
           }
         | undefined;
       if (!existing) throw new ApiError(404, 'Sale not found');
@@ -608,10 +619,7 @@ export function registerRoutes(router: import('express').Router): void {
             db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(product.stock + qty, product.id);
           }
         }
-        db.prepare(
-          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
+        db.prepare(TX_INSERT_SQL).run(
           reversalId,
           `#R-${existing.order_number.replace(/^#/, '')}`,
           existing.customer,
@@ -623,6 +631,8 @@ export function registerRoutes(router: import('express').Router): void {
           existing.payment_method,
           existing.receipt_json,
           existing.id,
+          existing.operator_name ?? null,
+          existing.source_device_id ?? null,
         );
       });
 
@@ -639,7 +649,7 @@ export function registerRoutes(router: import('express').Router): void {
         customerName?: string;
         amount?: number;
         receipt?: {
-          lines: { productId?: string; sku: string; quantity: number }[];
+          lines: { productId?: string; sku: string; quantity: number; name?: string }[];
           paymentMethod?: string;
           total?: number;
         };
@@ -648,7 +658,20 @@ export function registerRoutes(router: import('express').Router): void {
 
       const db = getDb();
       requireCurrentDayCashSession(db);
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
+      const operatorName = deviceId ? getDeviceOperatorName(db, deviceId) : '';
+      if (clientKind === 'mobile' && !operatorName) {
+        throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
+      }
+
       const amount = body.amount && body.amount > 0 ? body.amount : (body.receipt.total ?? 0);
+      const paymentMethod = (body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other';
+      const receipt = {
+        ...body.receipt,
+        paymentMethod,
+        ...(operatorName ? { operatorName } : {}),
+      };
       const newTransaction = {
         id: newId(),
         orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
@@ -658,15 +681,39 @@ export function registerRoutes(router: import('express').Router): void {
         timestamp: 'Just now',
         type: 'sale' as const,
         createdAt: Date.now(),
-        receipt: body.receipt,
-        paymentMethod: (body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other',
+        receipt,
+        paymentMethod,
+        operatorName: operatorName || undefined,
+        sourceDeviceId: deviceId || undefined,
       };
 
       db.runInTransaction(() => {
-        db.prepare(
-          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
+        for (const line of body.receipt!.lines) {
+          const qty = Number(line.quantity);
+          if (!Number.isFinite(qty) || qty <= 0) {
+            throw new ApiError(400, 'Invalid line quantity', 'ERR_INVALID_QTY');
+          }
+          let product: { id: string; stock: number; name: string } | undefined;
+          if (line.productId) {
+            product = db.prepare('SELECT id, stock, name FROM products WHERE id = ?').get(line.productId) as
+              | { id: string; stock: number; name: string }
+              | undefined;
+          }
+          if (!product && line.sku) {
+            product = db.prepare('SELECT id, stock, name FROM products WHERE sku = ?').get(line.sku) as
+              | { id: string; stock: number; name: string }
+              | undefined;
+          }
+          if (product && product.stock < qty) {
+            throw new ApiError(
+              409,
+              'Insufficient stock',
+              `ERR_INSUFFICIENT_STOCK|${encodeURIComponent(line.sku ?? '')}|${encodeURIComponent(product.name)}`,
+            );
+          }
+        }
+
+        db.prepare(TX_INSERT_SQL).run(
           newTransaction.id,
           newTransaction.orderNumber,
           newTransaction.customer,
@@ -678,6 +725,8 @@ export function registerRoutes(router: import('express').Router): void {
           newTransaction.paymentMethod,
           JSON.stringify(newTransaction.receipt),
           null,
+          operatorName || null,
+          deviceId || null,
         );
 
         for (const line of body.receipt!.lines) {
@@ -693,8 +742,7 @@ export function registerRoutes(router: import('express').Router): void {
               | undefined;
           }
           if (product) {
-            const newStock = Math.max(0, product.stock - line.quantity);
-            db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(newStock, product.id);
+            db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(product.stock - line.quantity, product.id);
           }
         }
       });
@@ -836,8 +884,8 @@ export function registerRoutes(router: import('express').Router): void {
           throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo');
         }
         db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           'main',
           s.storeName,
@@ -845,6 +893,11 @@ export function registerRoutes(router: import('express').Router): void {
           s.currency,
           s.taxRate,
           s.cardQrPayload,
+          s.transferBank ?? '',
+          s.transferAccountHolder ?? '',
+          s.transferAccountNumber ?? '',
+          normalizeTransferPhone(String(s.transferPhoneNumber ?? '')),
+          s.transferQrExtra ?? '',
           s.darkMode ? 1 : 0,
           s.lowStockNotifications ? 1 : 0,
           s.managerName,
@@ -859,6 +912,11 @@ export function registerRoutes(router: import('express').Router): void {
           currency: 'currency',
           taxRate: 'tax_rate',
           cardQrPayload: 'card_qr_payload',
+          transferBank: 'transfer_bank',
+          transferAccountHolder: 'transfer_account_holder',
+          transferAccountNumber: 'transfer_account_number',
+          transferPhoneNumber: 'transfer_phone_number',
+          transferQrExtra: 'transfer_qr_extra',
           darkMode: 'dark_mode',
           lowStockNotifications: 'low_stock_notifications',
           managerName: 'manager_name',
@@ -872,6 +930,7 @@ export function registerRoutes(router: import('express').Router): void {
             fields.push(`${col} = ?`);
             let val = body[key];
             if (key === 'darkMode' || key === 'lowStockNotifications') val = val ? 1 : 0;
+            if (key === 'transferPhoneNumber') val = normalizeTransferPhone(String(val ?? ''));
             values.push(val);
           }
         }
@@ -1024,6 +1083,51 @@ export function registerRoutes(router: import('express').Router): void {
     }),
   );
 
+  // --- Connected devices ---
+  router.get(
+    '/devices',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim();
+      res.json(listConnectedDevices(db, deviceId));
+    }),
+  );
+
+  router.post(
+    '/devices/:deviceId/revoke',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const currentId = req.header('X-Device-Id')?.trim();
+      const targetId = req.params.deviceId?.trim();
+      if (!targetId) throw new ApiError(400, 'Device id required');
+      if (targetId === currentId) {
+        throw new ApiError(400, 'Cannot disconnect the current device', 'ERR_DEVICE_REVOKE_SELF');
+      }
+      const ok = revokeConnectedDevice(db, targetId);
+      if (!ok) throw new ApiError(404, 'Device not found or already disconnected', 'ERR_DEVICE_NOT_FOUND');
+      res.json({ ok: true });
+    }),
+  );
+
+  router.patch(
+    '/devices/:deviceId/operator',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const requesterKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
+      if (requesterKind === 'mobile') {
+        throw new ApiError(403, 'Operators can only be assigned from the store computer', 'ERR_OPERATOR_ASSIGN_FORBIDDEN');
+      }
+      const targetId = req.params.deviceId?.trim();
+      if (!targetId) throw new ApiError(400, 'Device id required');
+      const body = req.body as { operatorName?: string };
+      const operatorName = typeof body.operatorName === 'string' ? body.operatorName : '';
+      const ok = setDeviceOperatorName(db, targetId, operatorName);
+      if (!ok) throw new ApiError(404, 'Device not found', 'ERR_DEVICE_NOT_FOUND');
+      const devices = listConnectedDevices(db, req.header('X-Device-Id')?.trim());
+      res.json(devices.find((d) => d.deviceId === targetId));
+    }),
+  );
+
   // --- Admin ---
   router.post(
     '/admin/factory-reset',
@@ -1132,10 +1236,7 @@ export function registerRoutes(router: import('express').Router): void {
           );
         }
 
-        const insertTx = db.prepare(
-          `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
+        const insertTx = db.prepare(TX_INSERT_SQL);
         for (const tx of data.transactions ?? []) {
           insertTx.run(
             tx.id,
@@ -1149,6 +1250,8 @@ export function registerRoutes(router: import('express').Router): void {
             tx.paymentMethod ?? null,
             tx.receipt ? JSON.stringify(tx.receipt) : null,
             tx.sourceSaleId ?? null,
+            tx.operatorName ?? tx.receipt?.operatorName ?? null,
+            tx.sourceDeviceId ?? null,
           );
         }
 
@@ -1220,8 +1323,8 @@ export function registerRoutes(router: import('express').Router): void {
           throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo in backup');
         }
         db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           'main',
           s.storeName,
@@ -1229,6 +1332,11 @@ export function registerRoutes(router: import('express').Router): void {
           s.currency,
           s.taxRate,
           s.cardQrPayload,
+          s.transferBank ?? '',
+          s.transferAccountHolder ?? '',
+          s.transferAccountNumber ?? '',
+          normalizeTransferPhone(String(s.transferPhoneNumber ?? '')),
+          s.transferQrExtra ?? '',
           s.darkMode ? 1 : 0,
           s.lowStockNotifications ? 1 : 0,
           s.managerName,

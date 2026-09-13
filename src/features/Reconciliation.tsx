@@ -110,7 +110,7 @@ export function Reconciliation({ transactions, products, expenses }: Reconciliat
               k === 'cash'
                 ? t('reports.paymentCash')
                 : k === 'card'
-                  ? t('reports.paymentCard')
+                  ? t('reports.paymentOnline')
                   : k === 'transfer'
                     ? t('reports.paymentTransfer')
                     : t('reports.paymentOther');

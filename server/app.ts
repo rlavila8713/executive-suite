@@ -6,6 +6,7 @@ import { registerRoutes, ApiError } from './routes.js';
 import { getLanAddresses } from './lan.js';
 import { getDb } from './db.js';
 import { isLicenseActive, registerDevice } from './license.js';
+import { isDeviceRevoked, touchConnectedDevice } from './connectedDevices.js';
 
 const LICENSE_EXEMPT_PATHS = new Set([
   '/license',
@@ -64,6 +65,16 @@ export function createApp(): Express {
 
     try {
       const db = getDb();
+      if (isDeviceRevoked(db, deviceId)) {
+        res.status(403).json({ error: 'Device disconnected by administrator', code: 'ERR_DEVICE_REVOKED' });
+        return;
+      }
+      touchConnectedDevice(
+        db,
+        deviceId,
+        req.header('User-Agent') ?? '',
+        req.header('X-Client-Kind') ?? undefined,
+      );
       registerDevice(db, deviceId);
       const apiPath = normalizeApiPath(req);
 

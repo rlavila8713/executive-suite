@@ -12,11 +12,13 @@ export type ReceiptPrintLabels = {
   payment: string;
   paymentCash: string;
   paymentCard: string;
+  paymentOnline: string;
   paymentTransfer: string;
   paymentOther: string;
   amountPaid: string;
   changeGiven: string;
   thankYou: string;
+  operator: string;
 };
 
 function money(n: number): string {
@@ -42,7 +44,7 @@ export function buildReceiptPrintHtml(
   const taxLabel = receipt.tax > 0 ? labels.taxWithRate(rateStr) : labels.tax;
   const pay =
     receipt.paymentMethod === 'card'
-      ? labels.paymentCard
+      ? labels.paymentOnline
       : receipt.paymentMethod === 'transfer'
         ? labels.paymentTransfer
         : receipt.paymentMethod === 'other'
@@ -81,6 +83,11 @@ export function buildReceiptPrintHtml(
     <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:#71717a">${escapeHtml(labels.order)}</span><strong>${escapeHtml(orderNumber)}</strong></div>
     <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:#71717a">${escapeHtml(labels.date)}</span><span>${escapeHtml(dateStr)}</span></div>
     <div style="display:flex;justify-content:space-between"><span style="color:#71717a">${escapeHtml(labels.customer)}</span><span style="text-align:right;max-width:60%">${escapeHtml(customerName)}</span></div>
+    ${
+      receipt.operatorName?.trim()
+        ? `<div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:#71717a">${escapeHtml(labels.operator)}</span><span style="text-align:right;max-width:60%">${escapeHtml(receipt.operatorName)}</span></div>`
+        : ''
+    }
   </div>
   ${linesHtml}
   <div style="font-size:14px;margin-top:8px">

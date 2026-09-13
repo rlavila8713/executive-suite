@@ -32,6 +32,7 @@ import { CashStatusCard } from '../components/CashStatusCard';
 import { CashSession, Transaction, Product, Expense, Screen, type PaymentMethod } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
+import { transactionOperatorName, uniqueOperatorNames } from '../lib/operators';
 
 function startOfLocalDay(ts: number = Date.now()): number {
   const d = new Date(ts);
@@ -129,6 +130,7 @@ export function Dashboard({
   const [logOpen, setLogOpen] = useState(false);
   const [reversingTx, setReversingTx] = useState<Transaction | null>(null);
   const [receiptViewTx, setReceiptViewTx] = useState<Transaction | null>(null);
+  const [operatorFilter, setOperatorFilter] = useState('');
 
   const handleTxSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -160,9 +162,15 @@ export function Dashboard({
     setEditingTx(null);
   };
 
+  const operatorNames = useMemo(() => uniqueOperatorNames(transactions), [transactions]);
+
   const transactionsFiltered = useMemo(() => {
-    if (!headerSearch.trim()) return transactions;
-    return transactions.filter((tx) =>
+    let list = transactions;
+    if (operatorFilter) {
+      list = list.filter((tx) => transactionOperatorName(tx) === operatorFilter);
+    }
+    if (!headerSearch.trim()) return list;
+    return list.filter((tx) =>
       rowMatchesSearch(headerSearch, [
         tx.orderNumber,
         tx.customer,
@@ -170,11 +178,12 @@ export function Dashboard({
         tx.type,
         tx.timestamp,
         String(tx.amount),
+        transactionOperatorName(tx),
         ...(tx.receipt?.lines.map((l) => l.name) ?? []),
         ...(tx.receipt?.lines.map((l) => l.sku) ?? []),
       ]),
     );
-  }, [transactions, headerSearch]);
+  }, [transactions, headerSearch, operatorFilter]);
 
   const recent = transactionsFiltered.slice(0, 8);
 
@@ -355,7 +364,8 @@ export function Dashboard({
                     {t('dashboard.order')} {tx.orderNumber}
                   </p>
                   <p className="text-[10px] text-on-surface-variant font-medium truncate">
-                    {tx.customer} • {tx.timestamp}
+                    {tx.customer}
+                    {transactionOperatorName(tx) ? ` • ${transactionOperatorName(tx)}` : ''} • {tx.timestamp}
                   </p>
                 </div>
               </div>
@@ -513,7 +523,7 @@ export function Dashboard({
               className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
             >
               <option value="cash">{t('dashboard.pmCash')}</option>
-              <option value="card">{t('dashboard.pmCard')}</option>
+              <option value="card">{t('dashboard.pmOnline')}</option>
               <option value="transfer">{t('dashboard.pmTransfer')}</option>
               <option value="other">{t('dashboard.pmOther')}</option>
             </select>
@@ -531,6 +541,23 @@ export function Dashboard({
       </Modal>
 
       <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title={t('dashboard.txLogTitle')}>
+        <div className="mb-3">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+            {t('dashboard.operatorFilter')}
+          </label>
+          <select
+            value={operatorFilter}
+            onChange={(e) => setOperatorFilter(e.target.value)}
+            className="mt-1 bg-surface-container-high border-none rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
+          >
+            <option value="">{t('dashboard.operatorAll')}</option>
+            {operatorNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
           {transactionsFiltered.map((tx) => (
             <div
@@ -539,6 +566,7 @@ export function Dashboard({
             >
               <span className="font-bold text-primary truncate">
                 {tx.orderNumber} — {tx.customer}
+                {transactionOperatorName(tx) ? ` · ${transactionOperatorName(tx)}` : ''}
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <span className={cn('font-bold', tx.amount < 0 ? 'text-error' : 'text-primary')}>

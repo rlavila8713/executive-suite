@@ -112,7 +112,8 @@ function isSaleReceipt(x: unknown): x is SaleReceipt {
     (x.paymentMethod === 'cash' ||
       x.paymentMethod === 'card' ||
       x.paymentMethod === 'transfer' ||
-      x.paymentMethod === 'other')
+      x.paymentMethod === 'other') &&
+    (x.operatorName === undefined || typeof x.operatorName === 'string')
   );
 }
 
@@ -125,6 +126,8 @@ function isTransaction(x: unknown): x is Transaction {
     x.paymentMethod === 'card' ||
     x.paymentMethod === 'transfer' ||
     x.paymentMethod === 'other';
+  const operatorOk = x.operatorName === undefined || typeof x.operatorName === 'string';
+  const deviceOk = x.sourceDeviceId === undefined || typeof x.sourceDeviceId === 'string';
   return (
     typeof x.id === 'string' &&
     typeof x.orderNumber === 'string' &&
@@ -135,7 +138,9 @@ function isTransaction(x: unknown): x is Transaction {
     typeof x.type === 'string' &&
     typeof x.createdAt === 'number' &&
     receiptOk &&
-    pmOk
+    pmOk &&
+    operatorOk &&
+    deviceOk
   );
 }
 
@@ -169,6 +174,12 @@ function isAppSettings(x: unknown): x is AppSettings {
   if (!isRecord(x)) return false;
   const localeOk = x.locale === undefined || x.locale === 'es' || x.locale === 'en';
   const cardQrOk = x.cardQrPayload === undefined || typeof x.cardQrPayload === 'string';
+  const transferOk =
+    (x.transferBank === undefined || typeof x.transferBank === 'string') &&
+    (x.transferAccountHolder === undefined || typeof x.transferAccountHolder === 'string') &&
+    (x.transferAccountNumber === undefined || typeof x.transferAccountNumber === 'string') &&
+    (x.transferPhoneNumber === undefined || typeof x.transferPhoneNumber === 'string') &&
+    (x.transferQrExtra === undefined || typeof x.transferQrExtra === 'string');
   const storeLogoOk =
     x.storeLogo === undefined || typeof x.storeLogo === 'string';
   const storeLogoUrlOk =
@@ -180,6 +191,7 @@ function isAppSettings(x: unknown): x is AppSettings {
     typeof x.currency === 'string' &&
     typeof x.taxRate === 'number' &&
     cardQrOk &&
+    transferOk &&
     storeLogoOk &&
     storeLogoUrlOk &&
     typeof x.darkMode === 'boolean' &&

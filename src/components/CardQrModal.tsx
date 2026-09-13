@@ -8,9 +8,12 @@ export type CardQrModalProps = {
   onClose: () => void;
   /** Text encoded into the QR (card number, payment URL, etc.). */
   payload: string;
+  title?: string;
+  hint?: string;
+  empty?: string;
 };
 
-export function CardQrModal({ open, onClose, payload }: CardQrModalProps) {
+export function CardQrModal({ open, onClose, payload, title, hint, empty }: CardQrModalProps) {
   const { t } = useI18n();
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -51,7 +54,7 @@ export function CardQrModal({ open, onClose, payload }: CardQrModalProps) {
   const trimmed = payload.trim();
 
   return (
-    <Modal isOpen={open} onClose={onClose} title={t('pos.cardQrTitle')}>
+    <Modal isOpen={open} onClose={onClose} title={title ?? t('pos.cardQrTitle')}>
       <div className="flex flex-col items-center gap-4">
         {trimmed ? (
           dataUrl ? (
@@ -66,10 +69,10 @@ export function CardQrModal({ open, onClose, payload }: CardQrModalProps) {
             <p className="text-sm text-on-surface-variant">{t('pos.cardQrLoading')}</p>
           )
         ) : (
-          <p className="text-sm text-center text-on-surface-variant">{t('pos.cardQrEmpty')}</p>
+          <p className="text-sm text-center text-on-surface-variant">{empty ?? t('pos.cardQrEmpty')}</p>
         )}
         {trimmed && dataUrl ? (
-          <p className="text-xs text-center text-on-surface-variant max-w-xs">{t('pos.cardQrHint')}</p>
+          <p className="text-xs text-center text-on-surface-variant max-w-xs">{hint ?? t('pos.cardQrHint')}</p>
         ) : null}
         <Button type="button" className="w-full" onClick={onClose}>
           {t('pos.done')}
