@@ -208,16 +208,16 @@ export function Inventory({
         <PackagePlus size={14} />
         {t('inventory.receiveStock')}
       </Button>
-      <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => onUpdateStock(product.id, product.stock + 10)}>
-        +10
+      <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => onUpdateStock(product.id, product.stock + 1)}>
+        +1
       </Button>
       <Button
         variant="secondary"
         size="sm"
         className="h-8 w-8 p-0"
-        onClick={() => onUpdateStock(product.id, Math.max(0, product.stock - 10))}
+        onClick={() => onUpdateStock(product.id, Math.max(0, product.stock - 1))}
       >
-        -10
+        -1
       </Button>
     </div>
   );

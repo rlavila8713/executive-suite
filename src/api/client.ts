@@ -3,6 +3,7 @@ import type {
   CashSession,
   CheckoutPayload,
   ConnectedDevice,
+  ConnectedDevicesPage,
   Expense,
   LicenseInfo,
   LicensePlanId,
@@ -211,6 +212,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ closingCash }),
     }),
+  correctCashSessionClose: (id: string, closingCash: number) =>
+    request<CashSession>(`/api/cash-sessions/${id}/correct-close`, {
+      method: 'POST',
+      body: JSON.stringify({ closingCash }),
+    }),
 
   exportBackup: () => request<ExecutiveSuiteBackup>('/api/backup'),
   importBackup: (data: ExecutiveSuiteBackup) =>
@@ -230,7 +236,14 @@ export const api = {
 
   factoryReset: () => request<{ ok: boolean }>('/api/admin/factory-reset', { method: 'POST' }),
 
-  getConnectedDevices: () => request<ConnectedDevice[]>('/api/devices'),
+  getConnectedDevices: (params?: { page?: number; pageSize?: number; q?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.page != null) search.set('page', String(params.page));
+    if (params?.pageSize != null) search.set('pageSize', String(params.pageSize));
+    if (params?.q) search.set('q', params.q);
+    const qs = search.toString();
+    return request<ConnectedDevicesPage>(`/api/devices${qs ? `?${qs}` : ''}`);
+  },
   revokeConnectedDevice: (deviceId: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' }),
   assignDeviceOperator: (deviceId: string, operatorName: string) =>

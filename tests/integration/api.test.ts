@@ -78,24 +78,71 @@ describe('Executive Suite API integration', () => {
         headers: { 'User-Agent': 'Dart/3.0 (flutter)', 'X-Client-Kind': 'mobile' },
       });
 
-      const list = await api<
-        {
+      const list = await api<{
+        items: {
           deviceId: string;
           clientKind: string;
           online: boolean;
           isCurrent: boolean;
-        }[]
-      >('/api/devices');
+        }[];
+        total: number;
+        page: number;
+        pageSize: number;
+      }>('/api/devices');
       assert.equal(list.status, 200);
 
-      const mobile = list.body.find((d) => d.deviceId === 'mobile-client-1');
+      const mobile = list.body.items.find((d) => d.deviceId === 'mobile-client-1');
       assert.ok(mobile);
       assert.equal(mobile.clientKind, 'mobile');
       assert.equal(mobile.online, true);
 
-      const current = list.body.find((d) => d.isCurrent);
+      const current = list.body.items.find((d) => d.isCurrent);
       assert.ok(current);
       assert.equal(current.deviceId, TEST_DEVICE_ID);
+    });
+
+    it('paginates and filters devices by operator name or id', async () => {
+      const ids = Array.from({ length: 12 }, (_, i) => `paginate-device-${i}`);
+      for (const id of ids) {
+        await api('/api/settings', { deviceId: id });
+      }
+
+      await api(`/api/devices/${ids[0]}/operator`, {
+        method: 'PATCH',
+        body: { operatorName: 'Maria Lopez' },
+      });
+      await api(`/api/devices/${ids[1]}/operator`, {
+        method: 'PATCH',
+        body: { operatorName: 'Carlos Ruiz' },
+      });
+
+      const page1 = await api<{ items: { deviceId: string }[]; total: number; page: number; pageSize: number }>(
+        '/api/devices?page=1&pageSize=10',
+      );
+      assert.equal(page1.status, 200);
+      assert.equal(page1.body.page, 1);
+      assert.equal(page1.body.pageSize, 10);
+      assert.equal(page1.body.items.length, 10);
+      assert.ok(page1.body.total >= 12);
+
+      const page2 = await api<{ items: { deviceId: string }[]; total: number }>('/api/devices?page=2&pageSize=10');
+      assert.equal(page2.status, 200);
+      assert.ok(page2.body.items.length >= 2);
+
+      const byOperator = await api<{ items: { deviceId: string; operatorName: string }[]; total: number }>(
+        '/api/devices?q=maria',
+      );
+      assert.equal(byOperator.status, 200);
+      assert.equal(byOperator.body.total, 1);
+      assert.equal(byOperator.body.items[0]?.deviceId, ids[0]);
+      assert.equal(byOperator.body.items[0]?.operatorName, 'Maria Lopez');
+
+      const byId = await api<{ items: { deviceId: string }[]; total: number }>(
+        `/api/devices?q=${encodeURIComponent('paginate-device-5')}`,
+      );
+      assert.equal(byId.status, 200);
+      assert.equal(byId.body.total, 1);
+      assert.equal(byId.body.items[0]?.deviceId, ids[5]);
     });
 
     it('revokes a device and blocks further API access', async () => {
@@ -236,6 +283,14 @@ describe('Executive Suite API integration', () => {
       assert.equal(closed.body.closingCash, 150);
       // No cash sales but closing > opening — may flag surplus
       assert.ok(Array.isArray(closed.body.anomalies));
+
+      const corrected = await api<{ closingCash: number; anomalies: { kind: string }[] }>(
+        `/api/cash-sessions/${open.body.id}/correct-close`,
+        { method: 'POST', body: { closingCash: 100 } },
+      );
+      assert.equal(corrected.status, 200);
+      assert.equal(corrected.body.closingCash, 100);
+      assert.ok(Array.isArray(corrected.body.anomalies));
     });
 
     it('requires closing yesterday’s session before allowing a new sale', async () => {
