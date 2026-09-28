@@ -108,6 +108,7 @@ function AppView(props: AppState) {
     addToCart,
     removeFromCart,
     updateCartQuantity,
+    setCartItemQuantity,
     processSale,
     addProduct,
     updateProduct,
@@ -136,6 +137,7 @@ function AppView(props: AppState) {
     licenseUsable,
     openCashSession,
     closeCashSession,
+    correctCashSessionClose,
     requestLicense,
     activateLicense,
     factoryReset,
@@ -240,6 +242,7 @@ function AppView(props: AppState) {
             transactions={transactions}
             onOpenCashSession={openCashSession}
             onCloseCashSession={closeCashSession}
+            onCorrectCashSessionClose={correctCashSessionClose}
             onRefresh={refreshData}
           />
         );
@@ -271,6 +274,7 @@ function AppView(props: AppState) {
             addToCart={addToCart}
             removeFromCart={removeFromCart}
             updateQuantity={updateCartQuantity}
+            setItemQuantity={setCartItemQuantity}
             onCheckout={processSale}
           />
         );

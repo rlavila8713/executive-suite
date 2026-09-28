@@ -6,6 +6,7 @@ import {
   Shield,
   Globe,
   CreditCard,
+  ChevronLeft,
   ChevronRight,
   HardDrive,
   Upload,
@@ -46,6 +47,8 @@ import { buildServerConnectQrPayload, isValidTransferPhone, normalizeTransferPho
 
 type Section = 'general' | 'payments' | 'profile' | 'notifications' | 'security' | 'regional' | 'billing' | 'data' | 'server';
 
+const DEVICES_PAGE_SIZE = 10;
+
 interface SettingsProps {
   settings: AppSettings;
   licenseInfo: LicenseInfo | null;
@@ -75,6 +78,7 @@ export function Settings({
 }: SettingsProps) {
   const { t } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
+  const deviceSearchPrevRef = useRef('');
   const [section, setSection] = useState<Section>(initialSection ?? 'general');
   const [backupBusy, setBackupBusy] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
@@ -92,6 +96,10 @@ export function Settings({
   const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [serverMessage, setServerMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [connectedDevices, setConnectedDevices] = useState<ConnectedDevice[]>([]);
+  const [devicesTotal, setDevicesTotal] = useState(0);
+  const [devicesPage, setDevicesPage] = useState(1);
+  const [deviceSearch, setDeviceSearch] = useState('');
+  const [deviceSearchDebounced, setDeviceSearchDebounced] = useState('');
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [revokeBusyId, setRevokeBusyId] = useState<string | null>(null);
   const [storeLogoDraft, setStoreLogoDraft] = useState<string | null>(null);
@@ -275,21 +283,28 @@ export function Settings({
   const loadConnectedDevices = async () => {
     if (!apiConnected) {
       setConnectedDevices([]);
+      setDevicesTotal(0);
       return;
     }
     setDevicesLoading(true);
     try {
-      const devices = await api.getConnectedDevices();
-      setConnectedDevices(devices);
+      const result = await api.getConnectedDevices({
+        page: devicesPage,
+        pageSize: DEVICES_PAGE_SIZE,
+        q: deviceSearchDebounced || undefined,
+      });
+      setConnectedDevices(result.items);
+      setDevicesTotal(result.total);
       setOperatorDrafts((prev) => {
         const next = { ...prev };
-        for (const device of devices) {
+        for (const device of result.items) {
           if (!(device.deviceId in next)) next[device.deviceId] = device.operatorName;
         }
         return next;
       });
     } catch {
       setConnectedDevices([]);
+      setDevicesTotal(0);
     } finally {
       setDevicesLoading(false);
     }
@@ -364,17 +379,29 @@ export function Settings({
   const shortDeviceId = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id);
 
   useEffect(() => {
+    const id = window.setTimeout(() => {
+      const trimmed = deviceSearch.trim();
+      setDeviceSearchDebounced(trimmed);
+      if (trimmed !== deviceSearchPrevRef.current) {
+        deviceSearchPrevRef.current = trimmed;
+        setDevicesPage(1);
+      }
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [deviceSearch]);
+
+  useEffect(() => {
     if (section === 'server') {
       void loadHealth();
       void loadConnectedDevices();
     }
-  }, [section, apiConnected]);
+  }, [section, apiConnected, devicesPage, deviceSearchDebounced]);
 
   useEffect(() => {
     if (section !== 'server' || !apiConnected) return;
     const id = window.setInterval(() => void loadConnectedDevices(), 10_000);
     return () => window.clearInterval(id);
-  }, [section, apiConnected]);
+  }, [section, apiConnected, devicesPage, deviceSearchDebounced]);
 
   const saveApiUrl = () => {
     setApiBaseUrl(apiUrlDraft.trim() || DEFAULT_API_BASE_URL);
@@ -1041,10 +1068,24 @@ export function Settings({
                     </Button>
                   </div>
 
-                  {!apiConnected ? null : connectedDevices.length === 0 && !devicesLoading ? (
-                    <p className="text-sm text-on-surface-variant">{t('settings.serverDeviceNone')}</p>
-                  ) : (
-                    <div className="space-y-2">
+                  {!apiConnected ? null : (
+                    <div className="space-y-3">
+                      <Input
+                        value={deviceSearch}
+                        onChange={(e) => setDeviceSearch(e.target.value)}
+                        placeholder={t('settings.serverDeviceSearchPlaceholder')}
+                        aria-label={t('settings.serverDeviceSearchPlaceholder')}
+                        className="max-w-md"
+                      />
+
+                      {connectedDevices.length === 0 && !devicesLoading ? (
+                        <p className="text-sm text-on-surface-variant">
+                          {deviceSearchDebounced
+                            ? t('settings.serverDeviceNoResults')
+                            : t('settings.serverDeviceNone')}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
                       {connectedDevices.map((device) => {
                         const statusLabel = device.revokedAt != null
                           ? t('settings.serverDeviceRevoked')
@@ -1138,6 +1179,49 @@ export function Settings({
                           </div>
                         );
                       })}
+                        </div>
+                      )}
+
+                      {devicesTotal > DEVICES_PAGE_SIZE ? (
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                          <p className="text-xs text-on-surface-variant">
+                            {t('settings.serverDeviceShowing', {
+                              from: (devicesPage - 1) * DEVICES_PAGE_SIZE + 1,
+                              to: Math.min(devicesPage * DEVICES_PAGE_SIZE, devicesTotal),
+                              total: devicesTotal,
+                            })}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={devicesPage <= 1 || devicesLoading}
+                              onClick={() => setDevicesPage((p) => Math.max(1, p - 1))}
+                            >
+                              <ChevronLeft size={16} className="shrink-0" />
+                              {t('settings.serverDevicePrev')}
+                            </Button>
+                            <span className="text-xs font-medium text-on-surface-variant">
+                              {t('settings.serverDevicePage', {
+                                page: devicesPage,
+                                totalPages: Math.max(1, Math.ceil(devicesTotal / DEVICES_PAGE_SIZE)),
+                              })}
+                            </span>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={
+                                devicesLoading ||
+                                devicesPage >= Math.ceil(devicesTotal / DEVICES_PAGE_SIZE)
+                              }
+                              onClick={() => setDevicesPage((p) => p + 1)}
+                            >
+                              {t('settings.serverDeviceNext')}
+                              <ChevronRight size={16} className="shrink-0" />
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>

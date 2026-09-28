@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Card, Button, Input } from '../components/ui';
+import { Card, Button, Input, Modal } from '../components/ui';
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { CashAnomaly, CashAnomalyKind, CashSession, Transaction } from '../types';
 import { sessionPaymentBreakdown } from '../lib/reporting';
@@ -13,11 +13,20 @@ interface CashProps {
   transactions: Transaction[];
   onOpenCashSession: (openingCash: number) => Promise<void>;
   onCloseCashSession: (id: string, closingCash: number) => Promise<void>;
+  onCorrectCashSessionClose: (id: string, closingCash: number) => Promise<void>;
   onRefresh?: () => void | Promise<void>;
 }
 
 const ZERO_PAYMENTS = { cash: 0, card: 0, transfer: 0, other: 0 };
-const SESSION_TABLE_COLS = 11;
+const SESSION_TABLE_COLS = 12;
+
+function parseCashAmount(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed || !/^-?\d*([.,]\d*)?$/.test(trimmed)) return null;
+  const v = parseFloat(trimmed.replace(',', '.'));
+  if (!Number.isFinite(v) || v < 0) return null;
+  return v;
+}
 
 function money(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -40,6 +49,7 @@ export function Cash({
   transactions,
   onOpenCashSession,
   onCloseCashSession,
+  onCorrectCashSessionClose,
   onRefresh,
 }: CashProps) {
   const { t, locale } = useI18n();
@@ -48,6 +58,9 @@ export function Cash({
   const [cashMsg, setCashMsg] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [expandedAlerts, setExpandedAlerts] = useState<Record<string, boolean>>({});
+  const [correctSessionId, setCorrectSessionId] = useState<string | null>(null);
+  const [correctionInput, setCorrectionInput] = useState('');
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   const openSession = cashSessions.find((s) => s.closedAt == null) ?? null;
 
@@ -120,9 +133,8 @@ export function Cash({
 
   const handleCloseCash = async (id: string) => {
     setCashMsg(null);
-    const raw = closingById[id] ?? '';
-    const v = parseFloat(raw.replace(',', '.'));
-    if (!Number.isFinite(v) || v < 0) {
+    const v = parseCashAmount(closingById[id] ?? '');
+    if (v == null) {
       setCashMsg(t('cash.invalidAmount'));
       return;
     }
@@ -132,6 +144,35 @@ export function Cash({
       await onRefresh?.();
     } catch (e) {
       setCashMsg(mapMutationError(e, t));
+    }
+  };
+
+  const openCorrectClose = (session: CashSession) => {
+    setCorrectSessionId(session.id);
+    setCorrectionInput(session.closingCash != null ? String(session.closingCash) : '');
+    setCorrectionError(null);
+  };
+
+  const closeCorrectClose = () => {
+    setCorrectSessionId(null);
+    setCorrectionInput('');
+    setCorrectionError(null);
+  };
+
+  const handleSaveCorrection = async () => {
+    if (!correctSessionId) return;
+    const v = parseCashAmount(correctionInput);
+    if (v == null) {
+      setCorrectionError(t('cash.invalidAmount'));
+      return;
+    }
+    setCorrectionError(null);
+    try {
+      await onCorrectCashSessionClose(correctSessionId, v);
+      closeCorrectClose();
+      await onRefresh?.();
+    } catch (e) {
+      setCorrectionError(mapMutationError(e, t));
     }
   };
 
@@ -197,6 +238,7 @@ export function Cash({
                 <th className="px-4 py-3 text-right">{t('reports.paymentOther')}</th>
                 <th className="px-4 py-3">{t('dashboard.status')}</th>
                 <th className="px-4 py-3 w-[7rem]">{t('cash.alertsCol')}</th>
+                <th className="px-4 py-3">{t('cash.correctCloseCol')}</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -258,6 +300,15 @@ export function Cash({
                       )}
                     </td>
                     <td className="px-4 py-2">
+                      {s.closedAt != null ? (
+                        <Button type="button" size="sm" variant="secondary" onClick={() => openCorrectClose(s)}>
+                          {t('cash.correctCloseBtn')}
+                        </Button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="px-4 py-2">
                       {s.closedAt == null ? (
                         <div className="flex flex-wrap gap-2 items-center">
                           <Input
@@ -302,6 +353,36 @@ export function Cash({
           </table>
         </div>
       </Card>
+
+      <Modal isOpen={correctSessionId != null} onClose={closeCorrectClose} title={t('cash.correctCloseTitle')}>
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              {t('cash.correctCloseLabel')}
+            </label>
+            <Input
+              value={correctionInput}
+              onChange={(e) => {
+                setCorrectionInput(e.target.value);
+                if (correctionError) setCorrectionError(null);
+              }}
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              autoFocus
+            />
+          </div>
+          {correctionError ? <p className="text-sm text-error">{correctionError}</p> : null}
+          <div className="pt-2 flex gap-3">
+            <Button type="button" variant="secondary" className="flex-1" onClick={closeCorrectClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="button" className="flex-1" onClick={() => void handleSaveCorrection()}>
+              {t('cash.correctCloseSave')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

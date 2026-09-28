@@ -30,6 +30,7 @@ import { normalizeStoreLogo } from './storeLogo.js';
 import {
   getDeviceOperatorName,
   inferClientKind,
+  getConnectedDevice,
   listConnectedDevices,
   revokeConnectedDevice,
   setDeviceOperatorName,
@@ -1038,6 +1039,35 @@ export function registerRoutes(router: import('express').Router): void {
     }),
   );
 
+  router.post(
+    '/cash-sessions/:id/correct-close',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ closingCash: number }>(req.body, ['closingCash']);
+      if (typeof body.closingCash !== 'number' || !Number.isFinite(body.closingCash) || body.closingCash < 0) {
+        throw new ApiError(400, 'Invalid closing cash amount');
+      }
+      const db = getDb();
+      const s = db.prepare('SELECT * FROM cash_sessions WHERE id = ?').get(req.params.id) as
+        | Parameters<typeof rowToCashSession>[0]
+        | undefined;
+      if (!s || s.closed_at == null) throw new ApiError(404, 'Closed cash session not found');
+      const expectedCash = s.opening_cash + s.total_cash_sales;
+      const variance = body.closingCash - expectedCash;
+      const anomalies = detectCashAnomalies(s.opening_cash, body.closingCash, s.total_cash_sales);
+      db.prepare(
+        `UPDATE cash_sessions SET closing_cash = ?, expected_cash = ?, cash_variance = ?, anomalies_json = ? WHERE id = ?`,
+      ).run(
+        body.closingCash,
+        expectedCash,
+        variance,
+        anomalies.length > 0 ? JSON.stringify(anomalies) : null,
+        req.params.id,
+      );
+      const row = db.prepare('SELECT * FROM cash_sessions WHERE id = ?').get(req.params.id);
+      res.json(rowToCashSession(row as Parameters<typeof rowToCashSession>[0]));
+    }),
+  );
+
   // --- License ---
   router.get(
     '/license',
@@ -1089,7 +1119,13 @@ export function registerRoutes(router: import('express').Router): void {
     asyncHandler(async (req, res) => {
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim();
-      res.json(listConnectedDevices(db, deviceId));
+      const page = Math.max(1, Number.parseInt(String(req.query.page ?? '1'), 10) || 1);
+      const pageSize = Math.min(
+        50,
+        Math.max(1, Number.parseInt(String(req.query.pageSize ?? '10'), 10) || 10),
+      );
+      const q = typeof req.query.q === 'string' ? req.query.q : '';
+      res.json(listConnectedDevices(db, deviceId, Date.now(), { page, pageSize, q }));
     }),
   );
 
@@ -1123,8 +1159,9 @@ export function registerRoutes(router: import('express').Router): void {
       const operatorName = typeof body.operatorName === 'string' ? body.operatorName : '';
       const ok = setDeviceOperatorName(db, targetId, operatorName);
       if (!ok) throw new ApiError(404, 'Device not found', 'ERR_DEVICE_NOT_FOUND');
-      const devices = listConnectedDevices(db, req.header('X-Device-Id')?.trim());
-      res.json(devices.find((d) => d.deviceId === targetId));
+      const updated = getConnectedDevice(db, targetId, req.header('X-Device-Id')?.trim());
+      if (!updated) throw new ApiError(404, 'Device not found', 'ERR_DEVICE_NOT_FOUND');
+      res.json(updated);
     }),
   );
 
