@@ -210,6 +210,13 @@ export interface ConnectedDevice {
   isCurrent: boolean;
 }
 
+export interface ConnectedDevicesPage {
+  items: ConnectedDevice[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 /** Single-row app configuration stored locally (IndexedDB). */
 export interface AppSettings {
   id: 'main';

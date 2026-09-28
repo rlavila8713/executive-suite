@@ -153,6 +153,16 @@ export function useAppState() {
     );
   };
 
+  const setCartItemQuantity = (productId: string, quantity: number) => {
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.id !== productId) return item;
+        const next = Math.max(1, Math.min(quantity, Math.max(1, item.stock)));
+        return { ...item, quantity: next };
+      }),
+    );
+  };
+
   const clearCart = () => setCart([]);
 
   const processSale = async (payload: CheckoutPayload): Promise<Transaction> => {
@@ -339,6 +349,14 @@ export function useAppState() {
     void refreshAfterMutation();
   };
 
+  const correctCashSessionClose = async (id: string, closingCash: number) => {
+    guardMutation();
+    const updated = await api.correctCashSessionClose(id, closingCash);
+    beginLocalCommit();
+    setCashSessions((prev) => upsertById(prev, updated));
+    void refreshAfterMutation();
+  };
+
   const deleteProductCategory = async (id: string) => {
     guardMutation();
     try {
@@ -511,9 +529,11 @@ export function useAppState() {
     factoryReset,
     openCashSession,
     closeCashSession,
+    correctCashSessionClose,
     addToCart,
     removeFromCart,
     updateCartQuantity,
+    setCartItemQuantity,
     clearCart,
     processSale,
     addProduct,

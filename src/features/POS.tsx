@@ -9,6 +9,7 @@ import {
   ShoppingCart,
   ChevronDown,
   ArrowLeftRight,
+  Hash,
 } from 'lucide-react';
 import { Button, Input, Modal } from '../components/ui';
 import { CardQrModal } from '../components/CardQrModal';
@@ -47,7 +48,16 @@ interface POSProps {
   addToCart: (product: Product) => void;
   removeFromCart: (id: string) => void;
   updateQuantity: (id: string, delta: number) => void;
+  setItemQuantity: (id: string, quantity: number) => void;
   onCheckout: (payload: CheckoutPayload) => Promise<Transaction>;
+}
+
+function parsePositiveInt(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  const v = parseInt(trimmed, 10);
+  if (!Number.isFinite(v) || v < 1) return null;
+  return v;
 }
 
 export function POS({
@@ -71,6 +81,7 @@ export function POS({
   addToCart,
   removeFromCart,
   updateQuantity,
+  setItemQuantity,
   onCheckout,
 }: POSProps) {
   const { t } = useI18n();
@@ -84,6 +95,11 @@ export function POS({
   const [cashPayOpen, setCashPayOpen] = useState(false);
   const [amountPaidInput, setAmountPaidInput] = useState('');
   const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [qtyModalItemId, setQtyModalItemId] = useState<string | null>(null);
+  const [qtyModalInput, setQtyModalInput] = useState('');
+  const [qtyModalError, setQtyModalError] = useState<string | null>(null);
+
+  const qtyModalItem = qtyModalItemId != null ? cart.find((item) => item.id === qtyModalItemId) ?? null : null;
 
   const filteredProducts = useMemo(() => {
     return products.filter(
@@ -105,6 +121,29 @@ export function POS({
   const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
   const tax = paymentMethod === 'transfer' ? subtotal * (taxRatePercent / 100) : 0;
   const total = subtotal + tax;
+
+  const openQtyModal = (item: CartItem) => {
+    setQtyModalItemId(item.id);
+    setQtyModalInput(String(item.quantity));
+    setQtyModalError(null);
+  };
+
+  const closeQtyModal = () => {
+    setQtyModalItemId(null);
+    setQtyModalInput('');
+    setQtyModalError(null);
+  };
+
+  const handleSaveQty = () => {
+    if (!qtyModalItem) return;
+    const v = parsePositiveInt(qtyModalInput);
+    if (v == null) {
+      setQtyModalError(t('pos.invalidQuantity'));
+      return;
+    }
+    setItemQuantity(qtyModalItem.id, v);
+    closeQtyModal();
+  };
 
   const amountPaid = useMemo(() => {
     const raw = amountPaidInput.trim().replace(',', '.');
@@ -381,22 +420,32 @@ export function POS({
                       ${item.price.toFixed(2)} · {item.sku}
                     </p>
                     <div className="flex items-center justify-between mt-1.5 gap-2">
-                      <div className="inline-flex items-center rounded-md border border-black/10 bg-white dark:bg-slate-900 overflow-hidden">
+                      <div className="inline-flex items-center gap-1">
+                        <div className="inline-flex items-center rounded-md border border-black/10 bg-white dark:bg-slate-900 overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => updateQuantity(item.id, -1)}
+                            className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant"
+                          >
+                            <Minus size={12} />
+                          </button>
+                          <span className="px-2 text-xs font-bold tabular-nums min-w-[1.5rem] text-center">{item.quantity}</span>
+                          <button
+                            type="button"
+                            disabled={item.quantity >= item.stock}
+                            onClick={() => updateQuantity(item.id, 1)}
+                            className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant disabled:opacity-40"
+                          >
+                            <Plus size={12} />
+                          </button>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => updateQuantity(item.id, -1)}
-                          className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant"
+                          onClick={() => openQtyModal(item)}
+                          aria-label={t('pos.cartQtyEditAria')}
+                          className="p-1 rounded-md border border-black/10 bg-white dark:bg-slate-900 text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-colors"
                         >
-                          <Minus size={12} />
-                        </button>
-                        <span className="px-2 text-xs font-bold tabular-nums min-w-[1.5rem] text-center">{item.quantity}</span>
-                        <button
-                          type="button"
-                          disabled={item.quantity >= item.stock}
-                          onClick={() => updateQuantity(item.id, 1)}
-                          className="px-2 py-1 hover:bg-surface-container-low text-on-surface-variant disabled:opacity-40"
-                        >
-                          <Plus size={12} />
+                          <Hash size={12} />
                         </button>
                       </div>
                       <span className="text-sm font-bold text-primary tabular-nums shrink-0">
@@ -489,6 +538,45 @@ export function POS({
           </Button>
         </div>
       </section>
+
+      <Modal isOpen={qtyModalItem != null} onClose={closeQtyModal} title={t('pos.cartQtyTitle')}>
+        <div className="space-y-4">
+          {qtyModalItem ? (
+            <p className="text-sm font-semibold text-primary">{qtyModalItem.name}</p>
+          ) : null}
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              {t('pos.cartQtyLabel')}
+            </label>
+            <Input
+              value={qtyModalInput}
+              onChange={(e) => {
+                setQtyModalInput(e.target.value);
+                if (qtyModalError) setQtyModalError(null);
+              }}
+              type="text"
+              inputMode="numeric"
+              autoFocus
+              placeholder="1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveQty();
+              }}
+            />
+          </div>
+          {qtyModalItem ? (
+            <p className="text-xs text-on-surface-variant">{t('pos.cartQtyMaxHint', { max: qtyModalItem.stock })}</p>
+          ) : null}
+          {qtyModalError ? <p className="text-sm text-error">{qtyModalError}</p> : null}
+          <div className="pt-2 flex gap-3">
+            <Button type="button" variant="secondary" className="flex-1" onClick={closeQtyModal}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="button" className="flex-1" onClick={handleSaveQty}>
+              {t('pos.cartQtySave')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal isOpen={cashPayOpen} onClose={closeCashPayModal} title={t('pos.cashPayTitle')}>
         <div className="space-y-5">

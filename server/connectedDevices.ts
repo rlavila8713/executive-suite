@@ -17,6 +17,22 @@ export type ConnectedDevice = {
   isCurrent: boolean;
 };
 
+export type ConnectedDevicesPage = {
+  items: ConnectedDevice[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type ListConnectedDevicesQuery = {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+};
+
+export const CONNECTED_DEVICES_PAGE_SIZE_DEFAULT = 10;
+export const CONNECTED_DEVICES_PAGE_SIZE_MAX = 50;
+
 type ConnectedDeviceRow = {
   device_id: string;
   client_kind: string;
@@ -107,21 +123,12 @@ export function touchConnectedDevice(
   ).run(now, clientKind, userAgent.slice(0, 512), deviceId);
 }
 
-export function listConnectedDevices(
-  db: SqliteStore,
-  currentDeviceId?: string,
-  now: number = Date.now(),
-): ConnectedDevice[] {
-  ensureConnectedDevicesSchema(db);
-  const rows = db
-    .prepare(
-      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name
-       FROM connected_devices
-       ORDER BY revoked_at IS NOT NULL, last_seen_at DESC`,
-    )
-    .all() as ConnectedDeviceRow[];
-
-  return rows.map((row) => ({
+function mapConnectedDeviceRow(
+  row: ConnectedDeviceRow,
+  currentDeviceId: string | undefined,
+  now: number,
+): ConnectedDevice {
+  return {
     deviceId: row.device_id,
     clientKind: row.client_kind as ClientKind,
     userAgent: row.user_agent,
@@ -131,7 +138,72 @@ export function listConnectedDevices(
     operatorName: (row.operator_name ?? '').trim(),
     online: row.revoked_at == null && now - row.last_seen_at <= DEVICE_ONLINE_THRESHOLD_MS,
     isCurrent: currentDeviceId != null && row.device_id === currentDeviceId,
-  }));
+  };
+}
+
+export function getConnectedDevice(
+  db: SqliteStore,
+  deviceId: string,
+  currentDeviceId?: string,
+  now: number = Date.now(),
+): ConnectedDevice | undefined {
+  ensureConnectedDevicesSchema(db);
+  const row = db
+    .prepare(
+      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name
+       FROM connected_devices
+       WHERE device_id = ?`,
+    )
+    .get(deviceId) as ConnectedDeviceRow | undefined;
+  if (!row) return undefined;
+  return mapConnectedDeviceRow(row, currentDeviceId, now);
+}
+
+export function listConnectedDevices(
+  db: SqliteStore,
+  currentDeviceId?: string,
+  now: number = Date.now(),
+  query: ListConnectedDevicesQuery = {},
+): ConnectedDevicesPage {
+  ensureConnectedDevicesSchema(db);
+
+  const page = Math.max(1, query.page ?? 1);
+  const pageSize = Math.min(
+    CONNECTED_DEVICES_PAGE_SIZE_MAX,
+    Math.max(1, query.pageSize ?? CONNECTED_DEVICES_PAGE_SIZE_DEFAULT),
+  );
+  const q = (query.q ?? '').trim().toLowerCase();
+  const offset = (page - 1) * pageSize;
+
+  let whereClause = '';
+  const params: string[] = [];
+  if (q) {
+    const pattern = `%${q}%`;
+    whereClause = 'WHERE LOWER(operator_name) LIKE ? OR LOWER(device_id) LIKE ?';
+    params.push(pattern, pattern);
+  }
+
+  const countRow = db
+    .prepare(`SELECT COUNT(*) as total FROM connected_devices ${whereClause}`)
+    .get(...params) as { total: number };
+  const total = countRow.total;
+
+  const rows = db
+    .prepare(
+      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name
+       FROM connected_devices
+       ${whereClause}
+       ORDER BY revoked_at IS NOT NULL, last_seen_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, pageSize, offset) as ConnectedDeviceRow[];
+
+  return {
+    items: rows.map((row) => mapConnectedDeviceRow(row, currentDeviceId, now)),
+    total,
+    page,
+    pageSize,
+  };
 }
 
 export function getDeviceOperatorName(db: SqliteStore, deviceId: string): string {
