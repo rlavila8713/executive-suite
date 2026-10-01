@@ -14,6 +14,7 @@ import {
   Receipt,
   BarChart3,
   Boxes,
+  Warehouse,
   Settings,
   Bell,
   Search,
@@ -59,15 +60,22 @@ function useMenuGroups(): MenuGroup[] {
     },
     {
       id: 'catalog',
-      label: t('nav.groupCatalog'),
+      label: t('nav.groupCatalogMaster'),
       items: [
         { id: 'products', label: t('nav.products'), icon: Package },
-        { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
         { id: 'import', label: t('nav.import'), icon: FileUp },
         { id: 'categories', label: t('nav.categories'), icon: Tags },
         { id: 'subcategories', label: t('nav.subcategories'), icon: Layers },
         { id: 'locations', label: t('nav.locations'), icon: MapPin },
         { id: 'customers', label: t('nav.customers'), icon: Users },
+      ],
+    },
+    {
+      id: 'stock',
+      label: t('nav.groupStock'),
+      items: [
+        { id: 'warehouse', label: t('nav.warehouse'), icon: Warehouse },
+        { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
       ],
     },
     {

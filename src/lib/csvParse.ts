@@ -14,8 +14,21 @@ const HEADER_ALIASES: Record<string, string> = {
   price: 'price',
   costo: 'cost',
   cost: 'cost',
-  stock: 'stock',
-  cantidad: 'stock',
+  stock_almacen: 'warehouseStock',
+  'stock almacen': 'warehouseStock',
+  'stock almacén': 'warehouseStock',
+  cantidad_almacen: 'warehouseStock',
+  'cantidad almacen': 'warehouseStock',
+  'cantidad almacén': 'warehouseStock',
+  warehousestock: 'warehouseStock',
+  stock_tienda: 'storeStock',
+  'stock tienda': 'storeStock',
+  cantidad_tienda: 'storeStock',
+  'cantidad tienda': 'storeStock',
+  storestock: 'storeStock',
+  seccion: 'warehouseSection',
+  sección: 'warehouseSection',
+  section: 'warehouseSection',
   ubicacion: 'location',
   ubicación: 'location',
   location: 'location',
@@ -68,7 +81,9 @@ export type ProductImportRow = {
   subcategory: string;
   price: number;
   cost: number;
-  stock: number;
+  warehouseStock: number;
+  storeStock: number;
+  warehouseSection: string;
   location?: string;
   sku?: string;
   barcode?: string;
@@ -78,6 +93,14 @@ export type CsvParseResult =
   | { ok: true; rows: ProductImportRow[] }
   | { ok: false; error: string };
 
+function parseOptionalNonNegativeNumber(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return 0;
+  const v = parseFloat(trimmed.replace(',', '.'));
+  if (!Number.isFinite(v) || v < 0) return null;
+  return v;
+}
+
 export function parseProductImportCsv(text: string): CsvParseResult {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = normalized.split('\n').filter((l) => l.trim().length > 0);
@@ -86,7 +109,15 @@ export function parseProductImportCsv(text: string): CsvParseResult {
   }
 
   const headers = parseCsvLine(lines[0]).map(normalizeHeader);
-  const required = ['name', 'category', 'subcategory', 'price', 'cost', 'stock'] as const;
+  const required = [
+    'name',
+    'category',
+    'subcategory',
+    'cost',
+    'warehouseStock',
+    'storeStock',
+    'warehouseSection',
+  ] as const;
   for (const req of required) {
     if (!headers.includes(req)) {
       return { ok: false, error: `MISSING_COLUMN|${req}` };
@@ -108,23 +139,29 @@ export function parseProductImportCsv(text: string): CsvParseResult {
     const subcategory = (record.subcategory ?? '').trim();
     if (!name && !category && !subcategory) continue;
 
-    const price = parseFloat(String(record.price ?? '').replace(',', '.'));
+    const priceRaw = (record.price ?? '').trim();
+    const price = priceRaw ? parseFloat(priceRaw.replace(',', '.')) : 0;
     const cost = parseFloat(String(record.cost ?? '').replace(',', '.'));
-    const stock = parseInt(String(record.stock ?? '').replace(',', '.'), 10);
+    const warehouseStock = parseInt(String(record.warehouseStock ?? '').replace(',', '.'), 10);
+    const storeStock = parseInt(String(record.storeStock ?? '0').replace(',', '.'), 10);
 
     if (!name || !category || !subcategory) {
       return { ok: false, error: `ROW_MISSING_REQUIRED|${i + 1}` };
     }
-    if (!Number.isFinite(price) || price < 0) {
+    if (priceRaw && (!Number.isFinite(price) || price < 0)) {
       return { ok: false, error: `ROW_INVALID_PRICE|${i + 1}` };
     }
     if (!Number.isFinite(cost) || cost < 0) {
       return { ok: false, error: `ROW_INVALID_COST|${i + 1}` };
     }
-    if (!Number.isFinite(stock) || stock < 0) {
-      return { ok: false, error: `ROW_INVALID_STOCK|${i + 1}` };
+    if (!Number.isFinite(warehouseStock) || warehouseStock < 0) {
+      return { ok: false, error: `ROW_INVALID_WAREHOUSE_STOCK|${i + 1}` };
+    }
+    if (!Number.isFinite(storeStock) || storeStock < 0) {
+      return { ok: false, error: `ROW_INVALID_STORE_STOCK|${i + 1}` };
     }
 
+    const warehouseSection = (record.warehouseSection ?? '').trim();
     const location = (record.location ?? '').trim();
     const sku = (record.sku ?? '').trim();
     const barcode = (record.barcode ?? '').trim();
@@ -133,9 +170,11 @@ export function parseProductImportCsv(text: string): CsvParseResult {
       name,
       category,
       subcategory,
-      price,
+      price: Number.isFinite(price) ? price : 0,
       cost,
-      stock,
+      warehouseStock,
+      storeStock,
+      warehouseSection,
       ...(location ? { location } : {}),
       ...(sku ? { sku } : {}),
       ...(barcode ? { barcode } : {}),
@@ -155,13 +194,15 @@ export const PRODUCT_IMPORT_TEMPLATE_HEADERS = [
   'subcategoria',
   'precio',
   'costo',
-  'stock',
+  'stock_almacen',
+  'stock_tienda',
+  'seccion',
   'ubicacion',
   'sku',
   'codigo_barras',
 ] as const;
 
 export const PRODUCT_IMPORT_TEMPLATE_SAMPLE: (string | number)[][] = [
-  ['Lámpara LED', 'Iluminación', 'Lámparas', 10, 5, 20, 'Pasillo A', '', '7501234567890'],
-  ['Foco halógeno', 'Iluminación', 'Focos', 8.5, 4, 15, '', '', ''],
+  ['Sartén 24cm', 'Cocina', 'Sartenes', 25, 15, 100, 0, 'Cocina', 'Pasillo A', '', ''],
+  ['Foco halógeno', 'Iluminación', 'Focos', 0, 4, 50, 0, 'Migración inicial', '', '', ''],
 ];

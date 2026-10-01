@@ -51,6 +51,25 @@ export type ApiResult<T = unknown> = {
   ok: boolean;
 };
 
+/** Put units on the store shelf via warehouse receive + transfer (store stock cannot be set directly). */
+export async function fillStoreStockFromWarehouse(
+  productId: string,
+  quantity: number,
+  unitCost = 1,
+  price = 0,
+): Promise<void> {
+  const receive = await api(`/api/products/${productId}/receive`, {
+    method: 'POST',
+    body: { quantity, unitCost, price },
+  });
+  if (!receive.ok) throw new Error(`receive failed: ${receive.status}`);
+  const transfer = await api(`/api/warehouse/stock/${productId}/transfer-to-store`, {
+    method: 'POST',
+    body: { quantity, price: price > 0 ? price : 1 },
+  });
+  if (!transfer.ok) throw new Error(`transfer failed: ${transfer.status}`);
+}
+
 export async function api<T = unknown>(
   apiPath: string,
   options: {
@@ -65,6 +84,7 @@ export async function api<T = unknown>(
   const headers: Record<string, string> = {
     ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     'X-Device-Id': options.deviceId ?? TEST_DEVICE_ID,
+    'X-Client-Kind': 'web',
     ...options.headers,
   };
 

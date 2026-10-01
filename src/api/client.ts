@@ -14,6 +14,11 @@ import type {
   ProductLocation,
   ProductSubcategory,
   Transaction,
+  Warehouse,
+  WarehouseMovement,
+  WarehouseSection,
+  WarehouseStock,
+  WarehouseSummaryReport,
 } from '../types';
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
@@ -86,6 +91,7 @@ export type ProductImportResult = {
     subcategories: number;
     locations: number;
     products: number;
+    warehouseEntries: number;
   };
   errors: { row: number; message: string }[];
 };
@@ -95,8 +101,13 @@ export type ProductImportValidation = {
     new: number;
     duplicateExisting: number;
     duplicateInFile: number;
+    review: number;
   };
-  rows: { row: number; status: 'new' | 'duplicate_existing' | 'duplicate_in_file'; code?: string }[];
+  rows: {
+    row: number;
+    status: 'new' | 'duplicate_existing' | 'duplicate_in_file' | 'review';
+    code?: string;
+  }[];
 };
 
 export const api = {
@@ -114,17 +125,21 @@ export const api = {
     request<Product>(`/api/products/${id}/stock`, { method: 'PATCH', body: JSON.stringify({ stock }) }),
   receiveProductStock: (
     id: string,
-    payload: { quantity: number; unitCost: number; price: number },
+    payload: { quantity: number; unitCost: number; price?: number },
   ) =>
     request<{
       product: Product;
-      previousStock: number;
-      previousCost: number;
-      newStock: number;
-      newCost: number;
+      previousWarehouseQty: number;
+      newWarehouseQty: number;
+      warehouseStock: WarehouseStock;
       receivedQuantity: number;
       receivedUnitCost: number;
     }>(`/api/products/${id}/receive`, { method: 'POST', body: JSON.stringify(payload) }),
+  transferWarehouseToStore: (productId: string, quantity: number, price: number) =>
+    request<{ product: Product; warehouseStock: WarehouseStock }>(
+      `/api/warehouse/stock/${encodeURIComponent(productId)}/transfer-to-store`,
+      { method: 'POST', body: JSON.stringify({ quantity, price }) },
+    ),
   deleteProduct: (id: string) => request<void>(`/api/products/${id}`, { method: 'DELETE' }),
 
   importProducts: (rows: {
@@ -133,9 +148,12 @@ export const api = {
     subcategory: string;
     price: number;
     cost: number;
-    stock: number;
+    warehouseStock: number;
+    storeStock: number;
+    warehouseSection: string;
     location?: string;
     sku?: string;
+    barcode?: string;
   }[]) =>
     request<ProductImportResult>('/api/import/products', { method: 'POST', body: JSON.stringify({ rows }) }),
 
@@ -145,9 +163,12 @@ export const api = {
     subcategory: string;
     price: number;
     cost: number;
-    stock: number;
+    warehouseStock: number;
+    storeStock: number;
+    warehouseSection: string;
     location?: string;
     sku?: string;
+    barcode?: string;
   }[]) =>
     request<ProductImportValidation>('/api/import/products/validate', {
       method: 'POST',
@@ -193,6 +214,41 @@ export const api = {
     request<{ sku: string }>(
       `/api/products/next-sku?categoryId=${encodeURIComponent(categoryId)}&subcategoryId=${encodeURIComponent(subcategoryId)}`,
     ),
+
+  getWarehouses: () => request<Warehouse[]>('/api/warehouse'),
+  updateWarehouse: (id: string, name: string) =>
+    request<Warehouse>(`/api/warehouse/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  getWarehouseSections: () => request<WarehouseSection[]>('/api/warehouse/sections'),
+  createWarehouseSection: (name: string) =>
+    request<WarehouseSection>('/api/warehouse/sections', { method: 'POST', body: JSON.stringify({ name }) }),
+  updateWarehouseSection: (id: string, name: string) =>
+    request<WarehouseSection>(`/api/warehouse/sections/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteWarehouseSection: (id: string) =>
+    request<void>(`/api/warehouse/sections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getWarehouseStock: (sectionId?: string) =>
+    request<WarehouseStock[]>(
+      sectionId
+        ? `/api/warehouse/stock?sectionId=${encodeURIComponent(sectionId)}`
+        : '/api/warehouse/stock',
+    ),
+  reassignWarehouseSection: (productId: string, sectionId: string) =>
+    request<WarehouseStock>(`/api/warehouse/stock/${encodeURIComponent(productId)}/section`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sectionId }),
+    }),
+  getWarehouseMovements: (productId?: string) =>
+    request<WarehouseMovement[]>(
+      productId
+        ? `/api/warehouse/movements?productId=${encodeURIComponent(productId)}`
+        : '/api/warehouse/movements',
+    ),
+  getWarehouseSummary: () => request<WarehouseSummaryReport>('/api/warehouse/reports/summary'),
 
   getTransactions: () => request<Transaction[]>('/api/transactions'),
   createTransaction: (row: Omit<Transaction, 'id'>) =>

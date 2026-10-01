@@ -16,6 +16,20 @@ import { computeSessionPaymentTotals } from './reporting.js';
 import { computeWeightedAverageCost } from './inventoryCost.js';
 import { DEFAULT_APP_SETTINGS, normalizeTransferPhone } from './constants.js';
 import { registerCatalogRoutes } from './catalogRoutes.js';
+import { registerWarehouseRoutes } from './warehouseRoutes.js';
+import {
+  ensureWarehouseStockRow,
+  getDefaultWarehouse,
+  MIGRATION_SECTION_NAME,
+  receiveProductToWarehouse,
+  requireWebClientForWarehouse,
+  rowToWarehouse,
+  rowToWarehouseMovement,
+  rowToWarehouseSection,
+  rowToWarehouseStock,
+} from './warehouse.js';
+import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { normalizeInitialStoreStock, rejectDirectStoreStockMutation } from './storeStockPolicy.js';
 import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
 import {
@@ -192,13 +206,11 @@ export function registerRoutes(router: import('express').Router): void {
       const sku = String(body.sku ?? '').trim();
       const category = String(body.category ?? '').trim();
       if (!name || !sku || !category) throw new ApiError(400, 'name, sku and category required');
-      const price = Number(body.price);
-      const cost = Number(body.cost);
-      const stock = Number(body.stock);
+      const stock = normalizeInitialStoreStock(Number(body.stock));
       const image = String(body.image ?? '');
-      if (!Number.isFinite(price) || !Number.isFinite(cost) || !Number.isFinite(stock)) {
-        throw new ApiError(400, 'price, cost and stock must be numbers');
-      }
+      const price = 0;
+      const cost = 0;
+      const warehouseCost = 0;
       const db = getDb();
       const id = newId();
       const categoryId = String(body.categoryId ?? '');
@@ -208,9 +220,16 @@ export function registerRoutes(router: import('express').Router): void {
       const unitOfMeasure = String(body.unitOfMeasure ?? 'unidad');
       const locationId = body.locationId != null && body.locationId !== '' ? String(body.locationId) : null;
       const barcode = body.barcode != null && body.barcode !== '' ? String(body.barcode) : null;
+      const warehouse = getDefaultWarehouse(db);
+      const migrationSection = db
+        .prepare(
+          'SELECT id FROM warehouse_sections WHERE warehouse_id = ? AND name = ? COLLATE NOCASE LIMIT 1',
+        )
+        .get(warehouse.id, MIGRATION_SECTION_NAME) as { id: string } | undefined;
+
       db.prepare(
-        `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO products (id, name, sku, category, price, cost, warehouse_cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         name,
@@ -218,6 +237,7 @@ export function registerRoutes(router: import('express').Router): void {
         category,
         price,
         cost,
+        warehouseCost,
         stock,
         image,
         categoryId,
@@ -228,6 +248,9 @@ export function registerRoutes(router: import('express').Router): void {
         locationId,
         barcode,
       );
+      if (migrationSection) {
+        ensureWarehouseStockRow(db, warehouse.id, migrationSection.id, id, cost);
+      }
       const row = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
       res.status(201).json(rowToProduct(row as Parameters<typeof rowToProduct>[0]));
     }),
@@ -240,15 +263,22 @@ export function registerRoutes(router: import('express').Router): void {
       const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
       if (!existing) throw new ApiError(404, 'Product not found');
       const body = req.body as Record<string, unknown>;
+      if (body.stock !== undefined) {
+        rejectDirectStoreStockMutation();
+      }
+      if (body.price !== undefined || body.cost !== undefined || body.warehouseCost !== undefined) {
+        throw new ApiError(
+          409,
+          'Price and costs are set via warehouse entry or transfer',
+          'ERR_PRODUCT_PRICING_READONLY',
+        );
+      }
       const fields: string[] = [];
       const values: unknown[] = [];
       const map: Record<string, string> = {
         name: 'name',
         sku: 'sku',
         category: 'category',
-        price: 'price',
-        cost: 'cost',
-        stock: 'stock',
         image: 'image',
         categoryId: 'category_id',
         subcategoryId: 'subcategory_id',
@@ -274,29 +304,19 @@ export function registerRoutes(router: import('express').Router): void {
 
   router.patch(
     '/products/:id/stock',
-    asyncHandler(async (req, res) => {
-      const body = requireBody<{ stock: number }>(req.body, ['stock']);
-      const db = getDb();
-      const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-      if (!existing) throw new ApiError(404, 'Product not found');
-      const stock = Math.max(0, Math.floor(body.stock));
-      db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(stock, req.params.id);
-      const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-      res.json(rowToProduct(row as Parameters<typeof rowToProduct>[0]));
+    asyncHandler(async (_req, _res) => {
+      rejectDirectStoreStockMutation();
     }),
   );
 
   router.post(
     '/products/:id/receive',
     asyncHandler(async (req, res) => {
-      const body = requireBody<{ quantity: number; unitCost: number; price: number }>(req.body, [
-        'quantity',
-        'unitCost',
-        'price',
-      ]);
+      requireWebClientForWarehouse(req);
+      const body = req.body as { quantity?: number; unitCost?: number; price?: number };
       const quantity = Math.floor(Number(body.quantity));
       const unitCost = Number(body.unitCost);
-      const price = Number(body.price);
+      const price = body.price === undefined || body.price === null ? 0 : Number(body.price);
       if (!Number.isFinite(quantity) || quantity <= 0) {
         throw new ApiError(400, 'quantity must be a positive integer', 'ERR_INVALID_RECEIVE_QTY');
       }
@@ -308,30 +328,22 @@ export function registerRoutes(router: import('express').Router): void {
       }
 
       const db = getDb();
-      const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as
-        | Parameters<typeof rowToProduct>[0]
-        | undefined;
-      if (!existing) throw new ApiError(404, 'Product not found');
-
-      const previousStock = Number(existing.stock);
-      const previousCost = Number(existing.cost);
-      const newStock = previousStock + quantity;
-      const newCost = computeWeightedAverageCost(previousStock, previousCost, quantity, unitCost);
-
-      db.prepare('UPDATE products SET stock = ?, cost = ?, price = ? WHERE id = ?').run(
-        newStock,
-        newCost,
-        price,
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const operator = getDeviceOperatorName(db, deviceId);
+      const result = receiveProductToWarehouse(
+        db,
         req.params.id,
+        quantity,
+        unitCost,
+        price,
+        operator || null,
       );
 
-      const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
       res.json({
-        product: rowToProduct(row as Parameters<typeof rowToProduct>[0]),
-        previousStock,
-        previousCost,
-        newStock,
-        newCost,
+        product: rowToProduct(result.product as Parameters<typeof rowToProduct>[0]),
+        previousWarehouseQty: result.previousWarehouseQty,
+        newWarehouseQty: result.newWarehouseQty,
+        warehouseStock: result.warehouseStock,
         receivedQuantity: quantity,
         receivedUnitCost: unitCost,
       });
@@ -1398,13 +1410,32 @@ export function registerRoutes(router: import('express').Router): void {
           }
         : { ...DEFAULT_APP_SETTINGS, storeLogo: '' };
 
+      const warehouses = db.prepare('SELECT * FROM warehouses ORDER BY name').all();
+      const warehouseSections = db.prepare('SELECT * FROM warehouse_sections ORDER BY name').all();
+      const warehouseStock = db
+        .prepare(
+          `SELECT ws.*, s.name AS section_name, p.name AS product_name, p.sku AS product_sku
+           FROM warehouse_stock ws
+           JOIN warehouse_sections s ON s.id = ws.section_id
+           JOIN products p ON p.id = ws.product_id`,
+        )
+        .all();
+      const warehouseMovements = db
+        .prepare('SELECT * FROM warehouse_movements ORDER BY created_at DESC LIMIT 5000')
+        .all();
+      const customers = db
+        .prepare('SELECT * FROM customers ORDER BY first_name, last_name')
+        .all()
+        .map((r) => rowToCustomer(r as Parameters<typeof rowToCustomer>[0]));
+
       res.json({
-        schemaVersion: 4,
+        schemaVersion: 6,
         exportedAt: new Date().toISOString(),
         app: 'executive-suite',
         products,
         transactions,
         expenses,
+        customers,
         appSettings,
         productCategories,
         productSubcategories: subcategories.map((s) => ({
@@ -1415,6 +1446,20 @@ export function registerRoutes(router: import('express').Router): void {
         })),
         productLocations: locations.map((l) => ({ id: l.id, name: l.name })),
         cashSessions,
+        warehouses: warehouses.map((w) => rowToWarehouse(w as Parameters<typeof rowToWarehouse>[0])),
+        warehouseSections: warehouseSections.map((s) =>
+          rowToWarehouseSection(s as Parameters<typeof rowToWarehouseSection>[0]),
+        ),
+        warehouseStock: warehouseStock.map((r) =>
+          rowToWarehouseStock(r as Parameters<typeof rowToWarehouseStock>[0], {
+            sectionName: (r as { section_name: string }).section_name,
+            productName: (r as { product_name: string }).product_name,
+            productSku: (r as { product_sku: string }).product_sku,
+          }),
+        ),
+        warehouseMovements: warehouseMovements.map((m) =>
+          rowToWarehouseMovement(m as Parameters<typeof rowToWarehouseMovement>[0]),
+        ),
       });
     }),
   );
@@ -1427,8 +1472,13 @@ export function registerRoutes(router: import('express').Router): void {
       const db = getDb();
 
       db.runInTransaction(() => {
+        db.prepare('DELETE FROM warehouse_movements').run();
+        db.prepare('DELETE FROM warehouse_stock').run();
+        db.prepare('DELETE FROM warehouse_sections').run();
+        db.prepare('DELETE FROM warehouses').run();
         db.prepare('DELETE FROM products').run();
         db.prepare('DELETE FROM transactions').run();
+        db.prepare('DELETE FROM customers').run();
         db.prepare('DELETE FROM expenses').run();
         db.prepare('DELETE FROM categories').run();
         db.prepare('DELETE FROM subcategories').run();
@@ -1437,8 +1487,8 @@ export function registerRoutes(router: import('express').Router): void {
         db.prepare('DELETE FROM app_settings').run();
 
         const insertProduct = db.prepare(
-          `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO products (id, name, sku, category, price, cost, warehouse_cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const p of data.products ?? []) {
           insertProduct.run(
@@ -1448,6 +1498,7 @@ export function registerRoutes(router: import('express').Router): void {
             p.category,
             p.price,
             p.cost,
+            p.warehouseCost ?? 0,
             p.stock,
             p.image,
             p.categoryId ?? '',
@@ -1522,6 +1573,22 @@ export function registerRoutes(router: import('express').Router): void {
           insertLoc.run(l.id, l.name);
         }
 
+        const insertCustomer = db.prepare(
+          `INSERT INTO customers (id, first_name, last_name, address, phone, notes, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const c of data.customers ?? []) {
+          insertCustomer.run(
+            c.id,
+            c.firstName,
+            c.lastName ?? '',
+            c.address ?? '',
+            c.phone ?? '',
+            c.notes ?? '',
+            c.createdAt ?? Date.now(),
+          );
+        }
+
         const insertSession = db.prepare(
           `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, total_debt_sales, expected_cash, cash_variance, anomalies_json)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1573,6 +1640,62 @@ export function registerRoutes(router: import('express').Router): void {
           s.locale,
           storeLogo,
         );
+
+        const insertWarehouse = db.prepare(
+          'INSERT INTO warehouses (id, name, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        );
+        for (const w of data.warehouses ?? []) {
+          insertWarehouse.run(w.id, w.name, w.isDefault ? 1 : 0, w.createdAt, w.updatedAt ?? null);
+        }
+
+        const insertSection = db.prepare(
+          'INSERT INTO warehouse_sections (id, warehouse_id, name, is_system, created_at) VALUES (?, ?, ?, ?, ?)',
+        );
+        for (const sec of data.warehouseSections ?? []) {
+          insertSection.run(sec.id, sec.warehouseId, sec.name, sec.isSystem ? 1 : 0, sec.createdAt);
+        }
+
+        const insertWStock = db.prepare(
+          `INSERT INTO warehouse_stock (id, warehouse_id, section_id, product_id, quantity, unit_cost, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const ws of data.warehouseStock ?? []) {
+          insertWStock.run(
+            ws.id,
+            ws.warehouseId,
+            ws.sectionId,
+            ws.productId,
+            ws.quantity,
+            ws.unitCost,
+            ws.updatedAt ?? null,
+          );
+        }
+
+        const insertWMove = db.prepare(
+          `INSERT INTO warehouse_movements (id, warehouse_id, product_id, section_id, type, quantity_delta, unit_cost, balance_after, reference_type, reference_id, notes, created_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const m of data.warehouseMovements ?? []) {
+          insertWMove.run(
+            m.id,
+            m.warehouseId,
+            m.productId,
+            m.sectionId,
+            m.type,
+            m.quantityDelta,
+            m.unitCost,
+            m.balanceAfter,
+            m.referenceType,
+            m.referenceId,
+            m.notes,
+            m.createdAt,
+            m.createdBy,
+          );
+        }
+
+        if (!data.warehouses?.length) {
+          migrateWarehouseSchema(db);
+        }
       });
 
       res.json({ ok: true });
@@ -1580,4 +1703,5 @@ export function registerRoutes(router: import('express').Router): void {
   );
 
   registerCatalogRoutes(router);
+  registerWarehouseRoutes(router);
 }

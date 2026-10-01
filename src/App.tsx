@@ -21,6 +21,7 @@ import { Reports } from './features/Reports';
 import { Receivables } from './features/Receivables';
 import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
+import { Warehouse } from './features/Warehouse';
 import { Settings } from './features/Settings';
 import { useAppState } from './hooks/useAppState';
 import { Screen } from './types';
@@ -68,6 +69,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.products');
     case 'import':
       return t('app.titles.import');
+    case 'warehouse':
+      return t('app.titles.warehouse');
     case 'categories':
       return t('app.titles.categories');
     case 'subcategories':
@@ -130,8 +133,17 @@ function AppView(props: AppState) {
     addProduct,
     updateProduct,
     receiveProductStock,
+    transferWarehouseToStore,
     deleteProduct,
     importProducts,
+    warehouseSections,
+    warehouseStock,
+    warehouseSummary,
+    warehouseMovements,
+    addWarehouseSection,
+    updateWarehouseSection,
+    deleteWarehouseSection,
+    reassignWarehouseSection,
     addExpense,
     updateExpense,
     deleteExpense,
@@ -218,6 +230,23 @@ function AppView(props: AppState) {
         );
       case 'import':
         return <Import onImport={importProducts} />;
+      case 'warehouse':
+        return (
+          <Warehouse
+            products={products}
+            sections={warehouseSections}
+            stock={warehouseStock}
+            summary={warehouseSummary}
+            movements={warehouseMovements}
+            globalSearch={globalSearch}
+            onAddSection={addWarehouseSection}
+            onUpdateSection={updateWarehouseSection}
+            onDeleteSection={deleteWarehouseSection}
+            onReassignSection={reassignWarehouseSection}
+            onReceiveStock={receiveProductStock}
+            onTransferToStore={transferWarehouseToStore}
+          />
+        );
       case 'categories':
         return (
           <Categories
@@ -361,8 +390,6 @@ function AppView(props: AppState) {
             productCategories={productCategories}
             productSubcategories={productSubcategories}
             globalSearch={globalSearch}
-            onUpdateStock={(id, stock) => updateProduct(id, { stock })}
-            onReceiveStock={receiveProductStock}
             onSyncStock={refreshData}
             syncBusy={apiChecking}
           />

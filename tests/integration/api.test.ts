@@ -12,6 +12,7 @@ import {
   setupTestServer,
   teardownTestServer,
   TEST_DEVICE_ID,
+  fillStoreStockFromWarehouse,
 } from './helpers.js';
 
 function readPrivateKey(): string | null {
@@ -201,8 +202,67 @@ describe('Executive Suite API integration', () => {
     });
   });
 
+  describe('warehouse', () => {
+    it('seeds default warehouse stock without changing store stock on migration', async () => {
+      const product = await api<{ id: string; stock: number }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Tornillo',
+          sku: 'TOR-001',
+          category: 'Ferretería',
+          price: 5,
+          cost: 2,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      assert.equal(product.body.stock, 0);
+
+      const stock = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      assert.equal(stock.status, 200);
+      const row = stock.body.find((r) => r.productId === product.body.id);
+      assert.ok(row);
+      assert.equal(row!.quantity, 0);
+    });
+
+    it('receives to warehouse and transfers to store', async () => {
+      const product = await api<{ id: string; stock: number }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Clavo',
+          sku: 'CLA-001',
+          category: 'Ferretería',
+          price: 3,
+          cost: 1,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      const receive = await api<{ newWarehouseQty: number; product: { stock: number } }>(
+        `/api/products/${product.body.id}/receive`,
+        { method: 'POST', body: { quantity: 10, unitCost: 1, price: 3 } },
+      );
+      assert.equal(receive.status, 200);
+      assert.equal(receive.body.newWarehouseQty, 10);
+      assert.equal(receive.body.product.stock, 0);
+      assert.equal(receive.body.product.cost, 0);
+      assert.equal(receive.body.product.warehouseCost, 1);
+      assert.equal(receive.body.product.price, 3);
+
+      const transfer = await api<{ product: { stock: number; cost: number; price: number }; warehouseStock: { quantity: number } }>(
+        `/api/warehouse/stock/${product.body.id}/transfer-to-store`,
+        { method: 'POST', body: { quantity: 4, price: 3 } },
+      );
+      assert.equal(transfer.status, 200);
+      assert.equal(transfer.body.product.stock, 4);
+      assert.equal(transfer.body.product.cost, 1);
+      assert.equal(transfer.body.warehouseStock.quantity, 6);
+    });
+  });
+
   describe('products & categories', () => {
-    it('creates category and product, updates stock', async () => {
+    it('creates category and product; blocks direct store stock edits', async () => {
       const cat = await api<{ id: string; name: string }>('/api/categories', {
         method: 'POST',
         body: { name: 'Bebidas' },
@@ -218,18 +278,22 @@ describe('Executive Suite API integration', () => {
           categoryId: cat.body.id,
           price: 50,
           cost: 20,
-          stock: 10,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
-      assert.equal(product.body.stock, 10);
+      assert.equal(product.body.stock, 0);
 
-      const stock = await api<{ stock: number }>(`/api/products/${product.body.id}/stock`, {
+      await fillStoreStockFromWarehouse(product.body.id, 10, 20, 50);
+      const refreshed = await api<{ stock: number }>(`/api/products/${product.body.id}`);
+      assert.equal(refreshed.body.stock, 10);
+
+      const stock = await api<{ code?: string }>(`/api/products/${product.body.id}/stock`, {
         method: 'PATCH',
         body: { stock: 7 },
       });
-      assert.equal(stock.status, 200);
-      assert.equal(stock.body.stock, 7);
+      assert.equal(stock.status, 409);
+      assert.equal(stock.body.code, 'ERR_STORE_STOCK_DIRECT_EDIT');
 
       const list = await api<{ id: string }[]>('/api/products?includeImages=false');
       assert.equal(list.status, 200);
@@ -380,10 +444,11 @@ describe('Executive Suite API integration', () => {
           category: 'Alimentos',
           price: 10,
           cost: 4,
-          stock: 5,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 5, 4, 10);
 
       const sale = await api('/api/sales', {
         method: 'POST',
@@ -411,10 +476,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 25,
           cost: 10,
-          stock: 8,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 8, 10, 25);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -480,10 +546,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 5,
           cost: 1,
-          stock: 1,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 1, 1, 5);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -533,10 +600,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 12,
           cost: 4,
-          stock: 3,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 4, 12);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -740,6 +808,72 @@ describe('Executive Suite API integration', () => {
       assert.ok(Array.isArray(backup.body.products));
     });
 
+    it('round-trips backup including warehouse_cost and warehouse stock', async () => {
+      const created = await api<{ id: string }>('/api/products', {
+        method: 'POST',
+        body: { name: 'Backup SKU', sku: 'BKP-99', category: 'Test', stock: 0 },
+      });
+      assert.equal(created.status, 201);
+      const productId = created.body.id;
+
+      await api(`/api/products/${productId}/receive`, {
+        method: 'POST',
+        body: { quantity: 12, unitCost: 3.5, price: 9 },
+      });
+      await api(`/api/warehouse/stock/${productId}/transfer-to-store`, {
+        method: 'POST',
+        body: { quantity: 4, price: 9 },
+      });
+
+      const customer = await api<{ id: string }>('/api/customers', {
+        method: 'POST',
+        body: { firstName: 'María', lastName: 'López', phone: '555-0100' },
+      });
+      assert.equal(customer.status, 201);
+
+      const backup = await api<{
+        schemaVersion: number;
+        products: { id: string; warehouseCost: number; stock: number; cost: number }[];
+        warehouseStock: { productId: string; quantity: number }[];
+        warehouses: unknown[];
+        customers: { id: string; firstName: string }[];
+      }>('/api/backup');
+      assert.equal(backup.status, 200);
+      assert.equal(backup.body.schemaVersion, 6);
+      const snap = backup.body.products.find((p) => p.id === productId);
+      assert.ok(snap);
+      assert.equal(snap!.warehouseCost, 3.5);
+      assert.equal(snap!.stock, 4);
+      assert.equal(snap!.cost, 3.5);
+      assert.ok(backup.body.warehouses.length >= 1);
+      assert.ok(backup.body.customers.some((c) => c.id === customer.body.id));
+      const whRow = backup.body.warehouseStock.find((r) => r.productId === productId);
+      assert.ok(whRow);
+      assert.equal(whRow!.quantity, 8);
+
+      const reset = await api('/api/admin/factory-reset', { method: 'POST' });
+      assert.equal(reset.status, 200);
+
+      const imported = await api('/api/backup/import', { method: 'POST', body: backup.body });
+      assert.equal(imported.status, 200);
+
+      const after = await api<{ id: string; warehouseCost: number; stock: number }[]>(
+        '/api/products?includeImages=false',
+      );
+      const restored = after.body.find((p) => p.id === productId);
+      assert.ok(restored);
+      assert.equal(restored!.warehouseCost, 3.5);
+      assert.equal(restored!.stock, 4);
+
+      const wh = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      const restoredWh = wh.body.find((r) => r.productId === productId);
+      assert.ok(restoredWh);
+      assert.equal(restoredWh!.quantity, 8);
+
+      const customers = await api<{ id: string; firstName: string }[]>('/api/customers');
+      assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
+    });
+
     it('factory reset clears operational data without restarting the trial', async () => {
       const db = getDb();
       const trialStartedAt = Date.now() - 3 * 24 * 60 * 60 * 1000;
@@ -747,7 +881,7 @@ describe('Executive Suite API integration', () => {
 
       await api('/api/products', {
         method: 'POST',
-        body: { name: 'Temp', sku: 'TMP-1', category: 'X', price: 1, cost: 1, stock: 1 },
+        body: { name: 'Temp', sku: 'TMP-1', category: 'X', price: 1, cost: 1, stock: 0 },
       });
 
       const reset = await api('/api/admin/factory-reset', { method: 'POST' });

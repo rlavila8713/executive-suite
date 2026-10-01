@@ -6,6 +6,7 @@ type SqlParam = number | string | Uint8Array | null;
 import { DEFAULT_APP_SETTINGS } from './constants.js';
 import { ensureLicenseRow } from './license.js';
 import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
+import { migrateWarehouseSchema } from './warehouseMigrations.js';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
@@ -117,6 +118,7 @@ export async function initDb(): Promise<void> {
     const sqliteStore = new SqliteStore(db, () => persistDb(db));
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
+    migrateWarehouseSchema(sqliteStore);
     ensureSeeded(sqliteStore);
     ensureLicenseRow(sqliteStore);
     persistDb(db);
@@ -255,11 +257,16 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM categories').run();
     db.prepare('DELETE FROM subcategories').run();
     db.prepare('DELETE FROM locations').run();
+    db.prepare('DELETE FROM warehouse_movements').run();
+    db.prepare('DELETE FROM warehouse_stock').run();
+    db.prepare('DELETE FROM warehouse_sections').run();
+    db.prepare('DELETE FROM warehouses').run();
     db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
+    migrateWarehouseSchema(db);
   });
 }
 
@@ -275,6 +282,7 @@ export type ProductRow = {
   category: string;
   price: number;
   cost: number;
+  warehouse_cost?: number;
   stock: number;
   image: string;
   category_id?: string;
@@ -300,6 +308,7 @@ export function rowToProduct(row: ProductRow, options: RowToProductOptions = {})
     category: row.category,
     price: row.price,
     cost: row.cost,
+    warehouseCost: row.warehouse_cost ?? 0,
     stock: row.stock,
     image: includeImageData ? row.image : '',
     imageUrl:

@@ -141,6 +141,52 @@ function bucketKeyForMonth(ts: number): { key: string; label: string } {
   return { key, label: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}` };
 }
 
+export type SalesSeriesPointWithCumulative = SalesSeriesPoint & { cumulative: number };
+
+/** Net sales per bucket (completed sales minus returns/reversals in the same range). */
+export function groupNetSalesByBucket(
+  transactions: Transaction[],
+  range: DateRangeMs,
+  bucket: SalesBucket,
+  locale: string,
+): SalesSeriesPointWithCumulative[] {
+  const inRange = transactions.filter((tx) => tx.createdAt >= range.start && tx.createdAt <= range.end);
+  const map = new Map<string, { label: string; revenue: number; orderCount: number }>();
+
+  for (const tx of inRange) {
+    let sign = 0;
+    if (isCompletedSale(tx)) sign = 1;
+    else if (isReturnRow(tx) || isReversedSale(tx)) sign = -1;
+    else continue;
+
+    let k: { key: string; label: string };
+    if (bucket === 'day') k = bucketKeyForDay(tx.createdAt);
+    else if (bucket === 'week') k = bucketKeyForWeek(tx.createdAt, locale);
+    else k = bucketKeyForMonth(tx.createdAt);
+
+    const cur = map.get(k.key) ?? { label: k.label, revenue: 0, orderCount: 0 };
+    cur.revenue += sign * Math.abs(tx.amount);
+    if (sign > 0) cur.orderCount += 1;
+    cur.label = k.label;
+    map.set(k.key, cur);
+  }
+
+  let cumulative = 0;
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, v]) => {
+      const revenue = Math.round(v.revenue * 100) / 100;
+      cumulative = Math.round((cumulative + revenue) * 100) / 100;
+      return {
+        key,
+        label: v.label,
+        revenue,
+        orderCount: v.orderCount,
+        cumulative,
+      };
+    });
+}
+
 export function groupSalesByBucket(
   transactions: Transaction[],
   range: DateRangeMs,
@@ -246,17 +292,46 @@ export function cogsInRange(transactions: Transaction[], products: Product[], ra
 }
 
 export function profitGrossInRange(transactions: Transaction[], products: Product[], range: DateRangeMs): {
+  grossSales: number;
+  returnsAmount: number;
+  netSales: number;
   revenue: number;
   cogs: number;
   grossProfit: number;
 } {
-  const revenue = salesRevenueInRange(transactions, range);
-  const cogs = cogsInRange(transactions, products, range);
+  let grossSales = 0;
+  let returnsAmount = 0;
+  const inRange = transactions.filter((tx) => tx.createdAt >= range.start && tx.createdAt <= range.end);
+  for (const tx of inRange) {
+    if (isCompletedSale(tx)) grossSales += Math.abs(tx.amount);
+    else if (isReturnRow(tx) || isReversedSale(tx)) returnsAmount += Math.abs(tx.amount);
+  }
+  const netSales = Math.round((grossSales - returnsAmount) * 100) / 100;
+  const cogsRounded = netCogsInRange(transactions, products, range);
   return {
-    revenue: Math.round(revenue * 100) / 100,
-    cogs,
-    grossProfit: Math.round((revenue - cogs) * 100) / 100,
+    grossSales: Math.round(grossSales * 100) / 100,
+    returnsAmount: Math.round(returnsAmount * 100) / 100,
+    netSales,
+    revenue: netSales,
+    cogs: cogsRounded,
+    grossProfit: Math.round((netSales - cogsRounded) * 100) / 100,
   };
+}
+
+/** COGS for completed sales minus COGS restored on returns/reversals in range. */
+export function netCogsInRange(transactions: Transaction[], products: Product[], range: DateRangeMs): number {
+  let sum = 0;
+  for (const tx of transactions) {
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    const lines = tx.receipt?.lines;
+    if (!lines?.length) continue;
+    if (isCompletedSale(tx)) {
+      for (const line of lines) sum += lineCOGS(line, products);
+    } else if (isReturnRow(tx) || isReversedSale(tx)) {
+      for (const line of lines) sum -= lineCOGS(line, products);
+    }
+  }
+  return Math.round(sum * 100) / 100;
 }
 
 export type TopSellerRow = {

@@ -353,7 +353,7 @@ export function POS({
         <div className="flex-1 min-h-0 overflow-y-auto pr-0.5 no-scrollbar">
           <div className="space-y-1">
             {filteredProducts.map((product) => {
-              const outOfStock = product.stock <= 0;
+              const outOfStock = product.stock <= 0 || product.price <= 0;
               const inCart = cart.find((item) => item.id === product.id)?.quantity ?? 0;
               const atLimit = !outOfStock && inCart >= product.stock;
               return (

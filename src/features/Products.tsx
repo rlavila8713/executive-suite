@@ -24,7 +24,6 @@ import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import { nextSkuFromProducts } from '../lib/sku';
 import { downloadCsv } from '../lib/printDocument';
-import { computeProductMargin } from '../lib/productMargin';
 
 const STATUSES: ProductStatus[] = ['active', 'inactive', 'pending'];
 const UNITS: UnitOfMeasure[] = ['unidad', 'par', 'caja', 'paquete', 'metro', 'kg', 'litro'];
@@ -65,9 +64,6 @@ export function Products({
   const [status, setStatus] = useState<ProductStatus>('active');
   const [unitOfMeasure, setUnitOfMeasure] = useState<UnitOfMeasure>('unidad');
   const [locationId, setLocationId] = useState<string>('');
-  const [priceInput, setPriceInput] = useState('');
-  const [costInput, setCostInput] = useState('');
-
   useEffect(() => {
     if (!isModalOpen) return;
     setProductImage(editingProduct?.image || PLACEHOLDER_PRODUCT_IMAGE);
@@ -78,18 +74,7 @@ export function Products({
     setStatus(editingProduct?.status ?? 'active');
     setUnitOfMeasure(editingProduct?.unitOfMeasure ?? 'unidad');
     setLocationId(editingProduct?.locationId ?? '');
-    setPriceInput(editingProduct != null ? String(editingProduct.price) : '');
-    setCostInput('');
   }, [isModalOpen, editingProduct]);
-
-  const marginPreview = useMemo(() => {
-    const price = parseFloat(priceInput.replace(',', '.'));
-    const cost = editingProduct ? editingProduct.cost : parseFloat(costInput.replace(',', '.'));
-    if (!Number.isFinite(price) || priceInput.trim() === '') return null;
-    if (!editingProduct && costInput.trim() === '') return null;
-    if (!Number.isFinite(cost)) return null;
-    return computeProductMargin(price, cost);
-  }, [priceInput, costInput, editingProduct]);
 
   const categoryOptions = [...productCategories].sort((a, b) => a.name.localeCompare(b.name));
   const subsForCategory = useMemo(
@@ -127,9 +112,10 @@ export function Products({
       name: formData.get('name') as string,
       sku: (formData.get('sku') as string) || sku,
       category: cat?.name ?? (formData.get('category') as string),
-      price: parseFloat(priceInput.replace(',', '.')),
-      cost: editingProduct ? editingProduct.cost : parseFloat(costInput.replace(',', '.')),
-      stock: editingProduct ? editingProduct.stock : parseInt(formData.get('stock') as string, 10),
+      price: editingProduct?.price ?? 0,
+      cost: editingProduct?.cost ?? 0,
+      warehouseCost: editingProduct?.warehouseCost ?? 0,
+      stock: editingProduct ? editingProduct.stock : 0,
       image: productImage,
       categoryId: categoryId,
       subcategoryId: subcategoryId,
@@ -141,7 +127,7 @@ export function Products({
     };
 
     if (editingProduct) {
-      const { cost: _c, stock: _s, ...catalogUpdates } = productData;
+      const { cost: _c, stock: _s, price: _p, warehouseCost: _w, ...catalogUpdates } = productData;
       if (!imageDirty) {
         delete (catalogUpdates as { image?: string }).image;
       }
@@ -268,7 +254,9 @@ export function Products({
                   </td>
                   <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{product.category}</td>
                   <td className="py-4 px-6 text-right text-sm text-on-surface-variant">{product.subcategory || '—'}</td>
-                  <td className="py-4 px-6 text-right text-sm font-bold text-primary">${product.price.toFixed(2)}</td>
+                  <td className="py-4 px-6 text-right text-sm font-bold text-primary">
+                    {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
+                  </td>
                   <td className="py-4 px-6 text-center">
                     <span
                       className={cn(
@@ -401,71 +389,49 @@ export function Products({
             <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.barcode')}</label>
             <Input name="barcode" defaultValue={editingProduct?.barcode ?? ''} />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.price')}</label>
-              <Input
-                name="price"
-                type="number"
-                step="0.01"
-                value={priceInput}
-                onChange={(e) => setPriceInput(e.target.value)}
-                required
-              />
+          <p className="text-xs text-on-surface-variant rounded-xl bg-surface-container-low px-4 py-3">
+            {t('products.catalogPricingHint')}
+          </p>
+          {editingProduct ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.price')}</label>
+                <Input
+                  value={editingProduct.price > 0 ? editingProduct.price.toFixed(2) : t('products.costNotSet')}
+                  readOnly
+                  className="opacity-80"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.warehouseCost')}</label>
+                <Input
+                  value={
+                    editingProduct.warehouseCost > 0
+                      ? editingProduct.warehouseCost.toFixed(2)
+                      : t('products.costNotSet')
+                  }
+                  readOnly
+                  className="opacity-80"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.weightedCost')}</label>
+                <Input
+                  value={editingProduct.cost > 0 ? editingProduct.cost.toFixed(2) : t('products.costNotSet')}
+                  readOnly
+                  className="opacity-80"
+                />
+                <p className="text-[10px] text-on-surface-variant">{t('products.weightedCostHint')}</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
+                <Input value={String(editingProduct.stock)} readOnly className="opacity-80" />
+                <p className="text-[10px] text-on-surface-variant">{t('products.stockEditHint')}</p>
+              </div>
             </div>
-            {editingProduct ? (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.weightedCost')}</label>
-                  <Input value={editingProduct.cost.toFixed(2)} readOnly className="opacity-80" />
-                  <p className="text-[10px] text-on-surface-variant">{t('products.weightedCostHint')}</p>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
-                  <Input value={String(editingProduct.stock)} readOnly className="opacity-80" />
-                  <p className="text-[10px] text-on-surface-variant">{t('products.stockEditHint')}</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.cost')}</label>
-                  <Input
-                    name="cost"
-                    type="number"
-                    step="0.01"
-                    value={costInput}
-                    onChange={(e) => setCostInput(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
-                  <Input name="stock" type="number" defaultValue={0} required />
-                </div>
-              </>
-            )}
-          </div>
-          {marginPreview ? (
-            <div
-              className={cn(
-                'rounded-xl px-4 py-3 text-sm font-bold border',
-                marginPreview.isProfit
-                  ? 'bg-tertiary-container/15 border-tertiary-container/40 text-on-tertiary-container'
-                  : 'bg-error-container/30 border-error/30 text-on-error-container',
-              )}
-            >
-              {marginPreview.isProfit
-                ? t('products.profitBanner', {
-                    amount: marginPreview.profitPerUnit.toFixed(2),
-                    margin: marginPreview.marginPercent.toFixed(2),
-                  })
-                : t('products.lossBanner', {
-                    amount: Math.abs(marginPreview.profitPerUnit).toFixed(2),
-                    margin: marginPreview.marginPercent.toFixed(2),
-                  })}
-            </div>
-          ) : null}
+          ) : (
+            <p className="text-xs text-on-surface-variant">{t('products.stockCreateHint')}</p>
+          )}
           <div className="pt-4 flex gap-3">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsModalOpen(false)}>{t('common.cancel')}</Button>
             <Button type="submit" className="flex-1">{t('products.saveProduct')}</Button>

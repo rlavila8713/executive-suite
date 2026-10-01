@@ -34,7 +34,8 @@ Base URL: `http://<server-ip>:4000`
 | `GET /health` | Status, version, LAN URLs |
 | `GET /api/products` | List products (`?includeImages=false` for mobile — use `imageUrl`) |
 | `GET /api/products/:id/image` | Product image (JPEG/PNG/WebP/SVG) |
-| `PATCH /api/products/:id/stock` | Update stock `{ "stock": 42 }` |
+| `PATCH /api/products/:id/stock` | **Deprecated** — returns `409 ERR_STORE_STOCK_DIRECT_EDIT`. Use warehouse transfer instead. |
+| Warehouse (entries, transfer) | See [docs/WAREHOUSE.md](docs/WAREHOUSE.md) — `POST /api/products/:id/receive`, `POST /api/warehouse/stock/:id/transfer-to-store` (web client only). |
 | `POST /api/sales` | Checkout (creates transaction + deducts stock) |
 | `GET /api/categories` | Product categories |
 | `GET /api/transactions` | Sales history |

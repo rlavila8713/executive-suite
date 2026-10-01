@@ -4,6 +4,7 @@ export type Screen =
   | 'dashboard'
   | 'products'
   | 'import'
+  | 'warehouse'
   | 'categories'
   | 'subcategories'
   | 'locations'
@@ -41,6 +42,65 @@ export interface ProductLocation {
   name: string;
 }
 
+export interface Warehouse {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  createdAt: number;
+  updatedAt: number | null;
+}
+
+export interface WarehouseSection {
+  id: string;
+  warehouseId: string;
+  name: string;
+  isSystem: boolean;
+  createdAt: number;
+}
+
+export interface WarehouseStock {
+  id: string;
+  warehouseId: string;
+  sectionId: string;
+  sectionName: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  quantity: number;
+  unitCost: number;
+  updatedAt: number | null;
+}
+
+export type WarehouseMovementType = 'ENTRY' | 'TRANSFER_TO_STORE' | 'ADJUSTMENT' | 'SECTION_REASSIGN';
+
+export interface WarehouseMovement {
+  id: string;
+  warehouseId: string;
+  productId: string;
+  sectionId: string | null;
+  type: WarehouseMovementType;
+  quantityDelta: number;
+  unitCost: number | null;
+  balanceAfter: number | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  notes: string | null;
+  createdAt: number;
+  createdBy: string | null;
+}
+
+export interface WarehouseSummaryReport {
+  warehouseId: string;
+  overall: { productCount: number; units: number; valueAtCost: number };
+  bySection: {
+    sectionId: string;
+    sectionName: string;
+    productCount: number;
+    units: number;
+    valueAtCost: number;
+  }[];
+}
+
 export interface Customer {
   id: string;
   firstName: string;
@@ -57,7 +117,10 @@ export interface Product {
   sku: string;
   category: string;
   price: number;
+  /** Weighted average unit cost in store inventory (updated on transfer from warehouse). */
   cost: number;
+  /** Weighted average unit cost in warehouse (updated on warehouse entries). */
+  warehouseCost: number;
   stock: number;
   /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — omitted from list when includeImages=false. */
   image: string;
