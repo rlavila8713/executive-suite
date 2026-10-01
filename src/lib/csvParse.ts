@@ -20,6 +20,10 @@ const HEADER_ALIASES: Record<string, string> = {
   ubicación: 'location',
   location: 'location',
   sku: 'sku',
+  codigo_barras: 'barcode',
+  'código de barras': 'barcode',
+  barcode: 'barcode',
+  barra: 'barcode',
 };
 
 function normalizeHeader(h: string): string {
@@ -67,6 +71,7 @@ export type ProductImportRow = {
   stock: number;
   location?: string;
   sku?: string;
+  barcode?: string;
 };
 
 export type CsvParseResult =
@@ -122,6 +127,7 @@ export function parseProductImportCsv(text: string): CsvParseResult {
 
     const location = (record.location ?? '').trim();
     const sku = (record.sku ?? '').trim();
+    const barcode = (record.barcode ?? '').trim();
 
     rows.push({
       name,
@@ -132,6 +138,7 @@ export function parseProductImportCsv(text: string): CsvParseResult {
       stock,
       ...(location ? { location } : {}),
       ...(sku ? { sku } : {}),
+      ...(barcode ? { barcode } : {}),
     });
   }
 
@@ -151,9 +158,10 @@ export const PRODUCT_IMPORT_TEMPLATE_HEADERS = [
   'stock',
   'ubicacion',
   'sku',
+  'codigo_barras',
 ] as const;
 
 export const PRODUCT_IMPORT_TEMPLATE_SAMPLE: (string | number)[][] = [
-  ['Lámpara LED', 'Iluminación', 'Lámparas', 10, 5, 20, 'Pasillo A', ''],
-  ['Foco halógeno', 'Iluminación', 'Focos', 8.5, 4, 15, '', ''],
+  ['Lámpara LED', 'Iluminación', 'Lámparas', 10, 5, 20, 'Pasillo A', '', '7501234567890'],
+  ['Foco halógeno', 'Iluminación', 'Focos', 8.5, 4, 15, '', '', ''],
 ];

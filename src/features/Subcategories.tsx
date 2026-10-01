@@ -6,6 +6,8 @@ import type { Product, ProductCategory, ProductSubcategory } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n, type TranslateFn } from '../i18n/I18nContext';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 function mapSubcategoryError(err: unknown, t: TranslateFn): string {
   return mapMutationError(err, t);
@@ -64,6 +66,8 @@ export function Subcategories({
       )
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [subcategories, categoryFilter, searchTerm, globalSearch, categoryById]);
+
+  const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -168,7 +172,7 @@ export function Subcategories({
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s) => {
+              {pageItems.map((s) => {
                 const cat = categoryById.get(s.categoryId);
                 const n = usageBySubId.get(s.id) ?? 0;
                 return (
@@ -208,6 +212,7 @@ export function Subcategories({
               })}
             </tbody>
           </table>
+          <TablePagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={setPage} />
         </div>
       </Card>
 

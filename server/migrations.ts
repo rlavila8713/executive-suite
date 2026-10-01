@@ -60,6 +60,35 @@ export function migrateCatalogSchema(db: SqliteStore): void {
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_source_sale_id ON transactions(source_sale_id)`);
 
+  if (!hasColumn(db, 'transactions', 'debt_status')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN debt_status TEXT`);
+  }
+  if (!hasColumn(db, 'transactions', 'collected_at')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN collected_at INTEGER`);
+  }
+  if (!hasColumn(db, 'transactions', 'sold_as_debt')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN sold_as_debt INTEGER NOT NULL DEFAULT 0`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_debt_status ON transactions(debt_status)`);
+
+  if (!hasColumn(db, 'transactions', 'customer_id')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN customer_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_customer_id ON transactions(customer_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id TEXT PRIMARY KEY,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(first_name, last_name);
+  `);
+
   const cashCols: [string, string][] = [
     ['expected_cash', 'REAL'],
     ['cash_variance', 'REAL'],
@@ -69,6 +98,9 @@ export function migrateCatalogSchema(db: SqliteStore): void {
     if (!hasColumn(db, 'cash_sessions', col)) {
       db.exec(`ALTER TABLE cash_sessions ADD COLUMN ${col} ${def}`);
     }
+  }
+  if (!hasColumn(db, 'cash_sessions', 'total_debt_sales')) {
+    db.exec(`ALTER TABLE cash_sessions ADD COLUMN total_debt_sales REAL NOT NULL DEFAULT 0`);
   }
 
   db.exec(`

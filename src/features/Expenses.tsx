@@ -6,6 +6,8 @@ import { Expense } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 function escapeCsvCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
@@ -51,6 +53,8 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
       ),
     [expenses, searchTerm, globalSearch],
   );
+
+  const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const totalExpenses = expenses.reduce((acc, e) => acc + e.amount, 0);
 
@@ -173,7 +177,7 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
               </tr>
             </thead>
             <tbody>
-              {filtered.map((expense) => (
+              {pageItems.map((expense) => (
                 <tr
                   key={expense.id}
                   className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0"
@@ -214,6 +218,7 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
               ))}
             </tbody>
           </table>
+          <TablePagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={setPage} />
         </div>
       </Card>
 

@@ -255,6 +255,7 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM categories').run();
     db.prepare('DELETE FROM subcategories').run();
     db.prepare('DELETE FROM locations').run();
+    db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
     db.prepare('DELETE FROM app_settings').run();
@@ -330,6 +331,26 @@ export function rowToCategory(row: { id: string; name: string; code?: string }) 
   };
 }
 
+export function rowToCustomer(row: {
+  id: string;
+  first_name: string;
+  last_name: string;
+  address: string;
+  phone: string;
+  notes: string;
+  created_at: number;
+}) {
+  return {
+    id: row.id,
+    firstName: row.first_name,
+    lastName: row.last_name ?? '',
+    address: row.address ?? '',
+    phone: row.phone ?? '',
+    notes: row.notes ?? '',
+    createdAt: row.created_at,
+  };
+}
+
 export function rowToTransaction(row: {
   id: string;
   order_number: string;
@@ -344,7 +365,13 @@ export function rowToTransaction(row: {
   source_sale_id?: string | null;
   operator_name?: string | null;
   source_device_id?: string | null;
+  debt_status?: string | null;
+  collected_at?: number | null;
+  sold_as_debt?: number | null;
+  customer_id?: string | null;
 }) {
+  const debtStatus =
+    row.debt_status === 'pending' || row.debt_status === 'collected' ? row.debt_status : undefined;
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -359,6 +386,10 @@ export function rowToTransaction(row: {
     sourceSaleId: row.source_sale_id ?? undefined,
     operatorName: row.operator_name ?? undefined,
     sourceDeviceId: row.source_device_id ?? undefined,
+    soldAsDebt: row.sold_as_debt === 1,
+    debtStatus,
+    collectedAt: row.collected_at ?? undefined,
+    customerId: row.customer_id ?? undefined,
   };
 }
 
@@ -390,6 +421,7 @@ export function rowToCashSession(row: {
   total_card_sales: number;
   total_transfer_sales: number;
   total_other_sales: number;
+  total_debt_sales?: number;
   expected_cash?: number | null;
   cash_variance?: number | null;
   anomalies_json?: string | null;
@@ -413,6 +445,7 @@ export function rowToCashSession(row: {
     totalCardSales: row.total_card_sales,
     totalTransferSales: row.total_transfer_sales,
     totalOtherSales: row.total_other_sales,
+    totalDebtSales: row.total_debt_sales ?? 0,
     expectedCash: row.expected_cash ?? null,
     cashVariance: row.cash_variance ?? null,
     anomalies,

@@ -17,6 +17,8 @@ import { useI18n } from '../i18n/I18nContext';
 import { printTableDocument, downloadCsv } from '../lib/printDocument';
 import { computeWeightedAverageCost } from '../lib/inventoryCost';
 import { mapMutationError } from '../lib/mutationErrors';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 import {
   CatalogFilterModal,
   catalogFilterLabel,
@@ -106,6 +108,9 @@ export function Inventory({
       ),
     [products, localSearch, globalSearch, stockChip, catalogFilter],
   );
+
+  const { pageItems: inventoryPageItems, page: inventoryPage, setPage: setInventoryPage, totalPages: inventoryTotalPages, total: inventoryTotal, pageSize: inventoryPageSize } =
+    usePagination(visibleProducts);
 
   useEffect(() => {
     if (!receiveProduct) return;
@@ -377,7 +382,7 @@ export function Inventory({
                 </tr>
               </thead>
               <tbody>
-                {visibleProducts.map((product) => (
+                {inventoryPageItems.map((product) => (
                   <tr key={product.id} className="border-b border-black/5 last:border-0 hover:bg-surface-container-low">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3 min-w-0">
@@ -398,6 +403,13 @@ export function Inventory({
                 ))}
               </tbody>
             </table>
+            <TablePagination
+              page={inventoryPage}
+              totalPages={inventoryTotalPages}
+              total={inventoryTotal}
+              pageSize={inventoryPageSize}
+              onPageChange={setInventoryPage}
+            />
             {visibleProducts.length === 0 ? (
               <p className="text-center text-sm text-on-surface-variant py-8">{t('inventory.noResults')}</p>
             ) : null}

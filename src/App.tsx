@@ -12,11 +12,14 @@ import { Import } from './features/Import';
 import { Categories } from './features/Categories';
 import { Subcategories } from './features/Subcategories';
 import { Locations } from './features/Locations';
+import { Customers } from './features/Customers';
 import { Cash } from './features/Cash';
 import { Reconciliation } from './features/Reconciliation';
 import { POS } from './features/POS';
 import { Expenses } from './features/Expenses';
 import { Reports } from './features/Reports';
+import { Receivables } from './features/Receivables';
+import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
 import { Settings } from './features/Settings';
 import { useAppState } from './hooks/useAppState';
@@ -39,12 +42,16 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.categories');
     case 'locations':
       return t('app.search.unused');
+    case 'customers':
+      return t('customers.searchPlaceholder');
     case 'cash':
     case 'reconciliation':
     case 'import':
       return t('app.search.unused');
     case 'expenses':
       return t('app.search.expenses');
+    case 'receivables':
+      return t('receivables.searchPlaceholder');
     case 'reports':
     case 'settings':
       return t('app.search.unused');
@@ -67,6 +74,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.subcategories');
     case 'locations':
       return t('app.titles.locations');
+    case 'customers':
+      return t('app.titles.customers');
     case 'cash':
       return t('app.titles.cash');
     case 'reconciliation':
@@ -75,10 +84,14 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.pos');
     case 'expenses':
       return t('app.titles.expenses');
+    case 'receivables':
+      return t('app.titles.receivables');
     case 'reports':
       return t('app.titles.reports');
     case 'inventory':
       return t('app.titles.inventory');
+    case 'help':
+      return t('app.titles.help');
     case 'settings':
       return t('app.titles.settings');
     default:
@@ -105,6 +118,10 @@ function AppView(props: AppState) {
     productCategories,
     productSubcategories,
     productLocations,
+    customers,
+    customersHighlightId,
+    setCustomersHighlightId,
+    openCustomerProfile,
     addToCart,
     removeFromCart,
     updateCartQuantity,
@@ -121,6 +138,8 @@ function AppView(props: AppState) {
     addTransaction,
     updateTransaction,
     reverseSale,
+    collectReceivable,
+    registerCustomerForReceivable,
     updateAppSettings,
     addProductCategory,
     renameProductCategory,
@@ -131,6 +150,9 @@ function AppView(props: AppState) {
     addLocation,
     updateLocation,
     deleteLocation,
+    addCustomer,
+    updateCustomer,
+    deleteCustomer,
     fetchNextSku,
     cashSessions,
     licenseInfo,
@@ -235,6 +257,17 @@ function AppView(props: AppState) {
             onDelete={deleteLocation}
           />
         );
+      case 'customers':
+        return (
+          <Customers
+            customers={customers}
+            globalSearch={globalSearch}
+            highlightId={customersHighlightId}
+            onAdd={addCustomer}
+            onUpdate={updateCustomer}
+            onDelete={deleteCustomer}
+          />
+        );
       case 'cash':
         return (
           <Cash
@@ -254,6 +287,7 @@ function AppView(props: AppState) {
             products={products}
             productCategories={productCategories}
             productSubcategories={productSubcategories}
+            customers={customers}
             cart={cart}
             taxRatePercent={appSettings.taxRate}
             cardQrPayload={appSettings.cardQrPayload}
@@ -288,6 +322,27 @@ function AppView(props: AppState) {
             onDelete={deleteExpense}
           />
         );
+      case 'receivables':
+        return (
+          <Receivables
+            transactions={transactions}
+            customers={customers}
+            globalSearch={globalSearch}
+            taxRatePercent={appSettings.taxRate}
+            cardQrPayload={appSettings.cardQrPayload}
+            transferAccountNumber={appSettings.transferAccountNumber}
+            transferPhoneNumber={appSettings.transferPhoneNumber}
+            onCollect={async (id, method) => {
+              await collectReceivable(id, method);
+            }}
+            onOpenCustomer={(id) => {
+              openCustomerProfile(id);
+            }}
+            onRegisterCustomer={async (tx) => {
+              await registerCustomerForReceivable(tx.id, tx.customer);
+            }}
+          />
+        );
       case 'reports':
         return (
           <Reports
@@ -312,6 +367,8 @@ function AppView(props: AppState) {
             syncBusy={apiChecking}
           />
         );
+      case 'help':
+        return <Help onNavigate={setCurrentScreen} />;
       case 'settings':
         return (
           <Settings
@@ -348,6 +405,7 @@ function AppView(props: AppState) {
   const searchDisabled =
     currentScreen === 'reports' ||
     currentScreen === 'settings' ||
+    currentScreen === 'help' ||
     currentScreen === 'cash' ||
     currentScreen === 'reconciliation' ||
     currentScreen === 'import' ||

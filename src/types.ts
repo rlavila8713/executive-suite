@@ -7,12 +7,15 @@ export type Screen =
   | 'categories'
   | 'subcategories'
   | 'locations'
+  | 'customers'
   | 'cash'
   | 'reconciliation'
   | 'pos'
   | 'inventory'
   | 'expenses'
+  | 'receivables'
   | 'reports'
+  | 'help'
   | 'settings';
 
 export type ProductStatus = 'active' | 'inactive' | 'pending';
@@ -36,6 +39,16 @@ export interface ProductSubcategory {
 export interface ProductLocation {
   id: string;
   name: string;
+}
+
+export interface Customer {
+  id: string;
+  firstName: string;
+  lastName: string;
+  address: string;
+  phone: string;
+  notes: string;
+  createdAt: number;
 }
 
 export interface Product {
@@ -64,7 +77,9 @@ export interface CartItem extends Product {
 }
 
 /** How the customer paid (stored on each transaction for reporting). */
-export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other';
+export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'debt';
+
+export type DebtStatus = 'pending' | 'collected';
 
 /** One line on a sale receipt (snapshot at checkout). */
 export interface SaleReceiptLine {
@@ -124,10 +139,16 @@ export interface Transaction {
   operatorName?: string;
   /** Device id that created this sale (audit). */
   sourceDeviceId?: string;
+  /** Sale registered as customer debt (accounts receivable). */
+  soldAsDebt?: boolean;
+  debtStatus?: DebtStatus;
+  collectedAt?: number;
+  /** Registered customer linked to this sale. */
+  customerId?: string;
 }
 
 /** Optional cash drawer session for reconciliation (Cash reports tab). */
-export type CashAnomalyKind = 'cash_shortfall' | 'cash_surplus' | 'drawer_variance';
+export type CashAnomalyKind = 'cash_shortfall' | 'cash_surplus' | 'drawer_variance' | 'debt_sales';
 
 export interface CashAnomaly {
   kind: CashAnomalyKind;
@@ -135,6 +156,8 @@ export interface CashAnomaly {
   closingCash: number;
   cashSales: number;
   variance: number;
+  /** Sum of credit sales in session (no cash expected). */
+  debtSales?: number;
 }
 
 export interface CashSession {
@@ -148,6 +171,7 @@ export interface CashSession {
   totalCardSales: number;
   totalTransferSales: number;
   totalOtherSales: number;
+  totalDebtSales: number;
   expectedCash?: number | null;
   cashVariance?: number | null;
   anomalies?: CashAnomaly[];
@@ -254,4 +278,7 @@ export type CheckoutPayload = {
   /** Grand total charged (including tax). */
   amount: number;
   receipt: SaleReceipt;
+  /** Credit sale: customer name required; no cash in drawer. */
+  isDebt?: boolean;
+  customerId?: string;
 };
