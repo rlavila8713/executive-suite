@@ -112,7 +112,8 @@ function isSaleReceipt(x: unknown): x is SaleReceipt {
     (x.paymentMethod === 'cash' ||
       x.paymentMethod === 'card' ||
       x.paymentMethod === 'transfer' ||
-      x.paymentMethod === 'other') &&
+      x.paymentMethod === 'other' ||
+      x.paymentMethod === 'debt') &&
     (x.operatorName === undefined || typeof x.operatorName === 'string')
   );
 }
@@ -125,7 +126,14 @@ function isTransaction(x: unknown): x is Transaction {
     x.paymentMethod === 'cash' ||
     x.paymentMethod === 'card' ||
     x.paymentMethod === 'transfer' ||
-    x.paymentMethod === 'other';
+    x.paymentMethod === 'other' ||
+    x.paymentMethod === 'debt';
+  const debtOk =
+    x.debtStatus === undefined ||
+    x.debtStatus === 'pending' ||
+    x.debtStatus === 'collected';
+  const soldAsDebtOk = x.soldAsDebt === undefined || typeof x.soldAsDebt === 'boolean';
+  const collectedAtOk = x.collectedAt === undefined || typeof x.collectedAt === 'number';
   const operatorOk = x.operatorName === undefined || typeof x.operatorName === 'string';
   const deviceOk = x.sourceDeviceId === undefined || typeof x.sourceDeviceId === 'string';
   return (
@@ -139,6 +147,9 @@ function isTransaction(x: unknown): x is Transaction {
     typeof x.createdAt === 'number' &&
     receiptOk &&
     pmOk &&
+    debtOk &&
+    soldAsDebtOk &&
+    collectedAtOk &&
     operatorOk &&
     deviceOk
   );
@@ -155,7 +166,8 @@ function isCashSession(x: unknown): x is CashSession {
     typeof x.totalCashSales === 'number' &&
     typeof x.totalCardSales === 'number' &&
     typeof x.totalTransferSales === 'number' &&
-    typeof x.totalOtherSales === 'number'
+    typeof x.totalOtherSales === 'number' &&
+    (x.totalDebtSales === undefined || typeof x.totalDebtSales === 'number')
   );
 }
 

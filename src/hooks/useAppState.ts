@@ -10,6 +10,7 @@ import {
   ProductCategory,
   ProductSubcategory,
   ProductLocation,
+  Customer,
   CashSession,
   LicenseInfo,
   LicensePlanId,
@@ -18,6 +19,7 @@ import { DEFAULT_APP_SETTINGS } from '../constants';
 import { api, ApiConnectionError, ApiRequestError } from '../api/client';
 import { useApiConnection, useApiPolling } from '../api/connection';
 import { removeById, upsertById } from '../lib/utils';
+import { formatCustomerName, parseDisplayNameToCustomerFields } from '../lib/customers';
 
 export function useAppState() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard');
@@ -29,6 +31,8 @@ export function useAppState() {
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
   const [productSubcategories, setProductSubcategories] = useState<ProductSubcategory[]>([]);
   const [productLocations, setProductLocations] = useState<ProductLocation[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customersHighlightId, setCustomersHighlightId] = useState<string | null>(null);
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,7 +40,7 @@ export function useAppState() {
 
   const refreshAll = useCallback(async () => {
     const gen = ++refreshGen.current;
-    const [p, t, e, s, c, subs, locs, cs, lic] = await Promise.all([
+    const [p, t, e, s, c, subs, locs, cust, cs, lic] = await Promise.all([
       api.getProducts({ includeImages: false }),
       api.getTransactions(),
       api.getExpenses(),
@@ -44,6 +48,7 @@ export function useAppState() {
       api.getCategories(),
       api.getSubcategories(),
       api.getLocations(),
+      api.getCustomers(),
       api.getCashSessions(),
       api.getLicense(),
     ]);
@@ -55,6 +60,7 @@ export function useAppState() {
     setProductCategories(c);
     setProductSubcategories(subs);
     setProductLocations(locs);
+    setCustomers(cust);
     setCashSessions(cs);
     setLicenseInfo(lic);
     setCart((prev) =>
@@ -175,6 +181,40 @@ export function useAppState() {
     return newTransaction;
   };
 
+  const collectReceivable = async (id: string, paymentMethod: 'cash' | 'card' | 'transfer') => {
+    guardMutation();
+    const updated = await api.collectReceivable(id, paymentMethod);
+    beginLocalCommit();
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? updated : tx)));
+    await refreshAfterMutation();
+    return updated;
+  };
+
+  const registerCustomerForReceivable = async (transactionId: string, customerName: string) => {
+    guardMutation();
+    const fields = parseDisplayNameToCustomerFields(customerName);
+    if (!fields.firstName) throw new Error('ERR_CUSTOMER_NAME_REQUIRED');
+    const created = await api.createCustomer({
+      firstName: fields.firstName,
+      lastName: fields.lastName,
+      address: '',
+      phone: '',
+      notes: '',
+    });
+    const linked = await api.linkTransactionCustomer(transactionId, created.id);
+    beginLocalCommit();
+    setCustomers((prev) => upsertById(prev, created));
+    setTransactions((prev) =>
+      prev.map((tx) =>
+        tx.id === transactionId
+          ? { ...linked, customer: formatCustomerName(created) }
+          : tx,
+      ),
+    );
+    await refreshAfterMutation();
+    return created;
+  };
+
   const addProduct = async (product: Omit<Product, 'id'>) => {
     guardMutation();
     const created = await api.createProduct(product);
@@ -221,6 +261,7 @@ export function useAppState() {
       stock: number;
       location?: string;
       sku?: string;
+      barcode?: string;
     }[],
   ) => {
     guardMutation();
@@ -466,6 +507,35 @@ export function useAppState() {
     void refreshAfterMutation();
   };
 
+  const addCustomer = async (row: Omit<Customer, 'id' | 'createdAt'>) => {
+    guardMutation();
+    const created = await api.createCustomer(row);
+    beginLocalCommit();
+    setCustomers((prev) => upsertById(prev, created));
+    void refreshAfterMutation();
+  };
+
+  const updateCustomer = async (id: string, updates: Partial<Omit<Customer, 'id' | 'createdAt'>>) => {
+    guardMutation();
+    const updated = await api.updateCustomer(id, updates);
+    beginLocalCommit();
+    setCustomers((prev) => upsertById(prev, updated));
+    void refreshAfterMutation();
+  };
+
+  const deleteCustomer = async (id: string) => {
+    guardMutation();
+    await api.deleteCustomer(id);
+    beginLocalCommit();
+    setCustomers((prev) => removeById(prev, id));
+    void refreshAfterMutation();
+  };
+
+  const openCustomerProfile = (id: string) => {
+    setCustomersHighlightId(id);
+    setCurrentScreen('customers');
+  };
+
   const fetchNextSku = async (categoryId: string, subcategoryId: string) => {
     guardMutation();
     const { sku } = await api.getNextSku(categoryId, subcategoryId);
@@ -516,6 +586,10 @@ export function useAppState() {
     productCategories,
     productSubcategories,
     productLocations,
+    customers,
+    customersHighlightId,
+    setCustomersHighlightId,
+    openCustomerProfile,
     cashSessions,
     licenseInfo,
     licenseUsable,
@@ -536,6 +610,8 @@ export function useAppState() {
     setCartItemQuantity,
     clearCart,
     processSale,
+    collectReceivable,
+    registerCustomerForReceivable,
     addProduct,
     updateProduct,
     receiveProductStock,
@@ -557,6 +633,9 @@ export function useAppState() {
     addLocation,
     updateLocation,
     deleteLocation,
+    addCustomer,
+    updateCustomer,
+    deleteCustomer,
     fetchNextSku,
   };
 }

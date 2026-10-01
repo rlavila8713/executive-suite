@@ -12,6 +12,7 @@ import {
   Undo2,
   ListOrdered,
   FileText,
+  HandCoins,
 } from 'lucide-react';
 import {
   BarChart,
@@ -33,6 +34,9 @@ import { CashSession, Transaction, Product, Expense, Screen, type PaymentMethod 
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import { transactionOperatorName, uniqueOperatorNames } from '../lib/operators';
+import { pendingDebtTotal, isPendingDebtSale } from '../lib/reporting';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 function startOfLocalDay(ts: number = Date.now()): number {
   const d = new Date(ts);
@@ -125,6 +129,9 @@ export function Dashboard({
 
   const profitApprox = todayRevenue - expenseMonthly / 30;
 
+  const debtTotal = useMemo(() => pendingDebtTotal(transactions), [transactions]);
+  const debtCount = useMemo(() => transactions.filter((tx) => isPendingDebtSale(tx)).length, [transactions]);
+
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -185,7 +192,8 @@ export function Dashboard({
     );
   }, [transactions, headerSearch, operatorFilter]);
 
-  const recent = transactionsFiltered.slice(0, 8);
+  const { pageItems: recentPageItems, page: recentPage, setPage: setRecentPage, totalPages: recentTotalPages, total: recentTotal, pageSize: recentPageSize } =
+    usePagination(transactionsFiltered);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -217,6 +225,35 @@ export function Dashboard({
           </Button>
         </div>
       </div>
+
+      {debtCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => onNavigate('receivables')}
+          className="w-full text-left rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 p-6 text-white shadow-lg hover:shadow-xl transition-shadow animate-in fade-in zoom-in-95 duration-300"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white/15 rounded-lg">
+                <HandCoins size={24} />
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest opacity-90">{t('dashboard.debtAlertTitle')}</p>
+                <p className="text-sm opacity-90 mt-0.5">
+                  {t('dashboard.debtAlertSubtitle', {
+                    count: debtCount,
+                    amount: `$${debtTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  })}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-sm font-bold">
+              {t('dashboard.debtAlertAction')}
+              <ArrowRight size={18} />
+            </div>
+          </div>
+        </button>
+      ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
         <div className="md:col-span-3 relative overflow-hidden rounded-xl bg-gradient-to-br from-primary to-primary-container p-8 text-white shadow-lg">
@@ -350,7 +387,7 @@ export function Dashboard({
 
       <Card title={t('dashboard.recentTx')}>
         <div className="space-y-3 mt-6">
-          {recent.map((tx) => (
+          {recentPageItems.map((tx) => (
             <div
               key={tx.id}
               className="flex items-center justify-between gap-4 p-4 bg-surface-container-low rounded-xl hover:bg-surface-container-high transition-all group"
@@ -431,6 +468,13 @@ export function Dashboard({
             </div>
           ))}
         </div>
+        <TablePagination
+          page={recentPage}
+          totalPages={recentTotalPages}
+          total={recentTotal}
+          pageSize={recentPageSize}
+          onPageChange={setRecentPage}
+        />
         <div className="mt-6 text-center">
           <button
             type="button"

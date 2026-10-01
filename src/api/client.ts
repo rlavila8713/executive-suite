@@ -4,6 +4,7 @@ import type {
   CheckoutPayload,
   ConnectedDevice,
   ConnectedDevicesPage,
+  Customer,
   Expense,
   LicenseInfo,
   LicensePlanId,
@@ -177,6 +178,17 @@ export const api = {
     request<ProductLocation>(`/api/locations/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   deleteLocation: (id: string) => request<void>(`/api/locations/${id}`, { method: 'DELETE' }),
 
+  getCustomers: () => request<Customer[]>('/api/customers'),
+  createCustomer: (row: Omit<Customer, 'id' | 'createdAt'>) =>
+    request<Customer>('/api/customers', { method: 'POST', body: JSON.stringify(row) }),
+  updateCustomer: (id: string, updates: Partial<Omit<Customer, 'id' | 'createdAt'>>) =>
+    request<Customer>(`/api/customers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    }),
+  deleteCustomer: (id: string) =>
+    request<void>(`/api/customers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   getNextSku: (categoryId: string, subcategoryId: string) =>
     request<{ sku: string }>(
       `/api/products/next-sku?categoryId=${encodeURIComponent(categoryId)}&subcategoryId=${encodeURIComponent(subcategoryId)}`,
@@ -192,6 +204,16 @@ export const api = {
     request<Transaction>(`/api/transactions/${id}/reverse`, { method: 'POST' }),
   processSale: (payload: CheckoutPayload) =>
     request<Transaction>('/api/sales', { method: 'POST', body: JSON.stringify(payload) }),
+  collectReceivable: (id: string, paymentMethod: 'cash' | 'card' | 'transfer') =>
+    request<Transaction>(`/api/receivables/${encodeURIComponent(id)}/collect`, {
+      method: 'POST',
+      body: JSON.stringify({ paymentMethod }),
+    }),
+  linkTransactionCustomer: (transactionId: string, customerId: string) =>
+    request<Transaction>(`/api/transactions/${encodeURIComponent(transactionId)}/customer`, {
+      method: 'PATCH',
+      body: JSON.stringify({ customerId }),
+    }),
 
   getExpenses: () => request<Expense[]>('/api/expenses'),
   createExpense: (row: Omit<Expense, 'id'>) =>

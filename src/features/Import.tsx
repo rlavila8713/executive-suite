@@ -12,6 +12,8 @@ import {
 import { mapMutationError } from '../lib/mutationErrors';
 import { api, type ProductImportResult, type ProductImportValidation } from '../api/client';
 import { cn } from '../lib/utils';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 interface ImportProps {
   onImport: (rows: ProductImportRow[]) => Promise<ProductImportResult>;
@@ -104,6 +106,9 @@ export function Import({ onImport }: ImportProps) {
       cancelled = true;
     };
   }, [rows]);
+
+  const { pageItems: importPageItems, page: importPage, setPage: setImportPage, totalPages: importTotalPages, total: importTotal, pageSize: importPageSize } =
+    usePagination(rows);
 
   const handleImport = async () => {
     if (rows.length === 0) return;
@@ -241,11 +246,13 @@ export function Import({ onImport }: ImportProps) {
                   <th className="px-4 py-2 text-right">{t('import.colStock')}</th>
                   <th className="px-4 py-2">{t('import.colLocation')}</th>
                   <th className="px-4 py-2">{t('common.sku')}</th>
+                  <th className="px-4 py-2">{t('import.colBarcode')}</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 100).map((r, i) => {
-                  const rowStatus = validation?.rows.find((v) => v.row === i + 2)?.status;
+                {importPageItems.map((r, i) => {
+                  const rowIndex = (importPage - 1) * importPageSize + i;
+                  const rowStatus = validation?.rows.find((v) => v.row === rowIndex + 2)?.status;
                   return (
                   <tr
                     key={`${r.sku ?? r.name}-${i}`}
@@ -255,7 +262,7 @@ export function Import({ onImport }: ImportProps) {
                       rowStatus === 'duplicate_in_file' && 'bg-amber-500/10',
                     )}
                   >
-                    <td className="px-4 py-2 text-on-surface-variant">{i + 1}</td>
+                    <td className="px-4 py-2 text-on-surface-variant">{i + 1 + (importPage - 1) * importPageSize}</td>
                     <td className="px-4 py-2 font-medium">{r.name}</td>
                     <td className="px-4 py-2">{r.category}</td>
                     <td className="px-4 py-2">{r.subcategory}</td>
@@ -264,12 +271,20 @@ export function Import({ onImport }: ImportProps) {
                     <td className="px-4 py-2 text-right">{r.stock}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.location ?? '—'}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.sku ?? t('import.skuAuto')}</td>
+                    <td className="px-4 py-2 text-on-surface-variant">{r.barcode ?? '—'}</td>
                   </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
+          <TablePagination
+            page={importPage}
+            totalPages={importTotalPages}
+            total={importTotal}
+            pageSize={importPageSize}
+            onPageChange={setImportPage}
+          />
           {rows.length > 100 ? (
             <p className="p-3 text-xs text-on-surface-variant border-t border-black/5">
               {t('import.previewTruncated', { count: rows.length })}

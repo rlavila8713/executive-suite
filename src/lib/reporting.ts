@@ -26,11 +26,37 @@ export function isReturnRow(tx: Transaction): boolean {
   return tx.type === 'return' || (tx.amount < 0 && tx.type !== 'sale');
 }
 
+export function isPendingDebtSale(tx: Transaction): boolean {
+  return isCompletedSale(tx) && tx.debtStatus === 'pending';
+}
+
+export function isDebtSaleRecord(tx: Transaction): boolean {
+  return isCompletedSale(tx) && !!tx.soldAsDebt;
+}
+
 export function resolveTransactionPaymentMethod(tx: Transaction): PaymentMethod {
+  if (isPendingDebtSale(tx)) return 'other';
   if (tx.paymentMethod && PAYMENT_METHODS.includes(tx.paymentMethod)) return tx.paymentMethod;
   const r = tx.receipt?.paymentMethod;
   if (r && PAYMENT_METHODS.includes(r)) return r;
   return 'other';
+}
+
+/** Whether a transaction affects session payment totals (drawer/card/transfer), not pending debt at sale time. */
+function appliesToSessionPaymentBreakdown(tx: Transaction, range: DateRangeMs): boolean {
+  if (isPendingDebtSale(tx)) return false;
+
+  const createdIn = tx.createdAt >= range.start && tx.createdAt <= range.end;
+  const collectedIn =
+    !!tx.soldAsDebt &&
+    tx.debtStatus === 'collected' &&
+    tx.collectedAt != null &&
+    tx.collectedAt >= range.start &&
+    tx.collectedAt <= range.end;
+
+  if (createdIn) return true;
+  if (collectedIn) return isCompletedSale(tx);
+  return false;
 }
 
 function startOfLocalDay(ts: number): number {
@@ -153,7 +179,7 @@ export function paymentMethodBreakdown(transactions: Transaction[], range: DateR
   });
   const out = init();
   for (const tx of transactions) {
-    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    if (!appliesToSessionPaymentBreakdown(tx, range)) continue;
     const sign = isCompletedSale(tx) ? 1 : isReturnRow(tx) || isReversedSale(tx) ? -1 : 0;
     if (sign === 0) continue;
     const m = resolveTransactionPaymentMethod(tx);
@@ -163,6 +189,28 @@ export function paymentMethodBreakdown(transactions: Transaction[], range: DateR
     out[k] = Math.round(out[k] * 100) / 100;
   });
   return out;
+}
+
+export function pendingDebtTotal(transactions: Transaction[]): number {
+  return Math.round(
+    transactions
+      .filter((tx) => isPendingDebtSale(tx))
+      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+  ) / 100;
+}
+
+/** Pending debt sold during [openedAt, closedAt] — excludes collected and debts from prior sessions. */
+export function sessionDebtSalesTotal(transactions: Transaction[], openedAt: number, closedAt: number): number {
+  return Math.round(
+    transactions
+      .filter(
+        (tx) =>
+          isPendingDebtSale(tx) &&
+          tx.createdAt >= openedAt &&
+          tx.createdAt <= closedAt,
+      )
+      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+  ) / 100;
 }
 
 export function effectiveUnitCost(line: SaleReceiptLine, products: Product[]): number {
@@ -346,15 +394,16 @@ export function computeSessionPaymentTotals(
   totalCardSales: number;
   totalTransferSales: number;
   totalOtherSales: number;
+  totalDebtSales: number;
 } {
   const range: DateRangeMs = { start: openedAt, end: closedAt };
-  const slice = completedSalesInRange(transactions, range);
-  const b = paymentMethodBreakdown(slice, range);
+  const b = paymentMethodBreakdown(transactions, range);
   return {
     totalCashSales: b.cash,
     totalCardSales: b.card,
     totalTransferSales: b.transfer,
     totalOtherSales: b.other,
+    totalDebtSales: sessionDebtSalesTotal(transactions, openedAt, closedAt),
   };
 }
 

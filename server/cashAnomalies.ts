@@ -1,4 +1,4 @@
-export type CashAnomalyKind = 'cash_shortfall' | 'cash_surplus' | 'drawer_variance';
+export type CashAnomalyKind = 'cash_shortfall' | 'cash_surplus' | 'drawer_variance' | 'debt_sales';
 
 export type CashAnomaly = {
   kind: CashAnomalyKind;
@@ -7,6 +7,7 @@ export type CashAnomaly = {
   closingCash: number;
   cashSales: number;
   variance: number;
+  debtSales?: number;
 };
 
 const MONEY_EPS = 0.01;
@@ -15,11 +16,24 @@ export function detectCashAnomalies(
   openingCash: number,
   closingCash: number,
   cashSales: number,
+  debtSales = 0,
 ): CashAnomaly[] {
   const expectedCash = openingCash + cashSales;
   const cashIncrease = closingCash - openingCash;
   const variance = closingCash - expectedCash;
   const anomalies: CashAnomaly[] = [];
+
+  if (debtSales > MONEY_EPS) {
+    anomalies.push({
+      kind: 'debt_sales',
+      message: 'debt_sales',
+      expectedCash,
+      closingCash,
+      cashSales,
+      variance,
+      debtSales: Math.round(debtSales * 100) / 100,
+    });
+  }
 
   if (cashIncrease + MONEY_EPS < cashSales) {
     anomalies.push({

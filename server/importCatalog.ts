@@ -12,6 +12,7 @@ export type ProductImportInput = {
   stock: number;
   location?: string;
   sku?: string;
+  barcode?: string;
 };
 
 export type ImportRowError = { row: number; message: string };
@@ -311,7 +312,7 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
         const id = newId();
         db.prepare(
           `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'unidad', ?, NULL)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'unidad', ?, ?)`,
         ).run(
           id,
           row.name.trim(),
@@ -325,6 +326,7 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
           sub.id,
           sub.name,
           locationId,
+          row.barcode?.trim() || null,
         );
         result.created.products++;
       } catch (err) {

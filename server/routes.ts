@@ -6,6 +6,7 @@ import {
   rowToAppSettings,
   rowToCashSession,
   rowToCategory,
+  rowToCustomer,
   rowToExpense,
   rowToProduct,
   rowToTransaction,
@@ -36,8 +37,8 @@ import {
   setDeviceOperatorName,
 } from './connectedDevices.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class ApiError extends Error {
   constructor(
@@ -504,6 +505,10 @@ export function registerRoutes(router: import('express').Router): void {
         body.sourceSaleId ?? null,
         typeof body.operatorName === 'string' ? body.operatorName : null,
         typeof body.sourceDeviceId === 'string' ? body.sourceDeviceId : null,
+        null,
+        null,
+        0,
+        typeof body.customerId === 'string' ? body.customerId : null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -634,6 +639,10 @@ export function registerRoutes(router: import('express').Router): void {
           existing.id,
           existing.operator_name ?? null,
           existing.source_device_id ?? null,
+          null,
+          null,
+          0,
+          (existing as { customer_id?: string | null }).customer_id ?? null,
         );
       });
 
@@ -648,7 +657,9 @@ export function registerRoutes(router: import('express').Router): void {
     asyncHandler(async (req, res) => {
       const body = req.body as {
         customerName?: string;
+        customerId?: string;
         amount?: number;
+        isDebt?: boolean;
         receipt?: {
           lines: { productId?: string; sku: string; quantity: number; name?: string }[];
           paymentMethod?: string;
@@ -657,9 +668,22 @@ export function registerRoutes(router: import('express').Router): void {
       };
       if (!body.receipt?.lines?.length) throw new ApiError(400, 'Receipt lines required');
 
+      const isDebt = body.isDebt === true;
+      const customerTrim = (body.customerName ?? '').trim();
+      if (isDebt && !customerTrim) {
+        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
+      }
+
       const db = getDb();
       requireCurrentDayCashSession(db);
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      let customerId: string | null = null;
+      if (body.customerId?.trim()) {
+        const c = db.prepare('SELECT id FROM customers WHERE id = ?').get(body.customerId.trim()) as
+          | { id: string }
+          | undefined;
+        if (c) customerId = c.id;
+      }
       const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
       const operatorName = deviceId ? getDeviceOperatorName(db, deviceId) : '';
       if (clientKind === 'mobile' && !operatorName) {
@@ -667,7 +691,9 @@ export function registerRoutes(router: import('express').Router): void {
       }
 
       const amount = body.amount && body.amount > 0 ? body.amount : (body.receipt.total ?? 0);
-      const paymentMethod = (body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other';
+      const paymentMethod = isDebt
+        ? ('debt' as const)
+        : ((body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other');
       const receipt = {
         ...body.receipt,
         paymentMethod,
@@ -676,7 +702,7 @@ export function registerRoutes(router: import('express').Router): void {
       const newTransaction = {
         id: newId(),
         orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
-        customer: (body.customerName ?? '').trim() || 'Walk-in Customer',
+        customer: customerTrim || 'Walk-in Customer',
         amount,
         status: 'completed' as const,
         timestamp: 'Just now',
@@ -686,6 +712,9 @@ export function registerRoutes(router: import('express').Router): void {
         paymentMethod,
         operatorName: operatorName || undefined,
         sourceDeviceId: deviceId || undefined,
+        soldAsDebt: isDebt,
+        debtStatus: isDebt ? ('pending' as const) : undefined,
+        customerId: customerId ?? undefined,
       };
 
       db.runInTransaction(() => {
@@ -728,6 +757,10 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           operatorName || null,
           deviceId || null,
+          isDebt ? 'pending' : null,
+          null,
+          isDebt ? 1 : 0,
+          customerId,
         );
 
         for (const line of body.receipt!.lines) {
@@ -749,6 +782,153 @@ export function registerRoutes(router: import('express').Router): void {
       });
 
       res.status(201).json(newTransaction);
+    }),
+  );
+
+  router.post(
+    '/receivables/:id/collect',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ paymentMethod: string }>(req.body, ['paymentMethod']);
+      const method = body.paymentMethod;
+      if (method !== 'cash' && method !== 'card' && method !== 'transfer') {
+        throw new ApiError(400, 'Invalid payment method for collection');
+      }
+      const db = getDb();
+      requireCurrentDayCashSession(db);
+      const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
+        | {
+            id: string;
+            debt_status: string | null;
+            sold_as_debt: number;
+            receipt_json: string | null;
+          }
+        | undefined;
+      if (!existing || existing.sold_as_debt !== 1 || existing.debt_status !== 'pending') {
+        throw new ApiError(404, 'Pending debt sale not found', 'ERR_DEBT_NOT_FOUND');
+      }
+      const collectedAt = Date.now();
+      const settingsRow = db.prepare('SELECT tax_rate FROM app_settings WHERE id = ?').get('main') as
+        | { tax_rate: number }
+        | undefined;
+      const taxRate = settingsRow?.tax_rate ?? 0;
+      let receipt = existing.receipt_json ? JSON.parse(existing.receipt_json) : {};
+      let amount = Math.abs(
+        (existing as { amount: number }).amount ?? (receipt.total as number) ?? 0,
+      );
+      if (method === 'transfer' && taxRate > 0) {
+        const subtotal = typeof receipt.subtotal === 'number' ? receipt.subtotal : amount;
+        const tax = Math.round(subtotal * (taxRate / 100) * 100) / 100;
+        const total = Math.round((subtotal + tax) * 100) / 100;
+        receipt = {
+          ...receipt,
+          paymentMethod: method,
+          subtotal,
+          tax,
+          taxRatePercent: taxRate,
+          total,
+        };
+        amount = total;
+      } else {
+        receipt = { ...receipt, paymentMethod: method };
+      }
+      db.prepare(
+        `UPDATE transactions SET debt_status = 'collected', collected_at = ?, payment_method = ?, receipt_json = ?, amount = ? WHERE id = ?`,
+      ).run(collectedAt, method, JSON.stringify(receipt), amount, req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  router.patch(
+    '/transactions/:id/customer',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ customerId: string }>(req.body, ['customerId']);
+      const customerId = body.customerId.trim();
+      if (!customerId) throw new ApiError(400, 'Customer id required');
+      const db = getDb();
+      const existing = db.prepare('SELECT id FROM transactions WHERE id = ?').get(req.params.id);
+      if (!existing) throw new ApiError(404, 'Transaction not found');
+      const customer = db.prepare('SELECT id FROM customers WHERE id = ?').get(customerId);
+      if (!customer) throw new ApiError(404, 'Customer not found');
+      db.prepare('UPDATE transactions SET customer_id = ? WHERE id = ?').run(customerId, req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  // --- Customers ---
+  router.get(
+    '/customers',
+    asyncHandler(async (_req, res) => {
+      const db = getDb();
+      const rows = db.prepare('SELECT * FROM customers ORDER BY first_name, last_name').all();
+      res.json(rows.map((r) => rowToCustomer(r as Parameters<typeof rowToCustomer>[0])));
+    }),
+  );
+
+  router.post(
+    '/customers',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ firstName: string }>(req.body, ['firstName']);
+      const firstName = body.firstName.trim();
+      if (!firstName) throw new ApiError(400, 'First name is required', 'ERR_CUSTOMER_NAME_REQUIRED');
+      const db = getDb();
+      const id = newId();
+      const createdAt = Date.now();
+      db.prepare(
+        `INSERT INTO customers (id, first_name, last_name, address, phone, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        firstName,
+        String((req.body as { lastName?: string }).lastName ?? '').trim(),
+        String((req.body as { address?: string }).address ?? '').trim(),
+        String((req.body as { phone?: string }).phone ?? '').trim(),
+        String((req.body as { notes?: string }).notes ?? '').trim(),
+        createdAt,
+      );
+      const row = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+      res.status(201).json(rowToCustomer(row as Parameters<typeof rowToCustomer>[0]));
+    }),
+  );
+
+  router.patch(
+    '/customers/:id',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const existing = db.prepare('SELECT id FROM customers WHERE id = ?').get(req.params.id);
+      if (!existing) throw new ApiError(404, 'Customer not found');
+      const body = req.body as Record<string, unknown>;
+      const map: Record<string, string> = {
+        firstName: 'first_name',
+        lastName: 'last_name',
+        address: 'address',
+        phone: 'phone',
+        notes: 'notes',
+      };
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      for (const [k, col] of Object.entries(map)) {
+        if (body[k] !== undefined) {
+          sets.push(`${col} = ?`);
+          vals.push(String(body[k]).trim());
+        }
+      }
+      if (sets.length === 0) throw new ApiError(400, 'No fields to update');
+      vals.push(req.params.id);
+      db.prepare(`UPDATE customers SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      const row = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+      res.json(rowToCustomer(row as Parameters<typeof rowToCustomer>[0]));
+    }),
+  );
+
+  router.delete(
+    '/customers/:id',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const r = db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
+      if (r.changes === 0) throw new ApiError(404, 'Customer not found');
+      res.status(204).send();
     }),
   );
 
@@ -1017,9 +1197,14 @@ export function registerRoutes(router: import('express').Router): void {
       );
       const expectedCash = s.opening_cash + totals.totalCashSales;
       const variance = body.closingCash - expectedCash;
-      const anomalies = detectCashAnomalies(s.opening_cash, body.closingCash, totals.totalCashSales);
+      const anomalies = detectCashAnomalies(
+        s.opening_cash,
+        body.closingCash,
+        totals.totalCashSales,
+        totals.totalDebtSales,
+      );
       db.prepare(
-        `UPDATE cash_sessions SET closed_at = ?, closing_cash = ?, total_cash_sales = ?, total_card_sales = ?, total_transfer_sales = ?, total_other_sales = ?,
+        `UPDATE cash_sessions SET closed_at = ?, closing_cash = ?, total_cash_sales = ?, total_card_sales = ?, total_transfer_sales = ?, total_other_sales = ?, total_debt_sales = ?,
          expected_cash = ?, cash_variance = ?, anomalies_json = ?
          WHERE id = ?`,
       ).run(
@@ -1029,6 +1214,7 @@ export function registerRoutes(router: import('express').Router): void {
         totals.totalCardSales,
         totals.totalTransferSales,
         totals.totalOtherSales,
+        totals.totalDebtSales,
         expectedCash,
         variance,
         anomalies.length > 0 ? JSON.stringify(anomalies) : null,
@@ -1053,7 +1239,8 @@ export function registerRoutes(router: import('express').Router): void {
       if (!s || s.closed_at == null) throw new ApiError(404, 'Closed cash session not found');
       const expectedCash = s.opening_cash + s.total_cash_sales;
       const variance = body.closingCash - expectedCash;
-      const anomalies = detectCashAnomalies(s.opening_cash, body.closingCash, s.total_cash_sales);
+      const debtSales = (s as { total_debt_sales?: number }).total_debt_sales ?? 0;
+      const anomalies = detectCashAnomalies(s.opening_cash, body.closingCash, s.total_cash_sales, debtSales);
       db.prepare(
         `UPDATE cash_sessions SET closing_cash = ?, expected_cash = ?, cash_variance = ?, anomalies_json = ? WHERE id = ?`,
       ).run(
@@ -1289,6 +1476,10 @@ export function registerRoutes(router: import('express').Router): void {
             tx.sourceSaleId ?? null,
             tx.operatorName ?? tx.receipt?.operatorName ?? null,
             tx.sourceDeviceId ?? null,
+            tx.debtStatus ?? null,
+            tx.collectedAt ?? null,
+            tx.soldAsDebt ? 1 : 0,
+            tx.customerId ?? null,
           );
         }
 
@@ -1332,8 +1523,8 @@ export function registerRoutes(router: import('express').Router): void {
         }
 
         const insertSession = db.prepare(
-          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, expected_cash, cash_variance, anomalies_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, total_debt_sales, expected_cash, cash_variance, anomalies_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const s of data.cashSessions ?? []) {
           insertSession.run(
@@ -1346,6 +1537,7 @@ export function registerRoutes(router: import('express').Router): void {
             s.totalCardSales,
             s.totalTransferSales,
             s.totalOtherSales,
+            s.totalDebtSales ?? 0,
             s.expectedCash ?? null,
             s.cashVariance ?? null,
             s.anomalies?.length ? JSON.stringify(s.anomalies) : null,

@@ -9,7 +9,19 @@ export function computeSessionAnomalies(session: CashSession): CashAnomaly[] {
   const expectedCash = session.openingCash + session.totalCashSales;
   const cashIncrease = session.closingCash - session.openingCash;
   const variance = session.closingCash - expectedCash;
+  const debtSales = session.totalDebtSales ?? 0;
   const anomalies: CashAnomaly[] = [];
+
+  if (debtSales > MONEY_EPS) {
+    anomalies.push({
+      kind: 'debt_sales',
+      expectedCash,
+      closingCash: session.closingCash,
+      cashSales: session.totalCashSales,
+      variance,
+      debtSales,
+    });
+  }
 
   if (cashIncrease + MONEY_EPS < session.totalCashSales) {
     anomalies.push({

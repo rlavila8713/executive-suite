@@ -45,6 +45,9 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_INVALID_RECEIVE_QTY') return t('inventory.receiveInvalidQty');
   if (code === 'ERR_INVALID_RECEIVE_COST') return t('inventory.receiveInvalidCost');
   if (code === 'ERR_INVALID_RECEIVE_PRICE') return t('inventory.receiveInvalidPrice');
+  if (code === 'ERR_CUSTOMER_NAME_REQUIRED') return t('customers.nameRequired');
+  if (code === 'ERR_DEBT_CUSTOMER_REQUIRED') return t('pos.debtCustomerRequired');
+  if (code === 'ERR_DEBT_NOT_FOUND') return t('receivables.empty');
   if (code === 'ERR_IMPORT_EMPTY') return t('import.errNoData');
   if (code === 'ERR_IMPORT_TOO_LARGE') return t('import.errTooLarge');
   return code;

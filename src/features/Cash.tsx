@@ -2,10 +2,12 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Card, Button, Input, Modal } from '../components/ui';
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { CashAnomaly, CashAnomalyKind, CashSession, Transaction } from '../types';
-import { sessionPaymentBreakdown } from '../lib/reporting';
+import { sessionPaymentBreakdown, sessionDebtSalesTotal, pendingDebtTotal, computeSessionPaymentTotals } from '../lib/reporting';
 import { computeSessionAnomalies, sessionHasAnomalies } from '../lib/cashAnomalies';
 import { useI18n } from '../i18n/I18nContext';
 import { cn } from '../lib/utils';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 import { mapMutationError } from '../lib/mutationErrors';
 
 interface CashProps {
@@ -35,12 +37,14 @@ function money(n: number): string {
 function anomalyTitle(kind: CashAnomalyKind, t: (k: string) => string): string {
   if (kind === 'cash_shortfall') return t('cash.anomalyShortfallTitle');
   if (kind === 'cash_surplus') return t('cash.anomalySurplusTitle');
+  if (kind === 'debt_sales') return t('cash.anomalyDebtTitle');
   return t('cash.anomalyVarianceTitle');
 }
 
 function anomalyDetail(kind: CashAnomalyKind, t: (k: string) => string): string {
   if (kind === 'cash_shortfall') return t('cash.anomalyShortfall');
   if (kind === 'cash_surplus') return t('cash.anomalySurplus');
+  if (kind === 'debt_sales') return t('cash.anomalyDebt');
   return t('cash.anomalyVariance');
 }
 
@@ -91,15 +95,14 @@ export function Cash({
   }, [openSession, cashSessions, transactions, tick]);
 
   const sessionBreakdownForRow = (session: CashSession) => {
-    if (session.closedAt != null) {
-      return {
-        cash: session.totalCashSales,
-        card: session.totalCardSales,
-        transfer: session.totalTransferSales,
-        other: session.totalOtherSales,
-      };
-    }
-    return sessionPaymentBreakdown(transactions, session.openedAt);
+    const end = session.closedAt ?? Date.now();
+    const totals = computeSessionPaymentTotals(transactions, session.openedAt, end);
+    return {
+      cash: totals.totalCashSales,
+      card: totals.totalCardSales,
+      transfer: totals.totalTransferSales,
+      other: totals.totalOtherSales,
+    };
   };
 
   const anomalyLabel = (kind: CashAnomalyKind) => anomalyTitle(kind, t);
@@ -176,6 +179,19 @@ export function Cash({
     }
   };
 
+  const openSessionDebt = openSession
+    ? sessionDebtSalesTotal(transactions, openSession.openedAt, Date.now())
+    : 0;
+
+  const globalPendingDebt = pendingDebtTotal(transactions);
+
+  const sortedSessions = useMemo(
+    () => [...cashSessions].sort((a, b) => b.openedAt - a.openedAt),
+    [cashSessions],
+  );
+  const { pageItems: sessionPageItems, page: sessionPage, setPage: setSessionPage, totalPages: sessionTotalPages, total: sessionTotal, pageSize: sessionPageSize } =
+    usePagination(sortedSessions);
+
   const expectedCash =
     openSession != null ? openSession.openingCash + payBreak.cash : null;
 
@@ -201,6 +217,16 @@ export function Cash({
         {expectedCash != null ? (
           <p className="text-sm font-bold text-primary mt-4">
             {t('cash.expectedCash')}: ${expectedCash.toFixed(2)}
+          </p>
+        ) : null}
+        {openSession && openSessionDebt > 0 ? (
+          <p className="text-sm font-semibold text-amber-700 dark:text-amber-300 mt-2">
+            {t('cash.debtSalesTotal')}: ${openSessionDebt.toFixed(2)}
+          </p>
+        ) : null}
+        {globalPendingDebt > 0 ? (
+          <p className="text-sm font-medium text-on-surface-variant mt-2">
+            {t('cash.globalPendingDebt')}: ${globalPendingDebt.toFixed(2)}
           </p>
         ) : null}
       </Card>
@@ -243,7 +269,7 @@ export function Cash({
               </tr>
             </thead>
             <tbody>
-              {cashSessions.map((s) => {
+              {sessionPageItems.map((s) => {
                 const rowPay = sessionBreakdownForRow(s);
                 const anomalies = computeSessionAnomalies(s);
                 const hasAnomalies = sessionHasAnomalies(s);
@@ -351,6 +377,13 @@ export function Cash({
               })}
             </tbody>
           </table>
+          <TablePagination
+            page={sessionPage}
+            totalPages={sessionTotalPages}
+            total={sessionTotal}
+            pageSize={sessionPageSize}
+            onPageChange={setSessionPage}
+          />
         </div>
       </Card>
 
