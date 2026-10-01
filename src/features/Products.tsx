@@ -20,6 +20,8 @@ import { Product, ProductCategory, ProductLocation, ProductSubcategory, ProductS
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
 import { useI18n } from '../i18n/I18nContext';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 import { nextSkuFromProducts } from '../lib/sku';
 import { downloadCsv } from '../lib/printDocument';
 import { computeProductMargin } from '../lib/productMargin';
@@ -102,6 +104,9 @@ export function Products({
       rowMatchesSearch(searchTerm, [p.name, p.sku, p.category, p.subcategory, p.barcode ?? '', String(p.price), String(p.cost)]) &&
       rowMatchesSearch(globalSearch, [p.name, p.sku, p.category, p.subcategory, p.barcode ?? '', String(p.price), String(p.cost)]),
   );
+
+  const { pageItems: productPageItems, page: productPage, setPage: setProductPage, totalPages: productTotalPages, total: productTotal, pageSize: productPageSize } =
+    usePagination(filteredProducts);
 
   const suggestSku = async () => {
     if (!selectedCategory || !selectedSubcategory) return;
@@ -247,7 +252,7 @@ export function Products({
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map((product) => (
+              {productPageItems.map((product) => (
                 <tr key={product.id} className="group hover:bg-surface-container-low transition-colors border-b border-black/5 last:border-0">
                   <td className="py-4 px-6">
                     <div className="flex items-center gap-4">
@@ -298,14 +303,16 @@ export function Products({
               ))}
             </tbody>
           </table>
+          <TablePagination
+            page={productPage}
+            totalPages={productTotalPages}
+            total={productTotal}
+            pageSize={productPageSize}
+            onPageChange={setProductPage}
+          />
         </div>
         <div className="px-8 py-6 flex justify-between items-center bg-surface-container-low border-t border-black/5">
           <span className="text-xs text-on-surface-variant font-medium">{t('products.showingEntries', { count: filteredProducts.length })}</span>
-          <div className="flex gap-1">
-            <Button variant="ghost" size="sm"><ChevronLeft size={16} /></Button>
-            <Button size="sm" className="w-8 h-8 p-0">1</Button>
-            <Button variant="ghost" size="sm"><ChevronRight size={16} /></Button>
-          </div>
         </div>
       </Card>
 

@@ -10,13 +10,17 @@ import {
   ChevronDown,
   ArrowLeftRight,
   Hash,
+  HandCoins,
+  Search,
 } from 'lucide-react';
 import { Button, Input, Modal } from '../components/ui';
 import { CardQrModal } from '../components/CardQrModal';
+import { CustomerPickerModal } from '../components/CustomerPickerModal';
 import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
-import type { CheckoutPayload, Product, ProductCategory, ProductSubcategory, CartItem, SaleReceipt, Transaction } from '../types';
+import type { CheckoutPayload, Product, ProductCategory, ProductSubcategory, CartItem, SaleReceipt, Transaction, Customer } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
+import { customerNameStartsWith, formatCustomerName } from '../lib/customers';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
 import { buildOnlineQrPayload, buildTransferQrPayload } from '../lib/paymentQr';
@@ -31,6 +35,7 @@ interface POSProps {
   products: Product[];
   productCategories: ProductCategory[];
   productSubcategories: ProductSubcategory[];
+  customers: Customer[];
   cart: CartItem[];
   taxRatePercent: number;
   cardQrPayload: string;
@@ -64,6 +69,7 @@ export function POS({
   products,
   productCategories,
   productSubcategories,
+  customers,
   cart,
   taxRatePercent,
   cardQrPayload,
@@ -88,9 +94,13 @@ export function POS({
   const [receiptModalTx, setReceiptModalTx] = useState<Transaction | null>(null);
   const [payQrOpen, setPayQrOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'transfer'>('cash');
+  const [saleAsDebt, setSaleAsDebt] = useState(false);
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>({ kind: 'all' });
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [customerName, setCustomerName] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [customerSuggestOpen, setCustomerSuggestOpen] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [cashPayOpen, setCashPayOpen] = useState(false);
   const [amountPaidInput, setAmountPaidInput] = useState('');
@@ -111,15 +121,29 @@ export function POS({
 
   const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
+  const customerSuggestions = useMemo(() => {
+    if (!customerName.trim()) return [];
+    return customers
+      .filter((c) => customerNameStartsWith(c, customerName))
+      .slice(0, 8);
+  }, [customers, customerName]);
+
+  const selectCustomer = (c: Customer) => {
+    setCustomerName(formatCustomerName(c));
+    setSelectedCustomerId(c.id);
+    setCustomerSuggestOpen(false);
+  };
+
   useEffect(() => {
     if (cart.length === 0) {
       setPaymentMethod('cash');
       setPayQrOpen(false);
+      setSaleAsDebt(false);
     }
   }, [cart.length]);
 
   const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-  const tax = paymentMethod === 'transfer' ? subtotal * (taxRatePercent / 100) : 0;
+  const tax = !saleAsDebt && paymentMethod === 'transfer' ? subtotal * (taxRatePercent / 100) : 0;
   const total = subtotal + tax;
 
   const openQtyModal = (item: CartItem) => {
@@ -176,6 +200,14 @@ export function POS({
       return;
     }
     if (cart.length === 0) return;
+    if (saleAsDebt) {
+      if (!customerName.trim()) {
+        setCheckoutError(t('pos.debtCustomerRequired'));
+        return;
+      }
+      void handleProcessSale();
+      return;
+    }
     if (paymentMethod === 'cash') {
       openCashPayModal();
       return;
@@ -192,12 +224,17 @@ export function POS({
       setCheckoutError(t('pos.checkoutBlocked'));
       return;
     }
-    if (paymentMethod === 'cash') {
+    if (paymentMethod === 'cash' && !saleAsDebt) {
       if (amountPaid == null || amountPaid < total) return;
+    }
+    if (saleAsDebt && !customerName.trim()) {
+      setCheckoutError(t('pos.debtCustomerRequired'));
+      return;
     }
     setCheckoutError(null);
     setCheckoutBusy(true);
-    const name = customerName.trim() || t('pos.walkInCustomer');
+    const name = saleAsDebt ? customerName.trim() : customerName.trim() || t('pos.walkInCustomer');
+    const effectivePayment = saleAsDebt ? ('debt' as const) : paymentMethod;
     const receipt: SaleReceipt = {
       storeName: storeName.trim() || t('receipt.defaultStore'),
       branch: storeBranch.trim(),
@@ -214,10 +251,10 @@ export function POS({
       })),
       subtotal,
       tax,
-      taxRatePercent: paymentMethod === 'transfer' ? taxRatePercent : 0,
+      taxRatePercent: !saleAsDebt && paymentMethod === 'transfer' ? taxRatePercent : 0,
       total,
-      paymentMethod,
-      ...(paymentMethod === 'cash' && amountPaid != null
+      paymentMethod: effectivePayment,
+      ...(paymentMethod === 'cash' && !saleAsDebt && amountPaid != null
         ? {
             amountPaid,
             changeGiven: Math.round((amountPaid - total) * 100) / 100,
@@ -229,10 +266,14 @@ export function POS({
         customerName: name,
         amount: total,
         receipt,
+        ...(saleAsDebt ? { isDebt: true } : {}),
+        ...(selectedCustomerId ? { customerId: selectedCustomerId } : {}),
       });
       if (saved) setReceiptModalTx(saved);
       setCustomerName('');
+      setSelectedCustomerId(null);
       setPaymentMethod('cash');
+      setSaleAsDebt(false);
       setPayQrOpen(false);
       setCashPayOpen(false);
       setAmountPaidInput('');
@@ -379,12 +420,69 @@ export function POS({
               {cartItemCount}
             </span>
           </div>
-          <Input
-            placeholder={t('pos.customerPlaceholder')}
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            className="h-8 text-xs py-1"
-          />
+          <div className="relative flex gap-1">
+            <div className="relative flex-1 min-w-0">
+              <Input
+                placeholder={t('pos.customerPlaceholder')}
+                value={customerName}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setSelectedCustomerId(null);
+                  setCustomerSuggestOpen(true);
+                }}
+                onFocus={() => setCustomerSuggestOpen(true)}
+                onBlur={() => window.setTimeout(() => setCustomerSuggestOpen(false), 150)}
+                className={cn('h-8 text-xs py-1', saleAsDebt && !customerName.trim() ? 'border-amber-500' : '')}
+              />
+              {customerSuggestOpen && customerSuggestions.length > 0 ? (
+                <ul className="absolute z-20 left-0 right-0 top-full mt-0.5 max-h-40 overflow-y-auto rounded-lg border border-black/10 bg-surface-container-lowest shadow-lg text-xs">
+                  {customerSuggestions.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-primary/10 font-medium text-primary"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => selectCustomer(c)}
+                      >
+                        {formatCustomerName(c)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="h-8 px-2 shrink-0"
+              aria-label={t('customers.pickerTitle')}
+              onClick={() => setCustomerPickerOpen(true)}
+            >
+              <Search size={14} />
+            </Button>
+          </div>
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={saleAsDebt}
+              onChange={(e) => {
+                setSaleAsDebt(e.target.checked);
+                if (e.target.checked) {
+                  setPayQrOpen(false);
+                  setCashPayOpen(false);
+                }
+                setCheckoutError(null);
+              }}
+              className="mt-0.5 rounded border-black/20"
+            />
+            <span className="text-[11px] text-on-surface-variant leading-snug">
+              <span className="font-bold text-primary inline-flex items-center gap-1">
+                <HandCoins size={12} /> {t('pos.saleAsDebt')}
+              </span>
+              — {t('pos.saleAsDebtHint')}
+            </span>
+          </label>
         </div>
 
         {/* Líneas del carrito — área principal con scroll */}
@@ -472,7 +570,7 @@ export function POS({
             <span className="font-black text-lg text-primary text-right tabular-nums pt-0.5">${total.toFixed(2)}</span>
           </div>
 
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className={cn('grid grid-cols-3 gap-1.5', saleAsDebt && 'opacity-40 pointer-events-none')}>
             <button
               type="button"
               onClick={() => {
@@ -520,7 +618,9 @@ export function POS({
             </button>
           </div>
 
-          {paymentMethod === 'cash' ? (
+          {saleAsDebt ? (
+            <p className="text-[10px] text-amber-700 dark:text-amber-300 font-medium leading-snug">{t('pos.saleAsDebtHint')}</p>
+          ) : paymentMethod === 'cash' ? (
             <p className="text-[10px] text-on-surface-variant leading-snug">{t('pos.taxCashNote')}</p>
           ) : paymentMethod === 'transfer' ? (
             <p className="text-[10px] text-on-surface-variant leading-snug">{t('pos.taxTransferNote')}</p>
@@ -534,7 +634,7 @@ export function POS({
             onClick={handleCheckoutClick}
             className="w-full py-2.5 text-sm shadow-md flex items-center justify-center gap-2"
           >
-            {t('pos.processSale')} <ArrowRight size={16} />
+            {saleAsDebt ? t('pos.processDebtSale') : t('pos.processSale')} <ArrowRight size={16} />
           </Button>
         </div>
       </section>
@@ -642,6 +742,13 @@ export function POS({
           </div>
         </div>
       </Modal>
+
+      <CustomerPickerModal
+        open={customerPickerOpen}
+        onClose={() => setCustomerPickerOpen(false)}
+        customers={customers}
+        onSelect={selectCustomer}
+      />
 
       <CardQrModal
         open={payQrOpen}

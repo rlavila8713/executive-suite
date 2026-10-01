@@ -6,6 +6,8 @@ import type { Product, ProductCategory } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n, type TranslateFn } from '../i18n/I18nContext';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 function mapCategoryError(err: unknown, t: TranslateFn): string {
   return mapMutationError(err, t);
@@ -59,6 +61,8 @@ export function Categories({
       ),
     [sorted, searchTerm, globalSearch],
   );
+
+  const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -146,7 +150,7 @@ export function Categories({
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c) => {
+              {pageItems.map((c) => {
                 const n = usageByName.get(c.name) ?? 0;
                 return (
                   <tr
@@ -192,6 +196,7 @@ export function Categories({
               })}
             </tbody>
           </table>
+          <TablePagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={setPage} />
         </div>
         <div className="px-8 py-4 bg-surface-container-low border-t border-black/5">
           <span className="text-xs text-on-surface-variant font-medium">{t('categories.showing', { count: filtered.length })}</span>

@@ -8,6 +8,7 @@ import {
   Layers,
   MapPin,
   Wallet,
+  Users,
   Scale,
   ShoppingCart,
   Receipt,
@@ -18,6 +19,8 @@ import {
   Search,
   Menu,
   X,
+  CircleHelp,
+  HandCoins,
 } from 'lucide-react';
 import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
@@ -64,6 +67,7 @@ function useMenuGroups(): MenuGroup[] {
         { id: 'categories', label: t('nav.categories'), icon: Tags },
         { id: 'subcategories', label: t('nav.subcategories'), icon: Layers },
         { id: 'locations', label: t('nav.locations'), icon: MapPin },
+        { id: 'customers', label: t('nav.customers'), icon: Users },
       ],
     },
     {
@@ -71,13 +75,17 @@ function useMenuGroups(): MenuGroup[] {
       label: t('nav.groupFinance'),
       items: [
         { id: 'expenses', label: t('nav.expenses'), icon: Receipt },
+        { id: 'receivables', label: t('nav.receivables'), icon: HandCoins },
         { id: 'reports', label: t('nav.reports'), icon: BarChart3 },
       ],
     },
     {
       id: 'system',
       label: t('nav.groupSystem'),
-      items: [{ id: 'settings', label: t('nav.settings'), icon: Settings }],
+      items: [
+        { id: 'help', label: t('nav.help'), icon: CircleHelp },
+        { id: 'settings', label: t('nav.settings'), icon: Settings },
+      ],
     },
   ];
 }

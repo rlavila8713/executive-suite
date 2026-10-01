@@ -6,6 +6,8 @@ import type { Product, ProductLocation } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n, type TranslateFn } from '../i18n/I18nContext';
+import { usePagination } from '../lib/usePagination';
+import { TablePagination } from '../components/TablePagination';
 
 function mapLocationError(err: unknown, t: TranslateFn): string {
   return mapMutationError(err, t);
@@ -43,6 +45,8 @@ export function Locations({ locations, products, globalSearch = '', onAdd, onUpd
         .filter((l) => rowMatchesSearch(searchTerm, [l.name]) && rowMatchesSearch(globalSearch, [l.name])),
     [locations, searchTerm, globalSearch],
   );
+
+  const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -119,7 +123,7 @@ export function Locations({ locations, products, globalSearch = '', onAdd, onUpd
               </tr>
             </thead>
             <tbody>
-              {filtered.map((l) => (
+              {pageItems.map((l) => (
                 <tr key={l.id} className="border-b border-black/5 last:border-0 hover:bg-surface-container-low">
                   <td className="py-4 px-6 font-bold text-primary">{l.name}</td>
                   <td className="py-4 px-6 text-right text-sm text-secondary">{usageById.get(l.id) ?? 0}</td>
@@ -152,6 +156,7 @@ export function Locations({ locations, products, globalSearch = '', onAdd, onUpd
               ))}
             </tbody>
           </table>
+          <TablePagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={setPage} />
         </div>
       </Card>
 
