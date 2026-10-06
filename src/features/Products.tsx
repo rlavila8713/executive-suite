@@ -24,6 +24,7 @@ import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import { nextSkuFromProducts } from '../lib/sku';
 import { downloadCsv } from '../lib/printDocument';
+import { computeProductMargin } from '../lib/productMargin';
 
 const STATUSES: ProductStatus[] = ['active', 'inactive', 'pending'];
 const UNITS: UnitOfMeasure[] = ['unidad', 'par', 'caja', 'paquete', 'metro', 'kg', 'litro'];
@@ -64,6 +65,9 @@ export function Products({
   const [status, setStatus] = useState<ProductStatus>('active');
   const [unitOfMeasure, setUnitOfMeasure] = useState<UnitOfMeasure>('unidad');
   const [locationId, setLocationId] = useState<string>('');
+  const [priceInput, setPriceInput] = useState('');
+  const [priceError, setPriceError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!isModalOpen) return;
     setProductImage(editingProduct?.image || PLACEHOLDER_PRODUCT_IMAGE);
@@ -74,7 +78,17 @@ export function Products({
     setStatus(editingProduct?.status ?? 'active');
     setUnitOfMeasure(editingProduct?.unitOfMeasure ?? 'unidad');
     setLocationId(editingProduct?.locationId ?? '');
+    setPriceInput(editingProduct != null ? String(editingProduct.price) : '');
+    setPriceError(null);
   }, [isModalOpen, editingProduct]);
+
+  const marginPreview = useMemo(() => {
+    if (!editingProduct) return null;
+    const price = parseFloat(priceInput.replace(',', '.'));
+    if (!Number.isFinite(price) || priceInput.trim() === '') return null;
+    if (editingProduct.cost <= 0 && editingProduct.stock <= 0) return null;
+    return computeProductMargin(price, editingProduct.cost);
+  }, [priceInput, editingProduct]);
 
   const categoryOptions = [...productCategories].sort((a, b) => a.name.localeCompare(b.name));
   const subsForCategory = useMemo(
@@ -127,11 +141,16 @@ export function Products({
     };
 
     if (editingProduct) {
+      const priceParsed = parseFloat(priceInput.replace(',', '.'));
+      if (!Number.isFinite(priceParsed) || priceParsed < 0) {
+        setPriceError(t('products.invalidPrice'));
+        return;
+      }
       const { cost: _c, stock: _s, price: _p, warehouseCost: _w, ...catalogUpdates } = productData;
       if (!imageDirty) {
         delete (catalogUpdates as { image?: string }).image;
       }
-      await onUpdate(editingProduct.id, catalogUpdates);
+      await onUpdate(editingProduct.id, { ...catalogUpdates, price: priceParsed });
     } else {
       await onAdd(productData);
     }
@@ -394,13 +413,23 @@ export function Products({
           </p>
           {editingProduct ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
+              <div className="space-y-1 sm:col-span-2">
                 <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.price')}</label>
                 <Input
-                  value={editingProduct.price > 0 ? editingProduct.price.toFixed(2) : t('products.costNotSet')}
-                  readOnly
-                  className="opacity-80"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={priceInput}
+                  onChange={(e) => {
+                    setPriceInput(e.target.value);
+                    setPriceError(null);
+                  }}
+                  required
+                  className="mt-1"
                 />
+                <p className="text-[10px] text-on-surface-variant">{t('products.priceEditHint')}</p>
+                {priceError ? <p className="text-xs text-error">{priceError}</p> : null}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.warehouseCost')}</label>
@@ -432,6 +461,26 @@ export function Products({
           ) : (
             <p className="text-xs text-on-surface-variant">{t('products.stockCreateHint')}</p>
           )}
+          {marginPreview ? (
+            <div
+              className={cn(
+                'rounded-xl px-4 py-3 text-sm font-bold border',
+                marginPreview.isProfit
+                  ? 'bg-tertiary-container/15 border-tertiary-container/40 text-on-tertiary-container'
+                  : 'bg-error-container/30 border-error/30 text-on-error-container',
+              )}
+            >
+              {marginPreview.isProfit
+                ? t('products.profitBanner', {
+                    amount: marginPreview.profitPerUnit.toFixed(2),
+                    margin: marginPreview.marginPercent.toFixed(2),
+                  })
+                : t('products.lossBanner', {
+                    amount: Math.abs(marginPreview.profitPerUnit).toFixed(2),
+                    margin: marginPreview.marginPercent.toFixed(2),
+                  })}
+            </div>
+          ) : null}
           <div className="pt-4 flex gap-3">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsModalOpen(false)}>{t('common.cancel')}</Button>
             <Button type="submit" className="flex-1">{t('products.saveProduct')}</Button>

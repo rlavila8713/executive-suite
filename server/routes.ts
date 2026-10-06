@@ -50,6 +50,7 @@ import {
   revokeConnectedDevice,
   setDeviceOperatorName,
 } from './connectedDevices.js';
+import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesCheckout.js';
 
 const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -266,11 +267,11 @@ export function registerRoutes(router: import('express').Router): void {
       if (body.stock !== undefined) {
         rejectDirectStoreStockMutation();
       }
-      if (body.price !== undefined || body.cost !== undefined || body.warehouseCost !== undefined) {
+      if (body.cost !== undefined || body.warehouseCost !== undefined) {
         throw new ApiError(
           409,
-          'Price and costs are set via warehouse entry or transfer',
-          'ERR_PRODUCT_PRICING_READONLY',
+          'Product costs are set via warehouse entry or transfer',
+          'ERR_PRODUCT_COST_READONLY',
         );
       }
       const fields: string[] = [];
@@ -279,6 +280,7 @@ export function registerRoutes(router: import('express').Router): void {
         name: 'name',
         sku: 'sku',
         category: 'category',
+        price: 'price',
         image: 'image',
         categoryId: 'category_id',
         subcategoryId: 'subcategory_id',
@@ -289,10 +291,18 @@ export function registerRoutes(router: import('express').Router): void {
         barcode: 'barcode',
       };
       for (const [key, col] of Object.entries(map)) {
-        if (body[key] !== undefined) {
+        if (body[key] === undefined) continue;
+        if (key === 'price') {
+          const price = Number(body.price);
+          if (!Number.isFinite(price) || price < 0) {
+            throw new ApiError(400, 'price must be a non-negative number', 'ERR_INVALID_PRODUCT_PRICE');
+          }
           fields.push(`${col} = ?`);
-          values.push(body[key]);
+          values.push(price);
+          continue;
         }
+        fields.push(`${col} = ?`);
+        values.push(body[key]);
       }
       if (fields.length === 0) throw new ApiError(400, 'No fields to update');
       values.push(req.params.id);
@@ -607,6 +617,14 @@ export function registerRoutes(router: import('express').Router): void {
       if (existing.status !== 'completed') {
         throw new ApiError(409, 'Only completed sales can be reversed', 'ERR_SALE_CANNOT_REVERSE');
       }
+      const debtRow = existing as { sold_as_debt?: number; debt_status?: string | null };
+      if (debtRow.sold_as_debt === 1 && debtRow.debt_status === 'collected') {
+        throw new ApiError(
+          409,
+          'Cannot reverse a sale whose debt was already collected',
+          'ERR_SALE_DEBT_COLLECTED_CANNOT_REVERSE',
+        );
+      }
       const alreadyReversed = db
         .prepare('SELECT id FROM transactions WHERE source_sale_id = ? LIMIT 1')
         .get(existing.id);
@@ -672,19 +690,17 @@ export function registerRoutes(router: import('express').Router): void {
         customerId?: string;
         amount?: number;
         isDebt?: boolean;
+        isPartialDebt?: boolean;
         receipt?: {
           lines: { productId?: string; sku: string; quantity: number; name?: string }[];
           paymentMethod?: string;
           total?: number;
+          subtotal?: number;
+          payments?: { method: string; amount: number }[];
+          [key: string]: unknown;
         };
       };
       if (!body.receipt?.lines?.length) throw new ApiError(400, 'Receipt lines required');
-
-      const isDebt = body.isDebt === true;
-      const customerTrim = (body.customerName ?? '').trim();
-      if (isDebt && !customerTrim) {
-        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
-      }
 
       const db = getDb();
       requireCurrentDayCashSession(db);
@@ -697,18 +713,49 @@ export function registerRoutes(router: import('express').Router): void {
         if (c) customerId = c.id;
       }
       const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
+      const receiptLooksMixed =
+        body.receipt?.paymentMethod === 'mixed' || (body.receipt?.payments?.length ?? 0) > 0;
+      if (receiptLooksMixed && clientKind === 'mobile') {
+        throw new ApiError(403, 'Split payments are only available on web POS', 'ERR_MIXED_WEB_ONLY');
+      }
+
       const operatorName = deviceId ? getDeviceOperatorName(db, deviceId) : '';
       if (clientKind === 'mobile' && !operatorName) {
         throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
       }
 
-      const amount = body.amount && body.amount > 0 ? body.amount : (body.receipt.total ?? 0);
-      const paymentMethod = isDebt
+      const settingsRow = db.prepare('SELECT tax_rate FROM app_settings WHERE id = ?').get('main') as
+        | { tax_rate: number }
+        | undefined;
+      const taxRate = settingsRow?.tax_rate ?? 0;
+
+      const isDebtFull = body.isDebt === true && body.isPartialDebt !== true;
+      let checkout;
+      try {
+        checkout = normalizeMixedSaleReceipt(body.receipt as import('./salesCheckout.js').SaleReceiptInput, taxRate, {
+          isDebt: isDebtFull,
+          isPartialDebt: body.isPartialDebt === true,
+          clientKind,
+        });
+      } catch (e) {
+        if (e instanceof SaleCheckoutValidationError) {
+          throw new ApiError(e.status, e.message, e.code);
+        }
+        throw e;
+      }
+
+      const soldAsDebt = checkout.soldAsDebt || isDebtFull;
+      const customerTrim = (body.customerName ?? '').trim();
+      if (soldAsDebt && !customerTrim) {
+        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
+      }
+
+      const amount = body.amount && body.amount > 0 ? body.amount : (checkout.receipt.total ?? 0);
+      const paymentMethod = soldAsDebt && !checkout.receipt.payments?.length
         ? ('debt' as const)
-        : ((body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other');
+        : (checkout.paymentMethod as 'cash' | 'card' | 'transfer' | 'other' | 'mixed' | 'debt');
       const receipt = {
-        ...body.receipt,
-        paymentMethod,
+        ...checkout.receipt,
         ...(operatorName ? { operatorName } : {}),
       };
       const newTransaction = {
@@ -724,8 +771,8 @@ export function registerRoutes(router: import('express').Router): void {
         paymentMethod,
         operatorName: operatorName || undefined,
         sourceDeviceId: deviceId || undefined,
-        soldAsDebt: isDebt,
-        debtStatus: isDebt ? ('pending' as const) : undefined,
+        soldAsDebt,
+        debtStatus: soldAsDebt ? ('pending' as const) : undefined,
         customerId: customerId ?? undefined,
       };
 
@@ -769,9 +816,9 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           operatorName || null,
           deviceId || null,
-          isDebt ? 'pending' : null,
+          soldAsDebt ? 'pending' : null,
           null,
-          isDebt ? 1 : 0,
+          soldAsDebt ? 1 : 0,
           customerId,
         );
 
@@ -824,24 +871,44 @@ export function registerRoutes(router: import('express').Router): void {
         | undefined;
       const taxRate = settingsRow?.tax_rate ?? 0;
       let receipt = existing.receipt_json ? JSON.parse(existing.receipt_json) : {};
-      let amount = Math.abs(
-        (existing as { amount: number }).amount ?? (receipt.total as number) ?? 0,
-      );
-      if (method === 'transfer' && taxRate > 0) {
-        const subtotal = typeof receipt.subtotal === 'number' ? receipt.subtotal : amount;
-        const tax = Math.round(subtotal * (taxRate / 100) * 100) / 100;
-        const total = Math.round((subtotal + tax) * 100) / 100;
+      const balanceDue =
+        typeof receipt.balanceDue === 'number' && receipt.balanceDue > 0
+          ? receipt.balanceDue
+          : Math.abs((existing as { amount?: number }).amount ?? (receipt.total as number) ?? 0);
+      let amount = balanceDue;
+      const mixedTaxIncluded = receipt.mixedTaxIncluded === true;
+      if (mixedTaxIncluded) {
+        receipt = {
+          ...receipt,
+          balanceDue: 0,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: balanceDue,
+        };
+      } else if (method === 'transfer' && taxRate > 0) {
+        const partialMixedDebt =
+          receipt.paymentMethod === 'mixed' &&
+          Array.isArray(receipt.payments) &&
+          receipt.payments.some((p: { method: string }) => p.method === 'cash');
+        const taxBase = partialMixedDebt ? balanceDue : typeof receipt.subtotal === 'number' ? receipt.subtotal : amount;
+        const tax = Math.round(taxBase * (taxRate / 100) * 100) / 100;
+        const total = Math.round((balanceDue + tax) * 100) / 100;
         receipt = {
           ...receipt,
           paymentMethod: method,
-          subtotal,
           tax,
           taxRatePercent: taxRate,
-          total,
+          total: typeof receipt.total === 'number' ? Math.round((receipt.total + tax) * 100) / 100 : total,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: total,
         };
         amount = total;
       } else {
-        receipt = { ...receipt, paymentMethod: method };
+        receipt = {
+          ...receipt,
+          paymentMethod: method,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: balanceDue,
+        };
       }
       db.prepare(
         `UPDATE transactions SET debt_status = 'collected', collected_at = ?, payment_method = ?, receipt_json = ?, amount = ? WHERE id = ?`,

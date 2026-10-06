@@ -140,7 +140,12 @@ export interface CartItem extends Product {
 }
 
 /** How the customer paid (stored on each transaction for reporting). */
-export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'debt';
+export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'debt' | 'mixed';
+
+export type SalePaymentPart = {
+  method: 'cash' | 'card' | 'transfer' | 'debt';
+  amount: number;
+};
 
 export type DebtStatus = 'pending' | 'collected';
 
@@ -172,6 +177,16 @@ export interface SaleReceipt {
   taxRatePercent: number;
   total: number;
   paymentMethod: PaymentMethod;
+  /** Split checkout (cash + transfer and/or debt). */
+  payments?: SalePaymentPart[];
+  /** Outstanding receivable after a partial debt sale (0 when paid). */
+  balanceDue?: number;
+  /** Tax on the non-cash portion is included in total/balanceDue (no extra tax on collect). */
+  mixedTaxIncluded?: boolean;
+  /** Channel used when a pending debt was collected. */
+  collectedPaymentMethod?: PaymentMethod;
+  /** Amount collected when closing a receivable (audit). */
+  debtCollectedAmount?: number;
   /** Efectivo: importe entregado por el cliente. */
   amountPaid?: number;
   /** Efectivo: vuelto entregado (amountPaid - total). */
@@ -343,5 +358,7 @@ export type CheckoutPayload = {
   receipt: SaleReceipt;
   /** Credit sale: customer name required; no cash in drawer. */
   isDebt?: boolean;
+  /** Partial or split sale with a pending receivable balance. */
+  isPartialDebt?: boolean;
   customerId?: string;
 };

@@ -1,4 +1,5 @@
 import type { Expense, PaymentMethod, Product, SaleReceiptLine, Transaction } from '../types';
+import { applyPaymentPartsToBreakdown, receivableBalanceDue } from './paymentSplits';
 
 export type DateRangeMs = { start: number; end: number };
 
@@ -216,8 +217,11 @@ export function groupSalesByBucket(
     .map(([key, v]) => ({ key, label: v.label, revenue: Math.round(v.revenue * 100) / 100, orderCount: v.orderCount }));
 }
 
-export function paymentMethodBreakdown(transactions: Transaction[], range: DateRangeMs): Record<PaymentMethod, number> {
-  const init = (): Record<PaymentMethod, number> => ({
+export function paymentMethodBreakdown(
+  transactions: Transaction[],
+  range: DateRangeMs,
+): Record<'cash' | 'card' | 'transfer' | 'other', number> {
+  const init = (): Record<'cash' | 'card' | 'transfer' | 'other', number> => ({
     cash: 0,
     card: 0,
     transfer: 0,
@@ -225,13 +229,17 @@ export function paymentMethodBreakdown(transactions: Transaction[], range: DateR
   });
   const out = init();
   for (const tx of transactions) {
+    if (tx.receipt?.payments?.length) {
+      applyPaymentPartsToBreakdown(out, tx, range);
+      continue;
+    }
     if (!appliesToSessionPaymentBreakdown(tx, range)) continue;
     const sign = isCompletedSale(tx) ? 1 : isReturnRow(tx) || isReversedSale(tx) ? -1 : 0;
     if (sign === 0) continue;
     const m = resolveTransactionPaymentMethod(tx);
     out[m] += sign * Math.abs(tx.amount);
   }
-  (Object.keys(out) as PaymentMethod[]).forEach((k) => {
+  (Object.keys(out) as (keyof typeof out)[]).forEach((k) => {
     out[k] = Math.round(out[k] * 100) / 100;
   });
   return out;
@@ -241,7 +249,7 @@ export function pendingDebtTotal(transactions: Transaction[]): number {
   return Math.round(
     transactions
       .filter((tx) => isPendingDebtSale(tx))
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+      .reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100,
   ) / 100;
 }
 
@@ -255,7 +263,7 @@ export function sessionDebtSalesTotal(transactions: Transaction[], openedAt: num
           tx.createdAt >= openedAt &&
           tx.createdAt <= closedAt,
       )
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+      .reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100,
   ) / 100;
 }
 

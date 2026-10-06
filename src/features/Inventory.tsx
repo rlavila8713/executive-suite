@@ -48,6 +48,16 @@ function stockStatusKey(product: Product): 'healthy' | 'critical' | 'out' {
   return 'healthy';
 }
 
+function stockStatusChipClass(key: ReturnType<typeof stockStatusKey>): string {
+  if (key === 'healthy') {
+    return 'bg-tertiary-container/15 text-on-tertiary-container ring-1 ring-tertiary-container/35';
+  }
+  if (key === 'critical') {
+    return 'bg-error-container/40 text-on-error-container ring-1 ring-error/30';
+  }
+  return 'bg-surface-container-high text-on-surface-variant ring-1 ring-black/10';
+}
+
 export function Inventory({
   products,
   productCategories,
@@ -247,12 +257,8 @@ export function Inventory({
                   <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-full h-full object-cover" alt={product.name} />
                   <span
                     className={cn(
-                      'absolute top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase',
-                      stockStatusKey(product) === 'healthy'
-                        ? 'bg-tertiary-container/90 text-white'
-                        : stockStatusKey(product) === 'critical'
-                          ? 'bg-error/80 text-white'
-                          : 'bg-surface-container-high text-on-surface-variant',
+                      'absolute top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide',
+                      stockStatusChipClass(stockStatusKey(product)),
                     )}
                   >
                     {statusLabel(product)}
@@ -264,7 +270,7 @@ export function Inventory({
                     <p className="text-[10px] text-on-surface-variant">{product.sku}</p>
                   </div>
                   <div className="text-xs flex justify-between gap-2">
-                    <span className="font-bold text-primary">{product.stock} uds</span>
+                    <span className="font-bold text-primary">{product.stock} unidades</span>
                     <span className="text-on-surface-variant text-right">
                       {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
                     </span>
@@ -308,7 +314,14 @@ export function Inventory({
                       {product.stock > 0 || product.cost > 0 ? `$${product.cost.toFixed(2)}` : t('products.costNotSet')}
                     </td>
                     <td className="py-3 px-4 text-center">
-                      <span className="text-[10px] font-bold uppercase">{statusLabel(product)}</span>
+                      <span
+                        className={cn(
+                          'inline-flex items-center justify-center min-w-[5.5rem] px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide',
+                          stockStatusChipClass(stockStatusKey(product)),
+                        )}
+                      >
+                        {statusLabel(product)}
+                      </span>
                     </td>
                   </tr>
                 ))}

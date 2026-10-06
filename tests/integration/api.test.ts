@@ -537,6 +537,81 @@ describe('Executive Suite API integration', () => {
       assert.equal(closed.body.totalCashSales, 0);
     });
 
+    it('accepts mixed cash + transfer on web and rejects on mobile', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Combo',
+          sku: 'COM-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 5, 40, 100);
+
+      await api('/api/settings', { method: 'PATCH', body: { taxRate: 10 } });
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const mobileBlocked = await api('/api/sales', {
+        method: 'POST',
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+        body: {
+          customerName: 'Cliente',
+          amount: 105,
+          receipt: {
+            subtotal: 100,
+            tax: 5,
+            taxRatePercent: 10,
+            total: 105,
+            paymentMethod: 'mixed',
+            payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+          },
+        },
+      });
+      assert.equal(mobileBlocked.status, 403);
+      assert.equal((mobileBlocked.body as { code: string }).code, 'ERR_MIXED_WEB_ONLY');
+
+      const mixed = await api<{ amount: number; receipt: { total: number; payments: { method: string; amount: number }[] } }>(
+        '/api/sales',
+        {
+          method: 'POST',
+          body: {
+            customerName: 'Cliente',
+            amount: 105,
+            receipt: {
+              subtotal: 100,
+              tax: 5,
+              taxRatePercent: 10,
+              total: 105,
+              paymentMethod: 'mixed',
+              payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+              lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+            },
+          },
+        },
+      );
+      assert.equal(mixed.status, 201);
+      assert.equal(mixed.body.amount, 105);
+      assert.equal(mixed.body.receipt.payments.length, 2);
+
+      const closed = await api<{ totalCashSales: number; totalTransferSales: number }>(
+        `/api/cash-sessions/${session.body.id}/close`,
+        { method: 'POST', body: { closingCash: 50 } },
+      );
+      assert.equal(closed.status, 200);
+      assert.equal(closed.body.totalCashSales, 50);
+      assert.equal(closed.body.totalTransferSales, 55);
+    });
+
     it('rejects selling more units than available stock', async () => {
       const product = await api<{ id: string; sku: string }>('/api/products', {
         method: 'POST',

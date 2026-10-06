@@ -18,7 +18,7 @@
     "deploy:zip": "npm run build && node scripts/zip-release.mjs",
     "clean": "rm -rf dist",
     "test": "npm run test:integration",
-    "test:integration": "tsx --test tests/integration/**/*.test.ts tests/reporting-metrics.test.ts tests/backup-parse.test.ts",
+    "test:integration": "tsx --test tests/integration/**/*.test.ts tests/reporting-metrics.test.ts tests/backup-parse.test.ts tests/mixed-payment.test.ts",
     "client:start": "node scripts/start-client.mjs",
     "client:build": "npm run build && npm run build:server",
     "client:deploy": "npm run client:build && npm run client:start",

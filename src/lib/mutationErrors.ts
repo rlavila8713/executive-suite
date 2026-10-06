@@ -47,9 +47,13 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_INVALID_RECEIVE_PRICE') return t('inventory.receiveInvalidPrice');
   if (code === 'ERR_INVALID_TRANSFER_QTY') return t('inventory.transferInvalidQty');
   if (code === 'ERR_INVALID_TRANSFER_PRICE') return t('warehouse.transferInvalidPrice');
+  if (code === 'ERR_PRODUCT_COST_READONLY') return t('errors.productCostReadonly');
+  if (code === 'ERR_INVALID_PRODUCT_PRICE') return t('products.invalidPrice');
   if (code === 'ERR_CUSTOMER_NAME_REQUIRED') return t('customers.nameRequired');
   if (code === 'ERR_DEBT_CUSTOMER_REQUIRED') return t('pos.debtCustomerRequired');
   if (code === 'ERR_DEBT_NOT_FOUND') return t('receivables.empty');
+  if (code === 'ERR_SALE_DEBT_COLLECTED_CANNOT_REVERSE') return t('errors.saleDebtCollectedCannotReverse');
+  if (code === 'ERR_MIXED_WEB_ONLY') return t('errors.mixedWebOnly');
   if (code === 'ERR_IMPORT_EMPTY') return t('import.errNoData');
   if (code === 'ERR_IMPORT_TOO_LARGE') return t('import.errTooLarge');
   if (code === 'ERR_WAREHOUSE_WEB_ONLY') return t('errors.warehouseWebOnly');

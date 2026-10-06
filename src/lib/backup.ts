@@ -128,7 +128,8 @@ function isSaleReceipt(x: unknown): x is SaleReceipt {
       x.paymentMethod === 'card' ||
       x.paymentMethod === 'transfer' ||
       x.paymentMethod === 'other' ||
-      x.paymentMethod === 'debt') &&
+      x.paymentMethod === 'debt' ||
+      x.paymentMethod === 'mixed') &&
     (x.operatorName === undefined || typeof x.operatorName === 'string')
   );
 }
@@ -142,7 +143,8 @@ function isTransaction(x: unknown): x is Transaction {
     x.paymentMethod === 'card' ||
     x.paymentMethod === 'transfer' ||
     x.paymentMethod === 'other' ||
-    x.paymentMethod === 'debt';
+    x.paymentMethod === 'debt' ||
+    x.paymentMethod === 'mixed';
   const debtOk =
     x.debtStatus === undefined ||
     x.debtStatus === 'pending' ||
