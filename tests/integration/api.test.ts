@@ -246,7 +246,7 @@ describe('Executive Suite API integration', () => {
       assert.equal(receive.status, 200);
       assert.equal(receive.body.newWarehouseQty, 10);
       assert.equal(receive.body.product.stock, 0);
-      assert.equal(receive.body.product.cost, 0);
+      assert.equal(receive.body.product.cost, 1);
       assert.equal(receive.body.product.warehouseCost, 1);
       assert.equal(receive.body.product.price, 3);
 
@@ -875,6 +875,30 @@ describe('Executive Suite API integration', () => {
     });
   });
 
+  describe('diagnostics', () => {
+    it('GET /api/diagnostics/summary returns counts', async () => {
+      const res = await api<{ database: { products: number } }>('/api/diagnostics/summary');
+      assert.equal(res.status, 200);
+      assert.ok(typeof res.body.database.products === 'number');
+    });
+
+    it('GET /api/admin/diagnostics includes dataDir', async () => {
+      const res = await api<{ dataDir: string }>('/api/admin/diagnostics', {
+        headers: { 'X-Client-Kind': 'web' },
+      });
+      assert.equal(res.status, 200);
+      assert.ok(res.body.dataDir.length > 0);
+    });
+
+    it('rejects admin diagnostics from mobile clients', async () => {
+      const res = await api('/api/admin/diagnostics', {
+        headers: { 'User-Agent': 'Dart/3.0 (flutter)', 'X-Client-Kind': 'mobile' },
+      });
+      assert.equal(res.status, 403);
+      assert.equal((res.body as { code: string }).code, 'ERR_ADMIN_WEB_ONLY');
+    });
+  });
+
   describe('backup & factory reset', () => {
     it('exports backup JSON', async () => {
       const backup = await api<{ app: string; products: unknown[] }>('/api/backup');
@@ -886,7 +910,7 @@ describe('Executive Suite API integration', () => {
     it('round-trips backup including warehouse_cost and warehouse stock', async () => {
       const created = await api<{ id: string }>('/api/products', {
         method: 'POST',
-        body: { name: 'Backup SKU', sku: 'BKP-99', category: 'Test', stock: 0 },
+        body: { name: 'Backup SKU', sku: 'BKP-99', category: 'Test', price: 9, cost: 0, stock: 0 },
       });
       assert.equal(created.status, 201);
       const productId = created.body.id;

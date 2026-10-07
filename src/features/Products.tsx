@@ -25,6 +25,7 @@ import { TablePagination } from '../components/TablePagination';
 import { nextSkuFromProducts } from '../lib/sku';
 import { downloadCsv } from '../lib/printDocument';
 import { computeProductMargin } from '../lib/productMargin';
+import { enqueueUpload } from '../lib/uploadQueue';
 
 const STATUSES: ProductStatus[] = ['active', 'inactive', 'pending'];
 const UNITS: UnitOfMeasure[] = ['unidad', 'par', 'caja', 'paquete', 'metro', 'kg', 'litro'];
@@ -150,7 +151,11 @@ export function Products({
       if (!imageDirty) {
         delete (catalogUpdates as { image?: string }).image;
       }
-      await onUpdate(editingProduct.id, { ...catalogUpdates, price: priceParsed });
+      const save = async () => {
+        await onUpdate(editingProduct.id, { ...catalogUpdates, price: priceParsed });
+      };
+      if (imageDirty) await enqueueUpload(save);
+      else await save();
     } else {
       await onAdd(productData);
     }

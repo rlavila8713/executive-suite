@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isFileImageRef, productImageVersionFromRef, readFileImageRef } from './productImageStorage.js';
 
 export type ResolvedProductImage =
   | { kind: 'buffer'; data: Buffer; contentType: string }
@@ -29,6 +30,14 @@ export function resolveProductImage(image: string | null | undefined): ResolvedP
     return { kind: 'buffer', contentType: 'image/svg+xml', data: Buffer.from(svg, 'utf8') };
   }
 
+  if (isFileImageRef(value)) {
+    const file = readFileImageRef(value);
+    if (file) {
+      return { kind: 'buffer', contentType: file.contentType, data: file.data };
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -36,6 +45,9 @@ export function resolveProductImage(image: string | null | undefined): ResolvedP
 export function productImageVersion(image: string | null | undefined): string | null {
   const value = (image ?? '').trim();
   if (!value) return null;
+  if (isFileImageRef(value)) {
+    return productImageVersionFromRef(value);
+  }
   return createHash('sha1').update(value).digest('hex').slice(0, 12);
 }
 

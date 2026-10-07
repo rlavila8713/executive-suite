@@ -42,6 +42,14 @@ import {
 import { detectCashAnomalies } from './cashAnomalies.js';
 import { resolveProductImage } from './productImage.js';
 import { normalizeStoreLogo } from './storeLogo.js';
+import { normalizeProductImageForStore } from './normalizeProductImage.js';
+import { buildServerDiagnostics, buildClientDiagnostics } from './diagnostics.js';
+import { importBackupWithSafety } from './backupImport.js';
+import { createSqliteBackup } from './dbBackup.js';
+import { inlineProductImageForBackup } from './backupImageInline.js';
+import { ApiError } from './apiError.js';
+import { assertWebAdminClient } from './adminGuard.js';
+import { migrateEmbeddedProductImagesToFiles } from './migrateProductImages.js';
 import {
   getDeviceOperatorName,
   inferClientKind,
@@ -55,16 +63,7 @@ import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesC
 const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public code?: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
+export { ApiError } from './apiError.js';
 
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -207,13 +206,16 @@ export function registerRoutes(router: import('express').Router): void {
       const sku = String(body.sku ?? '').trim();
       const category = String(body.category ?? '').trim();
       if (!name || !sku || !category) throw new ApiError(400, 'name, sku and category required');
+      const price = Number(body.price);
+      const cost = Number(body.cost);
+      if (!Number.isFinite(price) || !Number.isFinite(cost) || price < 0 || cost < 0) {
+        throw new ApiError(400, 'price and cost must be non-negative numbers');
+      }
       const stock = normalizeInitialStoreStock(Number(body.stock));
-      const image = String(body.image ?? '');
-      const price = 0;
-      const cost = 0;
       const warehouseCost = 0;
       const db = getDb();
       const id = newId();
+      const image = normalizeProductImageForStore(id, String(body.image ?? ''));
       const categoryId = String(body.categoryId ?? '');
       const subcategoryId = String(body.subcategoryId ?? '');
       const subcategory = String(body.subcategory ?? '');
@@ -302,7 +304,11 @@ export function registerRoutes(router: import('express').Router): void {
           continue;
         }
         fields.push(`${col} = ?`);
-        values.push(body[key]);
+        if (key === 'image') {
+          values.push(normalizeProductImageForStore(req.params.id, String(body[key])));
+        } else {
+          values.push(body[key]);
+        }
       }
       if (fields.length === 0) throw new ApiError(400, 'No fields to update');
       values.push(req.params.id);
@@ -1434,10 +1440,46 @@ export function registerRoutes(router: import('express').Router): void {
   // --- Admin ---
   router.post(
     '/admin/factory-reset',
-    asyncHandler(async (_req, res) => {
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
       const db = getDb();
+      createSqliteBackup('pre-factory-reset');
       factoryResetDb(db);
       res.json({ ok: true });
+    }),
+  );
+
+  router.get(
+    '/admin/diagnostics',
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
+      const db = getDb();
+      res.json(buildServerDiagnostics(db));
+    }),
+  );
+
+  router.post(
+    '/admin/migrate-product-images',
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
+      const db = getDb();
+      const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
+      const body = (req.body ?? {}) as { dryRun?: boolean };
+      const result = migrateEmbeddedProductImagesToFiles(db, {
+        dryRun: dryRun || body.dryRun === true,
+      });
+      res.json(result);
+    }),
+  );
+
+  router.get(
+    '/diagnostics/summary',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const host = req.get('host') ?? '';
+      const proto = req.protocol;
+      const apiBaseUrl = host ? `${proto}://${host}` : '';
+      res.json(buildClientDiagnostics(db, apiBaseUrl));
     }),
   );
 
@@ -1446,7 +1488,13 @@ export function registerRoutes(router: import('express').Router): void {
     '/backup',
     asyncHandler(async (_req, res) => {
       const db = getDb();
-      const products = db.prepare('SELECT * FROM products').all().map((r) => rowToProduct(r as Parameters<typeof rowToProduct>[0]));
+      const products = db
+        .prepare('SELECT * FROM products')
+        .all()
+        .map((r) => {
+          const p = rowToProduct(r as Parameters<typeof rowToProduct>[0]);
+          return { ...p, image: inlineProductImageForBackup(p.image) };
+        });
       const transactions = db
         .prepare('SELECT * FROM transactions')
         .all()
@@ -1534,237 +1582,11 @@ export function registerRoutes(router: import('express').Router): void {
   router.post(
     '/backup/import',
     asyncHandler(async (req, res) => {
-      const data = req.body;
-      if (!data || data.app !== 'executive-suite') throw new ApiError(400, 'Invalid backup');
+      assertWebAdminClient(req);
       const db = getDb();
-
-      db.runInTransaction(() => {
-        db.prepare('DELETE FROM warehouse_movements').run();
-        db.prepare('DELETE FROM warehouse_stock').run();
-        db.prepare('DELETE FROM warehouse_sections').run();
-        db.prepare('DELETE FROM warehouses').run();
-        db.prepare('DELETE FROM products').run();
-        db.prepare('DELETE FROM transactions').run();
-        db.prepare('DELETE FROM customers').run();
-        db.prepare('DELETE FROM expenses').run();
-        db.prepare('DELETE FROM categories').run();
-        db.prepare('DELETE FROM subcategories').run();
-        db.prepare('DELETE FROM locations').run();
-        db.prepare('DELETE FROM cash_sessions').run();
-        db.prepare('DELETE FROM app_settings').run();
-
-        const insertProduct = db.prepare(
-          `INSERT INTO products (id, name, sku, category, price, cost, warehouse_cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const p of data.products ?? []) {
-          insertProduct.run(
-            p.id,
-            p.name,
-            p.sku,
-            p.category,
-            p.price,
-            p.cost,
-            p.warehouseCost ?? 0,
-            p.stock,
-            p.image,
-            p.categoryId ?? '',
-            p.subcategoryId ?? '',
-            p.subcategory ?? '',
-            p.status ?? 'active',
-            p.unitOfMeasure ?? 'unidad',
-            p.locationId ?? null,
-            p.barcode ?? null,
-          );
-        }
-
-        const insertTx = db.prepare(TX_INSERT_SQL);
-        for (const tx of data.transactions ?? []) {
-          insertTx.run(
-            tx.id,
-            tx.orderNumber,
-            tx.customer,
-            tx.amount,
-            tx.status,
-            tx.timestamp,
-            tx.type,
-            tx.createdAt,
-            tx.paymentMethod ?? null,
-            tx.receipt ? JSON.stringify(tx.receipt) : null,
-            tx.sourceSaleId ?? null,
-            tx.operatorName ?? tx.receipt?.operatorName ?? null,
-            tx.sourceDeviceId ?? null,
-            tx.debtStatus ?? null,
-            tx.collectedAt ?? null,
-            tx.soldAsDebt ? 1 : 0,
-            tx.customerId ?? null,
-          );
-        }
-
-        const insertExpense = db.prepare(
-          'INSERT INTO expenses (id, title, amount, category, date, locked) VALUES (?, ?, ?, ?, ?, ?)',
-        );
-        for (const e of data.expenses ?? []) {
-          insertExpense.run(e.id, e.title, e.amount, e.category, e.date, e.locked ? 1 : 0);
-        }
-
-        const categories = data.productCategories?.length
-          ? data.productCategories
-          : [...new Set((data.products ?? []).map((p: { category: string }) => p.category.trim()).filter(Boolean))].map(
-              (name: string) => ({ id: newId(), name, code: codeFromCategoryName(name) }),
-            );
-        const insertCat = db.prepare('INSERT INTO categories (id, name, code) VALUES (?, ?, ?)');
-        for (const c of categories) {
-          const code = (c as { code?: string }).code ?? codeFromCategoryName(c.name);
-          insertCat.run(c.id, c.name, code);
-        }
-
-        const insertSub = db.prepare(
-          'INSERT INTO subcategories (id, category_id, name, code) VALUES (?, ?, ?, ?)',
-        );
-        for (const s of data.productSubcategories ?? []) {
-          insertSub.run(s.id, s.categoryId, s.name, s.code);
-        }
-        // Ensure each category has at least General subcategory
-        for (const c of categories) {
-          const count = db
-            .prepare('SELECT COUNT(*) AS n FROM subcategories WHERE category_id = ?')
-            .get(c.id) as { n: number };
-          if (count.n === 0) {
-            insertSub.run(newId(), c.id, 'General', 'GEN');
-          }
-        }
-
-        const insertLoc = db.prepare('INSERT INTO locations (id, name) VALUES (?, ?)');
-        for (const l of data.productLocations ?? []) {
-          insertLoc.run(l.id, l.name);
-        }
-
-        const insertCustomer = db.prepare(
-          `INSERT INTO customers (id, first_name, last_name, address, phone, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const c of data.customers ?? []) {
-          insertCustomer.run(
-            c.id,
-            c.firstName,
-            c.lastName ?? '',
-            c.address ?? '',
-            c.phone ?? '',
-            c.notes ?? '',
-            c.createdAt ?? Date.now(),
-          );
-        }
-
-        const insertSession = db.prepare(
-          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, total_debt_sales, expected_cash, cash_variance, anomalies_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const s of data.cashSessions ?? []) {
-          insertSession.run(
-            s.id,
-            s.openedAt,
-            s.closedAt,
-            s.openingCash,
-            s.closingCash,
-            s.totalCashSales,
-            s.totalCardSales,
-            s.totalTransferSales,
-            s.totalOtherSales,
-            s.totalDebtSales ?? 0,
-            s.expectedCash ?? null,
-            s.cashVariance ?? null,
-            s.anomalies?.length ? JSON.stringify(s.anomalies) : null,
-          );
-        }
-
-        const s = { ...DEFAULT_APP_SETTINGS, ...(data.appSettings ?? {}), id: 'main' };
-        let storeLogo = '';
-        try {
-          storeLogo = normalizeStoreLogo((data.appSettings as { storeLogo?: string } | undefined)?.storeLogo ?? '');
-        } catch (err) {
-          throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo in backup');
-        }
-        db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          'main',
-          s.storeName,
-          s.branch,
-          s.currency,
-          s.taxRate,
-          s.cardQrPayload,
-          s.transferBank ?? '',
-          s.transferAccountHolder ?? '',
-          s.transferAccountNumber ?? '',
-          normalizeTransferPhone(String(s.transferPhoneNumber ?? '')),
-          s.transferQrExtra ?? '',
-          s.darkMode ? 1 : 0,
-          s.lowStockNotifications ? 1 : 0,
-          s.managerName,
-          s.managerTitle,
-          s.locale,
-          storeLogo,
-        );
-
-        const insertWarehouse = db.prepare(
-          'INSERT INTO warehouses (id, name, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-        );
-        for (const w of data.warehouses ?? []) {
-          insertWarehouse.run(w.id, w.name, w.isDefault ? 1 : 0, w.createdAt, w.updatedAt ?? null);
-        }
-
-        const insertSection = db.prepare(
-          'INSERT INTO warehouse_sections (id, warehouse_id, name, is_system, created_at) VALUES (?, ?, ?, ?, ?)',
-        );
-        for (const sec of data.warehouseSections ?? []) {
-          insertSection.run(sec.id, sec.warehouseId, sec.name, sec.isSystem ? 1 : 0, sec.createdAt);
-        }
-
-        const insertWStock = db.prepare(
-          `INSERT INTO warehouse_stock (id, warehouse_id, section_id, product_id, quantity, unit_cost, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const ws of data.warehouseStock ?? []) {
-          insertWStock.run(
-            ws.id,
-            ws.warehouseId,
-            ws.sectionId,
-            ws.productId,
-            ws.quantity,
-            ws.unitCost,
-            ws.updatedAt ?? null,
-          );
-        }
-
-        const insertWMove = db.prepare(
-          `INSERT INTO warehouse_movements (id, warehouse_id, product_id, section_id, type, quantity_delta, unit_cost, balance_after, reference_type, reference_id, notes, created_at, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const m of data.warehouseMovements ?? []) {
-          insertWMove.run(
-            m.id,
-            m.warehouseId,
-            m.productId,
-            m.sectionId,
-            m.type,
-            m.quantityDelta,
-            m.unitCost,
-            m.balanceAfter,
-            m.referenceType,
-            m.referenceId,
-            m.notes,
-            m.createdAt,
-            m.createdBy,
-          );
-        }
-
-        if (!data.warehouses?.length) {
-          migrateWarehouseSchema(db);
-        }
-      });
-
+      const body = req.body as { allowEmptyProducts?: boolean };
+      const allowEmptyProducts = body?.allowEmptyProducts === true;
+      importBackupWithSafety(db, req.body, { allowEmptyProducts });
       res.json({ ok: true });
     }),
   );

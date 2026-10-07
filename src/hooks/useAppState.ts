@@ -23,6 +23,7 @@ import { DEFAULT_APP_SETTINGS } from '../constants';
 import { api, ApiConnectionError, ApiRequestError } from '../api/client';
 import { useApiConnection, useApiPolling } from '../api/connection';
 import { removeById, upsertById } from '../lib/utils';
+import { evictImageCache } from '../lib/imageFetchPool';
 import { formatCustomerName, parseDisplayNameToCustomerFields } from '../lib/customers';
 
 export function useAppState() {
@@ -137,8 +138,17 @@ export function useAppState() {
   const applyProduct = useCallback(
     (product: Product) => {
       beginLocalCommit();
-      const listed = product.imageUrl ? { ...product, image: '' } : product;
-      setProducts((prev) => upsertById(prev, listed));
+      const listed =
+        product.imageUrl || (product.image ?? '').startsWith('file:')
+          ? { ...product, image: '' }
+          : product;
+      setProducts((prev) => {
+        const existing = prev.find((p) => p.id === product.id);
+        if (existing?.imageUrl && existing.imageUrl !== listed.imageUrl) {
+          evictImageCache(existing.imageUrl);
+        }
+        return upsertById(prev, listed);
+      });
       setCart((prev) =>
         prev.map((item) => (item.id === listed.id ? { ...listed, quantity: item.quantity } : item)),
       );
@@ -238,13 +248,20 @@ export function useAppState() {
     void refreshAfterMutation();
   };
 
-  const updateProduct = async (id: string, updates: Partial<Product>) => {
+  const updateProduct = async (
+    id: string,
+    updates: Partial<Product>,
+    options?: { refreshAll?: boolean },
+  ) => {
     guardMutation();
     if (updates.stock !== undefined) {
       throw new Error('ERR_STORE_STOCK_DIRECT_EDIT');
     }
     const updated = await api.updateProduct(id, updates);
     applyProduct(updated);
+    const imageOnly =
+      Object.keys(updates).length === 1 && updates.image !== undefined && updates.stock === undefined;
+    if (options?.refreshAll === false || imageOnly) return;
     void refreshAfterMutation();
   };
 

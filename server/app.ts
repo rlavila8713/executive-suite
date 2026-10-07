@@ -106,6 +106,19 @@ export function createApp(): Express {
   app.use('/api', api);
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof SyntaxError && err.message.toLowerCase().includes('json')) {
+      res.status(400).json({ error: 'Invalid JSON body' });
+      return;
+    }
+    if (
+      err &&
+      typeof err === 'object' &&
+      'type' in err &&
+      (err as { type?: string }).type === 'entity.too.large'
+    ) {
+      res.status(413).json({ error: 'Request body too large' });
+      return;
+    }
     if (err instanceof ApiError) {
       res.status(err.status).json({ error: err.message, code: err.code });
       return;

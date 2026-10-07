@@ -44,18 +44,26 @@ export function ConnectionBanner({ connected, checking, onRetry }: ConnectionBan
   );
 }
 
-export function useApiPolling(refresh: () => Promise<void>, enabled: boolean, intervalMs = 5000) {
+async function refreshSafely(refresh: () => Promise<void>): Promise<void> {
+  try {
+    await refresh();
+  } catch (err) {
+    console.error('Background API refresh failed', err);
+  }
+}
+
+export function useApiPolling(refresh: () => Promise<void>, enabled: boolean, intervalMs = 15_000) {
   useEffect(() => {
     if (!enabled) return;
     const id = setInterval(() => {
-      void refresh();
+      void refreshSafely(refresh);
     }, intervalMs);
     return () => clearInterval(id);
   }, [enabled, intervalMs, refresh]);
 
   useEffect(() => {
     if (!enabled) return;
-    const onFocus = () => void refresh();
+    const onFocus = () => void refreshSafely(refresh);
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [enabled, refresh]);

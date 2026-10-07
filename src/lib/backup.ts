@@ -14,7 +14,9 @@ import type {
   WarehouseSection,
   WarehouseStock,
 } from '../types';
-import { DEFAULT_APP_SETTINGS, DEFAULT_PRODUCT_CATEGORY_NAMES, MOCK_PRODUCTS } from '../constants';
+import { DEFAULT_APP_SETTINGS } from '../constants';
+import { decideDexieMigration } from './dexieMigration';
+import { logDexieMigration } from './dexieMigrationLog';
 
 const DEXIE_MIGRATED_KEY = 'executive-suite.dexieMigrated';
 
@@ -32,15 +34,6 @@ function markDexieMigrated(): void {
   } catch {
     // ignore quota / private-mode failures
   }
-}
-
-/** True when the API still has only the demo seed, not user-created catalog rows. */
-function apiIsFreshSeed(products: Product[], categories: ProductCategory[]): boolean {
-  const mockIds = new Set(MOCK_PRODUCTS.map((p) => p.id));
-  if (products.some((p) => !mockIds.has(p.id))) return false;
-  if (products.length > MOCK_PRODUCTS.length) return false;
-  const defaultNames = new Set<string>(DEFAULT_PRODUCT_CATEGORY_NAMES);
-  return !categories.some((c) => !defaultNames.has(c.name));
 }
 
 /** Current export format. Imports accept schema versions 1–6. */
@@ -323,8 +316,11 @@ export function downloadBackupFile(data: ExecutiveSuiteBackup): void {
 }
 
 /** Replaces all server data with the backup contents. */
-export async function restoreBackupSnapshot(data: ExecutiveSuiteBackup): Promise<void> {
-  await api.importBackup(data);
+export async function restoreBackupSnapshot(
+  data: ExecutiveSuiteBackup,
+  options?: { allowEmptyProducts?: boolean },
+): Promise<void> {
+  await api.importBackup(data, options);
 }
 
 export async function readBackupFromFile(file: File): Promise<ExecutiveSuiteBackup> {
@@ -372,13 +368,24 @@ export async function migrateDexieToApi(): Promise<boolean> {
     let apiProducts: Product[];
     let apiCategories: ProductCategory[];
     try {
-      [apiProducts, apiCategories] = await Promise.all([api.getProducts(), api.getCategories()]);
+      [apiProducts, apiCategories] = await Promise.all([
+        api.getProducts({ includeImages: false }),
+        api.getCategories(),
+      ]);
     } catch {
       return false;
     }
 
-    // API already has user data — never clobber it with a stale IndexedDB snapshot.
-    if (!apiIsFreshSeed(apiProducts, apiCategories)) return discardIndexedDb();
+    const decision = decideDexieMigration(apiProducts, apiCategories, products);
+    logDexieMigration(decision.action, decision.reason);
+
+    if (decision.action === 'skip') {
+      markDexieMigrated();
+      return false;
+    }
+    if (decision.action === 'discard_local') {
+      return discardIndexedDb();
+    }
 
     const appSettings = settingsRows[0] ?? DEFAULT_APP_SETTINGS;
     await api.importBackup({

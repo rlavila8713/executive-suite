@@ -297,8 +297,73 @@ export const api = {
     }),
 
   exportBackup: () => request<ExecutiveSuiteBackup>('/api/backup'),
-  importBackup: (data: ExecutiveSuiteBackup) =>
-    request<{ ok: boolean }>('/api/backup/import', { method: 'POST', body: JSON.stringify(data) }),
+  importBackup: (data: ExecutiveSuiteBackup, options?: { allowEmptyProducts?: boolean }) =>
+    request<{ ok: boolean }>('/api/backup/import', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, allowEmptyProducts: options?.allowEmptyProducts === true }),
+    }),
+
+  getDiagnosticsSummary: () =>
+    request<{
+      apiUrl: string;
+      appVersion: string;
+      database: {
+        products: number;
+        categories: number;
+        transactions: number;
+        sizeBytes: number | null;
+        embeddedImageCount: number;
+        fileImageCount: number;
+      };
+      persistence: { lastSuccessfulPersist: string | null; lastPersistDurationMs: number | null };
+      warnings: string[];
+      mobileClientHints: {
+        maxImageDimensionPx: number;
+        preferSequentialUploads: boolean;
+        productListUseIncludeImagesFalse: boolean;
+      };
+    }>('/api/diagnostics/summary'),
+
+  getAdminDiagnostics: () =>
+    request<{
+      appVersion: string;
+      dataDir: string;
+      database: {
+        path: string;
+        sizeBytes: number | null;
+        lastModified: string | null;
+        products: number;
+        categories: number;
+        transactions: number;
+        schemaVersion: number;
+      };
+      persistence: {
+        lastSuccessfulPersist: string | null;
+        lastPersistDurationMs: number | null;
+        lastPersistSizeBytes: number | null;
+        lastPersistError: string | null;
+      };
+      backup: {
+        lastSuccessfulBackup: string | null;
+        lastBackupPath: string | null;
+        lastBackupSizeBytes: number | null;
+        lastBackupError: string | null;
+        rotatedBackupCount: number;
+      };
+    }>('/api/admin/diagnostics'),
+
+  migrateProductImages: (options?: { dryRun?: boolean }) =>
+    request<{
+      dryRun: boolean;
+      scanned: number;
+      migrated: number;
+      skipped: number;
+      errors: { productId: string; message: string }[];
+      orphansRemoved: number;
+    }>(`/api/admin/migrate-product-images${options?.dryRun ? '?dryRun=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify({ dryRun: options?.dryRun === true }),
+    }),
 
   getLicense: () => request<LicenseInfo>('/api/license'),
   requestLicense: (planId: LicensePlanId) =>

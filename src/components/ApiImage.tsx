@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { fetchAuthenticatedImageObjectUrl } from '../lib/apiImage';
+import { fetchImageObjectUrlPooled, getCachedImageObjectUrl } from '../lib/imageFetchPool';
 import { cn } from '../lib/utils';
 
 type ApiImageProps = {
@@ -29,21 +29,22 @@ export function ApiImage({ apiPath, dataUrl, alt, className, fallback = null }: 
       return;
     }
 
-    let objectUrl: string | null = null;
     let cancelled = false;
 
-    void fetchAuthenticatedImageObjectUrl(apiPath).then((url) => {
-      if (cancelled) {
-        if (url) URL.revokeObjectURL(url);
-        return;
-      }
-      objectUrl = url;
+    const cached = getCachedImageObjectUrl(apiPath);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
+
+    void fetchImageObjectUrlPooled(apiPath).then((url) => {
+      if (cancelled) return;
       setSrc(url);
     });
 
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      // Blob URLs are owned by the shared image pool; do not revoke here.
     };
   }, [apiPath, dataUrl]);
 

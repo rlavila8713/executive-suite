@@ -248,7 +248,7 @@ export function Inventory({
 
         {viewMode === 'grid' ? (
           <div className="p-4 sm:p-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {visibleProducts.map((product) => (
+            {inventoryPageItems.map((product) => (
               <div
                 key={product.id}
                 className="rounded-xl border border-black/5 bg-surface-container-lowest overflow-hidden flex flex-col"
@@ -278,9 +278,18 @@ export function Inventory({
                 </div>
               </div>
             ))}
-            {visibleProducts.length === 0 ? (
+            {inventoryPageItems.length === 0 ? (
               <p className="col-span-full text-center text-sm text-on-surface-variant py-8">{t('inventory.noResults')}</p>
             ) : null}
+            <div className="col-span-full">
+              <TablePagination
+                page={inventoryPage}
+                totalPages={inventoryTotalPages}
+                total={inventoryTotal}
+                pageSize={inventoryPageSize}
+                onPageChange={setInventoryPage}
+              />
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
