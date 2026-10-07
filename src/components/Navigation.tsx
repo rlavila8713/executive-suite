@@ -22,6 +22,7 @@ import {
   X,
   CircleHelp,
   HandCoins,
+  CircleDollarSign,
 } from 'lucide-react';
 import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
@@ -84,6 +85,7 @@ function useMenuGroups(): MenuGroup[] {
       items: [
         { id: 'expenses', label: t('nav.expenses'), icon: Receipt },
         { id: 'receivables', label: t('nav.receivables'), icon: HandCoins },
+        { id: 'payables', label: t('nav.payables'), icon: CircleDollarSign },
         { id: 'reports', label: t('nav.reports'), icon: BarChart3 },
       ],
     },

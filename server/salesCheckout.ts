@@ -39,10 +39,6 @@ export function normalizeMixedSaleReceipt(
     return { receipt, paymentMethod: receipt.paymentMethod || 'other', soldAsDebt: false };
   }
 
-  if (opts.clientKind === 'mobile') {
-    throw new SaleCheckoutValidationError(403, 'Split payments are only available on web POS', 'ERR_MIXED_WEB_ONLY');
-  }
-
   const subtotal = Number(receipt.subtotal);
   if (!Number.isFinite(subtotal) || subtotal < 0) {
     throw new SaleCheckoutValidationError(400, 'Invalid subtotal', 'ERR_INVALID_RECEIPT');

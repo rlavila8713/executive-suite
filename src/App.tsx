@@ -19,6 +19,7 @@ import { POS } from './features/POS';
 import { Expenses } from './features/Expenses';
 import { Reports } from './features/Reports';
 import { Receivables } from './features/Receivables';
+import { Payables } from './features/Payables';
 import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
 import { Warehouse } from './features/Warehouse';
@@ -53,6 +54,8 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.expenses');
     case 'receivables':
       return t('receivables.searchPlaceholder');
+    case 'payables':
+      return t('payables.searchPlaceholder');
     case 'reports':
     case 'settings':
       return t('app.search.unused');
@@ -89,6 +92,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.expenses');
     case 'receivables':
       return t('app.titles.receivables');
+    case 'payables':
+      return t('app.titles.payables');
     case 'reports':
       return t('app.titles.reports');
     case 'inventory':
@@ -151,6 +156,8 @@ function AppView(props: AppState) {
     updateTransaction,
     reverseSale,
     collectReceivable,
+    payPayable,
+    voidPayable,
     registerCustomerForReceivable,
     updateAppSettings,
     addProductCategory,
@@ -370,6 +377,17 @@ function AppView(props: AppState) {
             onRegisterCustomer={async (tx) => {
               await registerCustomerForReceivable(tx.id, tx.customer);
             }}
+          />
+        );
+      case 'payables':
+        return (
+          <Payables
+            transactions={transactions}
+            globalSearch={globalSearch}
+            transferAccountNumber={appSettings.transferAccountNumber}
+            transferPhoneNumber={appSettings.transferPhoneNumber}
+            onPay={payPayable}
+            onVoid={voidPayable}
           />
         );
       case 'reports':

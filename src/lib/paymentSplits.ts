@@ -3,14 +3,35 @@ import { isCompletedSale, isPendingDebtSale, isReturnRow, isReversedSale } from 
 
 const CHANNEL_METHODS: PaymentMethod[] = ['cash', 'card', 'transfer', 'other'];
 
-/** Pending balance on a receivable (partial or full debt). */
-export function receivableBalanceDue(tx: Transaction): number {
-  if (!isPendingDebtSale(tx)) return 0;
-  const r = tx.receipt;
-  if (r?.balanceDue != null && Number.isFinite(r.balanceDue) && r.balanceDue > 0) return Math.abs(r.balanceDue);
+/** Principal debt on a receivable row (not the full mixed-sale ticket total). */
+export function receivableDebtPrincipal(tx: Transaction): number {
+  const r = tx.receipt as
+    | (Transaction['receipt'] & { debtReversedAmount?: number })
+    | undefined;
+  if (tx.debtStatus === 'reversed' && r?.debtReversedAmount != null && Number.isFinite(r.debtReversedAmount)) {
+    return Math.abs(r.debtReversedAmount);
+  }
+  if (r?.balanceDue != null && Number.isFinite(r.balanceDue) && r.balanceDue > 0) {
+    return Math.abs(r.balanceDue);
+  }
   const debtPart = r?.payments?.find((p) => p.method === 'debt')?.amount;
   if (debtPart != null && debtPart > 0) return Math.abs(debtPart);
   return Math.abs(tx.amount);
+}
+
+/** Pending balance on a receivable (partial or full debt). */
+export function receivableBalanceDue(tx: Transaction): number {
+  if (!isPendingDebtSale(tx)) return 0;
+  return receivableDebtPrincipal(tx);
+}
+
+/** Amount to show in Por cobrar for pending, collected, or reversed debt sales. */
+export function receivableDisplayAmount(tx: Transaction): number {
+  const r = tx.receipt;
+  if (tx.debtStatus === 'collected' && r?.debtCollectedAmount != null && Number.isFinite(r.debtCollectedAmount)) {
+    return Math.abs(r.debtCollectedAmount);
+  }
+  return receivableDebtPrincipal(tx);
 }
 
 /**

@@ -265,6 +265,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ paymentMethod }),
     }),
+  payPayable: (id: string) =>
+    request<Transaction>(`/api/payables/${encodeURIComponent(id)}/pay`, {
+      method: 'POST',
+      body: JSON.stringify({ paymentMethod: 'transfer' }),
+    }),
+  voidPayable: (id: string) =>
+    request<Transaction>(`/api/payables/${encodeURIComponent(id)}/void`, { method: 'POST' }),
   linkTransactionCustomer: (transactionId: string, customerId: string) =>
     request<Transaction>(`/api/transactions/${encodeURIComponent(transactionId)}/customer`, {
       method: 'PATCH',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { profitGrossInRange } from '../src/lib/reporting.ts';
+import { netSalesRevenueInRange, paymentMethodBreakdown, profitGrossInRange } from '../src/lib/reporting.ts';
 import type { Product, Transaction } from '../src/types.ts';
 
 const range = { start: 0, end: 1_000_000_000_000 };
@@ -89,6 +89,20 @@ const returnTx: Transaction = {
     total: 10,
   },
 };
+
+describe('netSalesRevenueInRange', () => {
+  it('subtracts same-day return rows from completed sales', () => {
+    const net = netSalesRevenueInRange([sale, returnTx], range);
+    assert.equal(net, 10);
+  });
+});
+
+describe('paymentMethodBreakdown reversals', () => {
+  it('nets cash after a reversal return', () => {
+    const b = paymentMethodBreakdown([sale, returnTx], range);
+    assert.equal(b.cash, 10);
+  });
+});
 
 describe('profitGrossInRange', () => {
   it('computes net sales and COGS after returns', () => {

@@ -439,9 +439,17 @@ export function rowToTransaction(row: {
   collected_at?: number | null;
   sold_as_debt?: number | null;
   customer_id?: string | null;
+  sold_as_payable?: number | null;
+  payable_status?: string | null;
 }) {
   const debtStatus =
-    row.debt_status === 'pending' || row.debt_status === 'collected' ? row.debt_status : undefined;
+    row.debt_status === 'pending' || row.debt_status === 'collected' || row.debt_status === 'reversed'
+      ? row.debt_status
+      : undefined;
+  const payableStatus =
+    row.payable_status === 'pending' || row.payable_status === 'paid' || row.payable_status === 'void'
+      ? row.payable_status
+      : undefined;
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -460,6 +468,8 @@ export function rowToTransaction(row: {
     debtStatus,
     collectedAt: row.collected_at ?? undefined,
     customerId: row.customer_id ?? undefined,
+    soldAsPayable: row.sold_as_payable === 1,
+    payableStatus,
   };
 }
 

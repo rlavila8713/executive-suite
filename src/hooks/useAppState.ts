@@ -216,6 +216,24 @@ export function useAppState() {
     return updated;
   };
 
+  const payPayable = async (id: string) => {
+    guardMutation();
+    const updated = await api.payPayable(id);
+    beginLocalCommit();
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? updated : tx)));
+    await refreshAfterMutation();
+    return updated;
+  };
+
+  const voidPayable = async (id: string) => {
+    guardMutation();
+    const updated = await api.voidPayable(id);
+    beginLocalCommit();
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? updated : tx)));
+    await refreshAfterMutation();
+    return updated;
+  };
+
   const registerCustomerForReceivable = async (transactionId: string, customerName: string) => {
     guardMutation();
     const fields = parseDisplayNameToCustomerFields(customerName);
@@ -688,6 +706,8 @@ export function useAppState() {
     clearCart,
     processSale,
     collectReceivable,
+    payPayable,
+    voidPayable,
     registerCustomerForReceivable,
     addProduct,
     updateProduct,

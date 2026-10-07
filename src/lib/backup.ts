@@ -141,7 +141,8 @@ function isTransaction(x: unknown): x is Transaction {
   const debtOk =
     x.debtStatus === undefined ||
     x.debtStatus === 'pending' ||
-    x.debtStatus === 'collected';
+    x.debtStatus === 'collected' ||
+    x.debtStatus === 'reversed';
   const soldAsDebtOk = x.soldAsDebt === undefined || typeof x.soldAsDebt === 'boolean';
   const collectedAtOk = x.collectedAt === undefined || typeof x.collectedAt === 'number';
   const operatorOk = x.operatorName === undefined || typeof x.operatorName === 'string';

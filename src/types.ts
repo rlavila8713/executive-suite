@@ -15,6 +15,7 @@ export type Screen =
   | 'inventory'
   | 'expenses'
   | 'receivables'
+  | 'payables'
   | 'reports'
   | 'help'
   | 'settings';
@@ -147,7 +148,9 @@ export type SalePaymentPart = {
   amount: number;
 };
 
-export type DebtStatus = 'pending' | 'collected';
+export type DebtStatus = 'pending' | 'collected' | 'reversed';
+
+export type PayableStatus = 'pending' | 'paid' | 'void';
 
 /** One line on a sale receipt (snapshot at checkout). */
 export interface SaleReceiptLine {
@@ -202,10 +205,10 @@ export interface Transaction {
   amount: number;
   status: 'completed' | 'refunded' | 'pending' | 'reversed';
   timestamp: string;
-  type: 'sale' | 'return';
+  type: 'sale' | 'return' | 'payable';
   /** Used for ordering in the local database (newest first). */
   createdAt: number;
-  /** Original sale id when this is an immutable return/reversal movement. */
+  /** Original sale id for return rows or payables from mixed reversals. */
   sourceSaleId?: string;
   /** Set for POS sales: printable ticket data. */
   receipt?: SaleReceipt;
@@ -223,6 +226,9 @@ export interface Transaction {
   collectedAt?: number;
   /** Registered customer linked to this sale. */
   customerId?: string;
+  /** Liability to customer after reversing a mixed cash + transfer sale. */
+  soldAsPayable?: boolean;
+  payableStatus?: PayableStatus;
 }
 
 /** Optional cash drawer session for reconciliation (Cash reports tab). */
