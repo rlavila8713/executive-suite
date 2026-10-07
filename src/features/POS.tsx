@@ -127,6 +127,14 @@ export function POS({
 
   const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
+  const cartQtyByProductId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of cart) {
+      map.set(item.id, item.quantity);
+    }
+    return map;
+  }, [cart]);
+
   const customerSuggestions = useMemo(() => {
     if (!customerName.trim()) return [];
     return customers
@@ -448,8 +456,9 @@ export function POS({
         <div className="flex-1 min-h-0 overflow-y-auto pr-0.5 no-scrollbar">
           <div className="space-y-1">
             {filteredProducts.map((product) => {
-              const outOfStock = product.stock <= 0 || product.price <= 0;
-              const inCart = cart.find((item) => item.id === product.id)?.quantity ?? 0;
+              const inCart = cartQtyByProductId.get(product.id) ?? 0;
+              const availableStock = Math.max(0, product.stock - inCart);
+              const outOfStock = availableStock <= 0 || product.price <= 0;
               const atLimit = !outOfStock && inCart >= product.stock;
               return (
               <button
@@ -474,10 +483,12 @@ export function POS({
                   <p
                     className={cn(
                       'text-[9px] font-bold uppercase',
-                      product.stock > 0 ? 'text-on-tertiary-container' : 'text-error',
+                      availableStock > 0 ? 'text-on-tertiary-container' : 'text-error',
                     )}
                   >
-                    {product.stock > 0 ? t('pos.inStock') : t('pos.outOfStock')}
+                    {availableStock > 0
+                      ? t('pos.inStock', { count: availableStock })
+                      : t('pos.outOfStock')}
                   </p>
                 </div>
                 <div className={cn('p-1 rounded-md shrink-0', outOfStock ? 'bg-surface-container-high text-on-surface-variant' : 'bg-primary text-white')}>

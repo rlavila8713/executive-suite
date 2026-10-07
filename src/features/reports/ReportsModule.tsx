@@ -25,6 +25,7 @@ import {
   inventoryValuationAtRetail,
   inventoryTurnoverRatio,
   paymentMethodBreakdown,
+  mixedReversalPayablesSummary,
   previousPeriodOfSameLength,
   profitGrossInRange,
   slowMovingProducts,
@@ -114,6 +115,10 @@ export function ReportsModule({
 
   const expensesR = useMemo(() => expensesTotalInRange(expenses, range), [expenses, range]);
   const payBreak = useMemo(() => paymentMethodBreakdown(scopedTransactions, range), [scopedTransactions, range]);
+  const reversalPayables = useMemo(
+    () => mixedReversalPayablesSummary(scopedTransactions, range),
+    [scopedTransactions, range],
+  );
 
   const paymentLabel = useCallback(
     (k: 'cash' | 'card' | 'transfer' | 'other') => {
@@ -320,6 +325,15 @@ export function ReportsModule({
             <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.orders')}</p>
               <p className="text-xl font-black text-primary mt-1">{orders}</p>
+            </Card>
+            <Card className="p-4 border-rose-500/20">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.mixedReversalPayables')}</p>
+              <p className="text-xl font-black text-rose-700 dark:text-rose-300 mt-1">
+                ${reversalPayables.pendingTotal.toLocaleString()}
+              </p>
+              <p className="text-[10px] text-on-surface-variant mt-1">
+                {t('reports.mixedReversalPayablesHint', { count: reversalPayables.pendingCount })}
+              </p>
             </Card>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

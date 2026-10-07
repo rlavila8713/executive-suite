@@ -52,6 +52,8 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_CUSTOMER_NAME_REQUIRED') return t('customers.nameRequired');
   if (code === 'ERR_DEBT_CUSTOMER_REQUIRED') return t('pos.debtCustomerRequired');
   if (code === 'ERR_DEBT_NOT_FOUND') return t('receivables.empty');
+  if (code === 'ERR_PAYABLE_NOT_FOUND') return t('payables.empty');
+  if (code === 'ERR_PAYABLE_EXISTS') return t('errors.payableExists');
   if (code === 'ERR_SALE_DEBT_COLLECTED_CANNOT_REVERSE') return t('errors.saleDebtCollectedCannotReverse');
   if (code === 'ERR_MIXED_WEB_ONLY') return t('errors.mixedWebOnly');
   if (code === 'ERR_IMPORT_EMPTY') return t('import.errNoData');

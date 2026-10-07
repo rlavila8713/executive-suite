@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { computeMixedSaleTotals } from '../src/lib/mixedPayment.ts';
 import { paymentMethodBreakdown } from '../src/lib/reporting.ts';
+import { receivableDisplayAmount } from '../src/lib/paymentSplits.ts';
 import type { Transaction } from '../src/types.ts';
 
 describe('computeMixedSaleTotals', () => {
@@ -90,5 +91,37 @@ describe('paymentMethodBreakdown mixed', () => {
     const b = paymentMethodBreakdown([tx], range);
     assert.equal(b.cash, 1000);
     assert.equal(b.transfer, 600);
+  });
+});
+
+describe('receivableDisplayAmount', () => {
+  it('shows debt portion for reversed mixed sale, not ticket total', () => {
+    const tx: Transaction = {
+      id: '1',
+      orderNumber: '#1',
+      customer: 'Ana',
+      amount: 6500,
+      status: 'completed',
+      timestamp: 'now',
+      type: 'sale',
+      createdAt: 1,
+      soldAsDebt: true,
+      debtStatus: 'reversed',
+      receipt: {
+        storeName: 'S',
+        branch: '',
+        currency: 'USD',
+        lines: [],
+        subtotal: 6500,
+        tax: 0,
+        taxRatePercent: 0,
+        total: 6500,
+        paymentMethod: 'mixed',
+        payments: [{ method: 'cash', amount: 6000 }, { method: 'debt', amount: 500 }],
+        balanceDue: 0,
+        debtReversedAmount: 500,
+      },
+    };
+    assert.equal(receivableDisplayAmount(tx), 500);
   });
 });

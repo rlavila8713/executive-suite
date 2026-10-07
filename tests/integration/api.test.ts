@@ -537,7 +537,7 @@ describe('Executive Suite API integration', () => {
       assert.equal(closed.body.totalCashSales, 0);
     });
 
-    it('accepts mixed cash + transfer on web and rejects on mobile', async () => {
+    it('accepts mixed cash + transfer on web and mobile', async () => {
       const product = await api<{ id: string; sku: string }>('/api/products', {
         method: 'POST',
         body: {
@@ -560,25 +560,41 @@ describe('Executive Suite API integration', () => {
       });
       assert.equal(session.status, 201);
 
-      const mobileBlocked = await api('/api/sales', {
-        method: 'POST',
+      const mobileId = 'mobile-mixed-pay';
+      await api('/api/settings', {
+        deviceId: mobileId,
         headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
-        body: {
-          customerName: 'Cliente',
-          amount: 105,
-          receipt: {
-            subtotal: 100,
-            tax: 5,
-            taxRatePercent: 10,
-            total: 105,
-            paymentMethod: 'mixed',
-            payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
-            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+      });
+      const operatorAssigned = await api<{ operatorName: string }>(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorName: 'Cajero móvil' },
+      });
+      assert.equal(operatorAssigned.status, 200);
+
+      const mobileMixed = await api<{ amount: number; receipt: { total: number; payments: { method: string; amount: number }[] } }>(
+        '/api/sales',
+        {
+          method: 'POST',
+          deviceId: mobileId,
+          headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+          body: {
+            customerName: 'Cliente',
+            amount: 105,
+            receipt: {
+              subtotal: 100,
+              tax: 5,
+              taxRatePercent: 10,
+              total: 105,
+              paymentMethod: 'mixed',
+              payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+              lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+            },
           },
         },
-      });
-      assert.equal(mobileBlocked.status, 403);
-      assert.equal((mobileBlocked.body as { code: string }).code, 'ERR_MIXED_WEB_ONLY');
+      );
+      assert.equal(mobileMixed.status, 201);
+      assert.equal(mobileMixed.body.amount, 105);
+      assert.equal(mobileMixed.body.receipt.payments.length, 2);
 
       const mixed = await api<{ amount: number; receipt: { total: number; payments: { method: string; amount: number }[] } }>(
         '/api/sales',
@@ -605,11 +621,137 @@ describe('Executive Suite API integration', () => {
 
       const closed = await api<{ totalCashSales: number; totalTransferSales: number }>(
         `/api/cash-sessions/${session.body.id}/close`,
-        { method: 'POST', body: { closingCash: 50 } },
+        { method: 'POST', body: { closingCash: 100 } },
       );
       assert.equal(closed.status, 200);
-      assert.equal(closed.body.totalCashSales, 50);
-      assert.equal(closed.body.totalTransferSales, 55);
+      assert.equal(closed.body.totalCashSales, 100);
+      assert.equal(closed.body.totalTransferSales, 110);
+    });
+
+    it('creates a payable when reversing mixed cash + transfer', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'MixRev',
+          sku: 'MIX-REV-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 40, 100);
+      await api('/api/settings', { method: 'PATCH', body: { taxRate: 10 } });
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const sale = await api<{ id: string }>('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Cliente Mix',
+          amount: 105,
+          receipt: {
+            subtotal: 100,
+            tax: 5,
+            taxRatePercent: 10,
+            total: 105,
+            paymentMethod: 'mixed',
+            payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+          },
+        },
+      });
+      assert.equal(sale.status, 201);
+
+      const reversal = await api('/api/transactions/' + sale.body.id + '/reverse', { method: 'POST' });
+      assert.equal(reversal.status, 200);
+
+      const txs = await api<
+        {
+          type: string;
+          soldAsPayable?: boolean;
+          payableStatus?: string;
+          amount: number;
+          sourceSaleId?: string;
+        }[]
+      >('/api/transactions');
+      const payable = txs.body.find(
+        (tx) => tx.type === 'payable' && tx.soldAsPayable && tx.sourceSaleId === sale.body.id,
+      );
+      assert.ok(payable);
+      assert.equal(payable!.payableStatus, 'pending');
+      assert.equal(payable!.amount, 55);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+
+    it('marks receivable debt reversed when reversing mixed cash + debt', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'MixDebt',
+          sku: 'MIX-DEBT-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 40, 100);
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const sale = await api<{ id: string; soldAsDebt?: boolean; debtStatus?: string }>('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Deudor Mix',
+          amount: 100,
+          isPartialDebt: true,
+          receipt: {
+            subtotal: 100,
+            tax: 0,
+            taxRatePercent: 0,
+            total: 100,
+            paymentMethod: 'mixed',
+            payments: [{ method: 'cash', amount: 40 }, { method: 'debt', amount: 60 }],
+            balanceDue: 60,
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+          },
+        },
+      });
+      assert.equal(sale.status, 201);
+      assert.equal(sale.body.soldAsDebt, true);
+      assert.equal(sale.body.debtStatus, 'pending');
+
+      const reversal = await api('/api/transactions/' + sale.body.id + '/reverse', { method: 'POST' });
+      assert.equal(reversal.status, 200);
+
+      const txs = await api<
+        {
+          id: string;
+          amount: number;
+          debtStatus?: string;
+          receipt?: { debtReversedAmount?: number; balanceDue?: number };
+        }[]
+      >('/api/transactions');
+      const refreshed = txs.body.find((tx) => tx.id === sale.body.id);
+      assert.ok(refreshed);
+      assert.equal(refreshed!.debtStatus, 'reversed');
+      assert.equal(refreshed!.amount, 100);
+      assert.equal(refreshed!.receipt?.debtReversedAmount, 60);
+      assert.equal(refreshed!.receipt?.balanceDue, 0);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
     });
 
     it('rejects selling more units than available stock', async () => {

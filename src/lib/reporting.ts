@@ -35,6 +35,42 @@ export function isDebtSaleRecord(tx: Transaction): boolean {
   return isCompletedSale(tx) && !!tx.soldAsDebt;
 }
 
+export function isReversedDebtSale(tx: Transaction): boolean {
+  return isDebtSaleRecord(tx) && tx.debtStatus === 'reversed';
+}
+
+export function isPayableRecord(tx: Transaction): boolean {
+  return tx.type === 'payable' || !!tx.soldAsPayable;
+}
+
+export function isPendingPayable(tx: Transaction): boolean {
+  if (!isPayableRecord(tx)) return false;
+  if (tx.payableStatus === 'paid' || tx.payableStatus === 'void') return false;
+  return tx.payableStatus === 'pending' || tx.status === 'pending';
+}
+
+/** Customer liabilities from reversed mixed cash + transfer sales. */
+export function mixedReversalPayablesSummary(transactions: Transaction[], range: DateRangeMs) {
+  let pendingTotal = 0;
+  let pendingCount = 0;
+  let createdInPeriod = 0;
+  for (const tx of transactions) {
+    if (!isPayableRecord(tx)) continue;
+    if (tx.createdAt >= range.start && tx.createdAt <= range.end) {
+      createdInPeriod += Math.abs(tx.amount);
+    }
+    if (tx.payableStatus === 'pending') {
+      pendingTotal += Math.abs(tx.amount);
+      pendingCount++;
+    }
+  }
+  return {
+    pendingTotal: Math.round(pendingTotal * 100) / 100,
+    pendingCount,
+    createdInPeriod: Math.round(createdInPeriod * 100) / 100,
+  };
+}
+
 export function resolveTransactionPaymentMethod(tx: Transaction): PaymentMethod {
   if (isPendingDebtSale(tx)) return 'other';
   if (tx.paymentMethod && PAYMENT_METHODS.includes(tx.paymentMethod)) return tx.paymentMethod;
@@ -83,6 +119,25 @@ export function dateRangeFromInputs(startDate: string, endDate: string): DateRan
 export function previousPeriodOfSameLength(range: DateRangeMs): DateRangeMs {
   const len = range.end - range.start + 1;
   return { start: range.start - len, end: range.start - 1 };
+}
+
+/** Local calendar day from midnight through end of day. */
+export function localDayRange(now: number = Date.now()): DateRangeMs {
+  const start = startOfLocalDay(now);
+  return { start, end: endOfLocalDay(start) };
+}
+
+/**
+ * Net ticket revenue in range: completed sales minus return/reversal movements (by `createdAt`).
+ */
+export function netSalesRevenueInRange(transactions: Transaction[], range: DateRangeMs): number {
+  let sum = 0;
+  for (const tx of transactions) {
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    if (isCompletedSale(tx)) sum += Math.abs(tx.amount);
+    else if (isReturnRow(tx) || isReversedSale(tx)) sum -= Math.abs(tx.amount);
+  }
+  return Math.round(sum * 100) / 100;
 }
 
 export function completedSalesInRange(transactions: Transaction[], range: DateRangeMs): Transaction[] {

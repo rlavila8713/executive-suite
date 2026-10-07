@@ -59,9 +59,10 @@ import {
   setDeviceOperatorName,
 } from './connectedDevices.js';
 import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesCheckout.js';
+import { debtAmountFromReceipt, mixedSaleShape, transferAmountFromReceipt } from './mixedReversal.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export { ApiError } from './apiError.js';
 
@@ -537,6 +538,8 @@ export function registerRoutes(router: import('express').Router): void {
         null,
         0,
         typeof body.customerId === 'string' ? body.customerId : null,
+        body.soldAsPayable ? 1 : 0,
+        typeof body.payableStatus === 'string' ? body.payableStatus : null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -639,6 +642,22 @@ export function registerRoutes(router: import('express').Router): void {
       }
       requireCurrentDayCashSession(db);
 
+      const receiptParsed = existing.receipt_json ? JSON.parse(existing.receipt_json) : null;
+      const mixedShape = mixedSaleShape(receiptParsed);
+      const transferOwed = mixedShape === 'cash_transfer' ? transferAmountFromReceipt(receiptParsed) : 0;
+      const debtPart = mixedShape === 'cash_debt' ? debtAmountFromReceipt(receiptParsed) : 0;
+      const pendingReceivable =
+        debtRow.sold_as_debt === 1 && debtRow.debt_status === 'pending' && (debtPart > 0 || mixedShape !== 'cash_transfer');
+
+      if (transferOwed > 0) {
+        const existingPayable = db
+          .prepare(`SELECT id FROM transactions WHERE type = 'payable' AND source_sale_id = ? AND payable_status = 'pending' LIMIT 1`)
+          .get(existing.id);
+        if (existingPayable) {
+          throw new ApiError(409, 'Payable already exists for this sale', 'ERR_PAYABLE_EXISTS');
+        }
+      }
+
       const lines = parseReceiptLines(existing.receipt_json);
       const reversalId = newId();
       const createdAt = Date.now();
@@ -679,7 +698,61 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           0,
           (existing as { customer_id?: string | null }).customer_id ?? null,
+          0,
+          null,
         );
+
+        if (pendingReceivable) {
+          const debtDisplayAmount =
+            debtPart > 0
+              ? debtPart
+              : typeof receiptParsed?.balanceDue === 'number' && receiptParsed.balanceDue > 0
+                ? receiptParsed.balanceDue
+                : Math.abs(existing.amount);
+          const reversedReceipt =
+            receiptParsed != null
+              ? {
+                  ...receiptParsed,
+                  debtReversedAmount: debtDisplayAmount,
+                  balanceDue: 0,
+                }
+              : null;
+          db.prepare(`UPDATE transactions SET debt_status = 'reversed', receipt_json = ? WHERE id = ?`).run(
+            reversedReceipt ? JSON.stringify(reversedReceipt) : existing.receipt_json,
+            existing.id,
+          );
+        }
+
+        if (transferOwed > 0) {
+          const payableId = newId();
+          const payableReceipt = {
+            reason: 'mixed_reversal_transfer',
+            transferAmount: transferOwed,
+            originalOrderNumber: existing.order_number,
+            originalSaleId: existing.id,
+          };
+          db.prepare(TX_INSERT_SQL).run(
+            payableId,
+            `#PP-${existing.order_number.replace(/^#/, '')}`,
+            existing.customer,
+            transferOwed,
+            'pending',
+            'Just now',
+            'payable',
+            createdAt,
+            'transfer',
+            JSON.stringify(payableReceipt),
+            existing.id,
+            existing.operator_name ?? null,
+            existing.source_device_id ?? null,
+            null,
+            null,
+            0,
+            (existing as { customer_id?: string | null }).customer_id ?? null,
+            1,
+            'pending',
+          );
+        }
       });
 
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(reversalId);
@@ -719,12 +792,6 @@ export function registerRoutes(router: import('express').Router): void {
         if (c) customerId = c.id;
       }
       const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
-      const receiptLooksMixed =
-        body.receipt?.paymentMethod === 'mixed' || (body.receipt?.payments?.length ?? 0) > 0;
-      if (receiptLooksMixed && clientKind === 'mobile') {
-        throw new ApiError(403, 'Split payments are only available on web POS', 'ERR_MIXED_WEB_ONLY');
-      }
-
       const operatorName = deviceId ? getDeviceOperatorName(db, deviceId) : '';
       if (clientKind === 'mobile' && !operatorName) {
         throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
@@ -826,6 +893,8 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           soldAsDebt ? 1 : 0,
           customerId,
+          0,
+          null,
         );
 
         for (const line of body.receipt!.lines) {
@@ -919,6 +988,48 @@ export function registerRoutes(router: import('express').Router): void {
       db.prepare(
         `UPDATE transactions SET debt_status = 'collected', collected_at = ?, payment_method = ?, receipt_json = ?, amount = ? WHERE id = ?`,
       ).run(collectedAt, method, JSON.stringify(receipt), amount, req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  router.post(
+    '/payables/:id/pay',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ paymentMethod: string }>(req.body, ['paymentMethod']);
+      if (body.paymentMethod !== 'transfer') {
+        throw new ApiError(400, 'Payables from mixed reversals are settled by transfer', 'ERR_INVALID_PAYABLE_METHOD');
+      }
+      const db = getDb();
+      requireCurrentDayCashSession(db);
+      const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
+        | { id: string; type: string; sold_as_payable: number; payable_status: string | null; receipt_json: string | null }
+        | undefined;
+      if (!existing || existing.type !== 'payable' || existing.sold_as_payable !== 1 || existing.payable_status !== 'pending') {
+        throw new ApiError(404, 'Pending payable not found', 'ERR_PAYABLE_NOT_FOUND');
+      }
+      const paidAt = Date.now();
+      let receipt = existing.receipt_json ? JSON.parse(existing.receipt_json) : {};
+      receipt = { ...receipt, paidPaymentMethod: 'transfer', paidAt };
+      db.prepare(
+        `UPDATE transactions SET payable_status = 'paid', status = 'completed', collected_at = ?, payment_method = 'transfer', receipt_json = ? WHERE id = ?`,
+      ).run(paidAt, JSON.stringify(receipt), req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  router.post(
+    '/payables/:id/void',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
+        | { id: string; type: string; sold_as_payable: number; payable_status: string | null }
+        | undefined;
+      if (!existing || existing.type !== 'payable' || existing.sold_as_payable !== 1 || existing.payable_status !== 'pending') {
+        throw new ApiError(404, 'Pending payable not found', 'ERR_PAYABLE_NOT_FOUND');
+      }
+      db.prepare(`UPDATE transactions SET payable_status = 'void', status = 'void' WHERE id = ?`).run(req.params.id);
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
       res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
     }),
