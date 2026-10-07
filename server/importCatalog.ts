@@ -2,6 +2,7 @@ import type { SqliteStore } from './db.js';
 import { newId } from './db.js';
 import { PLACEHOLDER_PRODUCT_IMAGE } from './constants.js';
 import { codeFromCategoryName } from './migrations.js';
+import { addWarehouseStockQuantity, ensureWarehouseStockRow, getDefaultWarehouse } from './warehouse.js';
 
 export type ProductImportInput = {
   name: string;
@@ -9,7 +10,9 @@ export type ProductImportInput = {
   subcategory: string;
   price: number;
   cost: number;
-  stock: number;
+  warehouseStock: number;
+  storeStock: number;
+  warehouseSection: string;
   location?: string;
   sku?: string;
   barcode?: string;
@@ -17,13 +20,14 @@ export type ProductImportInput = {
 
 export type ImportRowError = { row: number; message: string };
 
-export type ImportRowStatus = 'new' | 'duplicate_existing' | 'duplicate_in_file';
+export type ImportRowStatus = 'new' | 'duplicate_existing' | 'duplicate_in_file' | 'review';
 
 export type ProductImportValidation = {
   summary: {
     new: number;
     duplicateExisting: number;
     duplicateInFile: number;
+    review: number;
   };
   rows: { row: number; status: ImportRowStatus; code?: string }[];
 };
@@ -34,6 +38,7 @@ export type ProductImportResult = {
     subcategories: number;
     locations: number;
     products: number;
+    warehouseEntries: number;
   };
   errors: ImportRowError[];
 };
@@ -113,10 +118,14 @@ function checkImportRowDuplicate(
   existingSkus: Set<string>,
   existingNatural: Set<string>,
   batchSkus: Set<string>,
-  batchNatural: Set<string>,
+  batchNatural: Map<string, number>,
 ): DuplicateCheck | null {
   const sku = row.sku?.trim() ?? '';
   const natural = productNaturalKey(row.name, row.category, row.subcategory);
+
+  if (row.storeStock > 0) {
+    return { status: 'review', code: 'ERR_IMPORT_STORE_STOCK_NOT_ALLOWED' };
+  }
 
   if (sku) {
     if (batchSkus.has(sku)) {
@@ -127,9 +136,14 @@ function checkImportRowDuplicate(
     }
   }
 
-  if (batchNatural.has(natural)) {
+  const priorQty = batchNatural.get(natural);
+  if (priorQty !== undefined) {
+    if (priorQty !== row.warehouseStock) {
+      return { status: 'review', code: `ERR_IMPORT_REVIEW_QTY|${row.name.trim()}` };
+    }
     return { status: 'duplicate_in_file', code: `ERR_DUPLICATE_PRODUCT_IN_FILE|${row.name.trim()}` };
   }
+
   if (existingNatural.has(natural)) {
     return { status: 'duplicate_existing', code: `ERR_DUPLICATE_PRODUCT|${row.name.trim()}` };
   }
@@ -151,23 +165,48 @@ function loadExistingImportKeys(db: SqliteStore): { skus: Set<string>; natural: 
   return { skus, natural: natural };
 }
 
+function resolveWarehouseSectionId(db: SqliteStore, warehouseId: string, sectionName: string): string | null {
+  const trimmed = sectionName.trim();
+  if (!trimmed) return null;
+  const row = db
+    .prepare(
+      'SELECT id FROM warehouse_sections WHERE warehouse_id = ? AND LOWER(name) = LOWER(?) LIMIT 1',
+    )
+    .get(warehouseId, trimmed) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 export function validateProductImportRows(db: SqliteStore, rows: ProductImportInput[]): ProductImportValidation {
   const { skus: existingSkus, natural: existingNatural } = loadExistingImportKeys(db);
   const batchSkus = new Set<string>();
-  const batchNatural = new Set<string>();
+  const batchNatural = new Map<string, number>();
+  const warehouse = getDefaultWarehouse(db);
 
   const validation: ProductImportValidation = {
-    summary: { new: 0, duplicateExisting: 0, duplicateInFile: 0 },
+    summary: { new: 0, duplicateExisting: 0, duplicateInFile: 0, review: 0 },
     rows: [],
   };
 
   for (let i = 0; i < rows.length; i++) {
     const rowNum = i + 2;
     const row = rows[i];
+
+    if (!row.warehouseSection.trim()) {
+      validation.summary.review++;
+      validation.rows.push({ row: rowNum, status: 'review', code: 'ERR_IMPORT_SECTION_REQUIRED' });
+      continue;
+    }
+    if (!resolveWarehouseSectionId(db, warehouse.id, row.warehouseSection)) {
+      validation.summary.review++;
+      validation.rows.push({ row: rowNum, status: 'review', code: `ERR_IMPORT_UNKNOWN_SECTION|${row.warehouseSection.trim()}` });
+      continue;
+    }
+
     const dup = checkImportRowDuplicate(row, existingSkus, existingNatural, batchSkus, batchNatural);
 
     if (dup) {
-      validation.summary[dup.status === 'duplicate_in_file' ? 'duplicateInFile' : 'duplicateExisting']++;
+      if (dup.status === 'review') validation.summary.review++;
+      else validation.summary[dup.status === 'duplicate_in_file' ? 'duplicateInFile' : 'duplicateExisting']++;
       validation.rows.push({ row: rowNum, status: dup.status, code: dup.code });
     } else {
       validation.summary.new++;
@@ -176,7 +215,7 @@ export function validateProductImportRows(db: SqliteStore, rows: ProductImportIn
 
     const sku = row.sku?.trim() ?? '';
     if (sku) batchSkus.add(sku);
-    batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
+    batchNatural.set(productNaturalKey(row.name, row.category, row.subcategory), row.warehouseStock);
   }
 
   return validation;
@@ -257,9 +296,12 @@ function ensureLocation(
 
 export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput[]): ProductImportResult {
   const result: ProductImportResult = {
-    created: { categories: 0, subcategories: 0, locations: 0, products: 0 },
+    created: { categories: 0, subcategories: 0, locations: 0, products: 0, warehouseEntries: 0 },
     errors: [],
   };
+
+  const warehouse = getDefaultWarehouse(db);
+  const importBatchId = newId();
 
   const catMap = new Map<string, CategoryRow>();
   for (const c of db.prepare('SELECT id, name, code FROM categories').all() as CategoryRow[]) {
@@ -278,7 +320,7 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
 
   const { skus: existingSkus, natural: existingNatural } = loadExistingImportKeys(db);
   const batchSkus = new Set<string>();
-  const batchNatural = new Set<string>();
+  const batchNatural = new Map<string, number>();
 
   db.runInTransaction(() => {
     for (let i = 0; i < rows.length; i++) {
@@ -290,7 +332,13 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
           result.errors.push({ row: rowNum, message: dup.code });
           const sku = row.sku?.trim() ?? '';
           if (sku) batchSkus.add(sku);
-          batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
+          batchNatural.set(productNaturalKey(row.name, row.category, row.subcategory), row.warehouseStock);
+          continue;
+        }
+
+        const sectionId = resolveWarehouseSectionId(db, warehouse.id, row.warehouseSection);
+        if (!sectionId) {
+          result.errors.push({ row: rowNum, message: `ERR_IMPORT_UNKNOWN_SECTION|${row.warehouseSection.trim()}` });
           continue;
         }
 
@@ -307,12 +355,13 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
           sku = nextSkuForSubcategory(db, cat, sub, batchSkus);
         }
         batchSkus.add(sku);
-        batchNatural.add(productNaturalKey(row.name, row.category, row.subcategory));
+        batchNatural.set(productNaturalKey(row.name, row.category, row.subcategory), row.warehouseStock);
 
         const id = newId();
+        const warehouseQty = Math.floor(row.warehouseStock);
         db.prepare(
           `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'unidad', ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'active', 'unidad', ?, ?)`,
         ).run(
           id,
           row.name.trim(),
@@ -320,7 +369,6 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
           cat.name,
           row.price,
           row.cost,
-          Math.floor(row.stock),
           PLACEHOLDER_PRODUCT_IMAGE,
           cat.id,
           sub.id,
@@ -328,6 +376,22 @@ export function importProductsFromRows(db: SqliteStore, rows: ProductImportInput
           locationId,
           row.barcode?.trim() || null,
         );
+
+        ensureWarehouseStockRow(db, warehouse.id, sectionId, id, row.cost);
+        if (warehouseQty > 0) {
+          addWarehouseStockQuantity(
+            db,
+            id,
+            sectionId,
+            warehouseQty,
+            row.cost,
+            null,
+            'import',
+            importBatchId,
+          );
+          result.created.warehouseEntries++;
+        }
+
         result.created.products++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

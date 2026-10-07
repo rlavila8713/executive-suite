@@ -45,11 +45,24 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_INVALID_RECEIVE_QTY') return t('inventory.receiveInvalidQty');
   if (code === 'ERR_INVALID_RECEIVE_COST') return t('inventory.receiveInvalidCost');
   if (code === 'ERR_INVALID_RECEIVE_PRICE') return t('inventory.receiveInvalidPrice');
+  if (code === 'ERR_INVALID_TRANSFER_QTY') return t('inventory.transferInvalidQty');
+  if (code === 'ERR_INVALID_TRANSFER_PRICE') return t('warehouse.transferInvalidPrice');
+  if (code === 'ERR_PRODUCT_COST_READONLY') return t('errors.productCostReadonly');
+  if (code === 'ERR_INVALID_PRODUCT_PRICE') return t('products.invalidPrice');
   if (code === 'ERR_CUSTOMER_NAME_REQUIRED') return t('customers.nameRequired');
   if (code === 'ERR_DEBT_CUSTOMER_REQUIRED') return t('pos.debtCustomerRequired');
   if (code === 'ERR_DEBT_NOT_FOUND') return t('receivables.empty');
+  if (code === 'ERR_PAYABLE_NOT_FOUND') return t('payables.empty');
+  if (code === 'ERR_PAYABLE_EXISTS') return t('errors.payableExists');
+  if (code === 'ERR_SALE_DEBT_COLLECTED_CANNOT_REVERSE') return t('errors.saleDebtCollectedCannotReverse');
+  if (code === 'ERR_MIXED_WEB_ONLY') return t('errors.mixedWebOnly');
   if (code === 'ERR_IMPORT_EMPTY') return t('import.errNoData');
   if (code === 'ERR_IMPORT_TOO_LARGE') return t('import.errTooLarge');
+  if (code === 'ERR_WAREHOUSE_WEB_ONLY') return t('errors.warehouseWebOnly');
+  if (code === 'ERR_INSUFFICIENT_WAREHOUSE_STOCK') return t('errors.insufficientWarehouseStock');
+  if (code.startsWith('ERR_WAREHOUSE_SECTION_IN_USE')) return mapWarehouseSectionInUse(code, t);
+  if (code === 'ERR_DUPLICATE_WAREHOUSE_SECTION') return t('errors.duplicateWarehouseSection');
+  if (code === 'ERR_STORE_STOCK_DIRECT_EDIT') return t('errors.storeStockDirectEdit');
   return code;
 }
 
@@ -71,6 +84,13 @@ function mapCategoryInUse(code: string, t: TranslateFn): string {
   const count = parts[1] ?? '0';
   const name = parts[2] ? decodeURIComponent(parts[2]) : '';
   return t('errors.categoryInUse', { name, count });
+}
+
+function mapWarehouseSectionInUse(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const count = parts[1] ?? '0';
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return t('errors.warehouseSectionInUse', { name, count });
 }
 
 function mapSubcategoryInUse(code: string, t: TranslateFn): string {

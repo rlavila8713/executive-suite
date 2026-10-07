@@ -14,11 +14,16 @@ import {
   CashSession,
   LicenseInfo,
   LicensePlanId,
+  WarehouseSection,
+  WarehouseStock,
+  WarehouseSummaryReport,
+  WarehouseMovement,
 } from '../types';
 import { DEFAULT_APP_SETTINGS } from '../constants';
 import { api, ApiConnectionError, ApiRequestError } from '../api/client';
 import { useApiConnection, useApiPolling } from '../api/connection';
 import { removeById, upsertById } from '../lib/utils';
+import { evictImageCache } from '../lib/imageFetchPool';
 import { formatCustomerName, parseDisplayNameToCustomerFields } from '../lib/customers';
 
 export function useAppState() {
@@ -34,13 +39,17 @@ export function useAppState() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customersHighlightId, setCustomersHighlightId] = useState<string | null>(null);
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
+  const [warehouseSections, setWarehouseSections] = useState<WarehouseSection[]>([]);
+  const [warehouseStock, setWarehouseStock] = useState<WarehouseStock[]>([]);
+  const [warehouseSummary, setWarehouseSummary] = useState<WarehouseSummaryReport | null>(null);
+  const [warehouseMovements, setWarehouseMovements] = useState<WarehouseMovement[]>([]);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const refreshGen = useRef(0);
 
   const refreshAll = useCallback(async () => {
     const gen = ++refreshGen.current;
-    const [p, t, e, s, c, subs, locs, cust, cs, lic] = await Promise.all([
+    const [p, t, e, s, c, subs, locs, cust, cs, lic, wSecs, wStock, wSum, wMov] = await Promise.all([
       api.getProducts({ includeImages: false }),
       api.getTransactions(),
       api.getExpenses(),
@@ -51,6 +60,10 @@ export function useAppState() {
       api.getCustomers(),
       api.getCashSessions(),
       api.getLicense(),
+      api.getWarehouseSections(),
+      api.getWarehouseStock(),
+      api.getWarehouseSummary(),
+      api.getWarehouseMovements(),
     ]);
     if (gen !== refreshGen.current) return;
     setProducts(p);
@@ -62,6 +75,10 @@ export function useAppState() {
     setProductLocations(locs);
     setCustomers(cust);
     setCashSessions(cs);
+    setWarehouseSections(wSecs);
+    setWarehouseStock(wStock);
+    setWarehouseSummary(wSum);
+    setWarehouseMovements(wMov);
     setLicenseInfo(lic);
     setCart((prev) =>
       prev.flatMap((item) => {
@@ -121,8 +138,17 @@ export function useAppState() {
   const applyProduct = useCallback(
     (product: Product) => {
       beginLocalCommit();
-      const listed = product.imageUrl ? { ...product, image: '' } : product;
-      setProducts((prev) => upsertById(prev, listed));
+      const listed =
+        product.imageUrl || (product.image ?? '').startsWith('file:')
+          ? { ...product, image: '' }
+          : product;
+      setProducts((prev) => {
+        const existing = prev.find((p) => p.id === product.id);
+        if (existing?.imageUrl && existing.imageUrl !== listed.imageUrl) {
+          evictImageCache(existing.imageUrl);
+        }
+        return upsertById(prev, listed);
+      });
       setCart((prev) =>
         prev.map((item) => (item.id === listed.id ? { ...listed, quantity: item.quantity } : item)),
       );
@@ -131,7 +157,7 @@ export function useAppState() {
   );
 
   const addToCart = (product: Product) => {
-    if (product.stock <= 0) return;
+    if (product.stock <= 0 || product.price <= 0) return;
     setCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
       const currentQty = existing?.quantity ?? 0;
@@ -190,6 +216,24 @@ export function useAppState() {
     return updated;
   };
 
+  const payPayable = async (id: string) => {
+    guardMutation();
+    const updated = await api.payPayable(id);
+    beginLocalCommit();
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? updated : tx)));
+    await refreshAfterMutation();
+    return updated;
+  };
+
+  const voidPayable = async (id: string) => {
+    guardMutation();
+    const updated = await api.voidPayable(id);
+    beginLocalCommit();
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? updated : tx)));
+    await refreshAfterMutation();
+    return updated;
+  };
+
   const registerCustomerForReceivable = async (transactionId: string, customerName: string) => {
     guardMutation();
     const fields = parseDisplayNameToCustomerFields(customerName);
@@ -222,19 +266,26 @@ export function useAppState() {
     void refreshAfterMutation();
   };
 
-  const updateProduct = async (id: string, updates: Partial<Product>) => {
+  const updateProduct = async (
+    id: string,
+    updates: Partial<Product>,
+    options?: { refreshAll?: boolean },
+  ) => {
     guardMutation();
-    const updated =
-      updates.stock !== undefined && Object.keys(updates).length === 1
-        ? await api.updateProductStock(id, updates.stock)
-        : await api.updateProduct(id, updates);
+    if (updates.stock !== undefined) {
+      throw new Error('ERR_STORE_STOCK_DIRECT_EDIT');
+    }
+    const updated = await api.updateProduct(id, updates);
     applyProduct(updated);
+    const imageOnly =
+      Object.keys(updates).length === 1 && updates.image !== undefined && updates.stock === undefined;
+    if (options?.refreshAll === false || imageOnly) return;
     void refreshAfterMutation();
   };
 
   const receiveProductStock = async (
     id: string,
-    payload: { quantity: number; unitCost: number; price: number },
+    payload: { quantity: number; unitCost: number; price?: number },
   ) => {
     guardMutation();
     const result = await api.receiveProductStock(id, payload);
@@ -251,6 +302,48 @@ export function useAppState() {
     void refreshAfterMutation();
   };
 
+  const transferWarehouseToStore = async (productId: string, quantity: number, price: number) => {
+    guardMutation();
+    const result = await api.transferWarehouseToStore(productId, quantity, price);
+    applyProduct(result.product);
+    setWarehouseStock((prev) =>
+      prev.map((row) => (row.productId === productId ? result.warehouseStock : row)),
+    );
+    void refreshAfterMutation();
+  };
+
+  const addWarehouseSection = async (name: string) => {
+    guardMutation();
+    const created = await api.createWarehouseSection(name);
+    beginLocalCommit();
+    setWarehouseSections((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+    void refreshAfterMutation();
+  };
+
+  const updateWarehouseSection = async (id: string, name: string) => {
+    guardMutation();
+    const updated = await api.updateWarehouseSection(id, name);
+    beginLocalCommit();
+    setWarehouseSections((prev) => prev.map((s) => (s.id === id ? updated : s)));
+    void refreshAfterMutation();
+  };
+
+  const deleteWarehouseSection = async (id: string) => {
+    guardMutation();
+    await api.deleteWarehouseSection(id);
+    beginLocalCommit();
+    setWarehouseSections((prev) => prev.filter((s) => s.id !== id));
+    void refreshAfterMutation();
+  };
+
+  const reassignWarehouseSection = async (productId: string, sectionId: string) => {
+    guardMutation();
+    const updated = await api.reassignWarehouseSection(productId, sectionId);
+    beginLocalCommit();
+    setWarehouseStock((prev) => prev.map((row) => (row.productId === productId ? updated : row)));
+    void refreshAfterMutation();
+  };
+
   const importProducts = async (
     rows: {
       name: string;
@@ -258,7 +351,9 @@ export function useAppState() {
       subcategory: string;
       price: number;
       cost: number;
-      stock: number;
+      warehouseStock: number;
+      storeStock: number;
+      warehouseSection: string;
       location?: string;
       sku?: string;
       barcode?: string;
@@ -611,12 +706,23 @@ export function useAppState() {
     clearCart,
     processSale,
     collectReceivable,
+    payPayable,
+    voidPayable,
     registerCustomerForReceivable,
     addProduct,
     updateProduct,
     receiveProductStock,
+    transferWarehouseToStore,
     deleteProduct,
     importProducts,
+    warehouseSections,
+    warehouseStock,
+    warehouseSummary,
+    warehouseMovements,
+    addWarehouseSection,
+    updateWarehouseSection,
+    deleteWarehouseSection,
+    reassignWarehouseSection,
     addExpense,
     updateExpense,
     deleteExpense,

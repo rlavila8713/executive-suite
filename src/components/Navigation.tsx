@@ -14,6 +14,7 @@ import {
   Receipt,
   BarChart3,
   Boxes,
+  Warehouse,
   Settings,
   Bell,
   Search,
@@ -21,6 +22,7 @@ import {
   X,
   CircleHelp,
   HandCoins,
+  CircleDollarSign,
 } from 'lucide-react';
 import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
@@ -59,10 +61,9 @@ function useMenuGroups(): MenuGroup[] {
     },
     {
       id: 'catalog',
-      label: t('nav.groupCatalog'),
+      label: t('nav.groupCatalogMaster'),
       items: [
         { id: 'products', label: t('nav.products'), icon: Package },
-        { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
         { id: 'import', label: t('nav.import'), icon: FileUp },
         { id: 'categories', label: t('nav.categories'), icon: Tags },
         { id: 'subcategories', label: t('nav.subcategories'), icon: Layers },
@@ -71,11 +72,20 @@ function useMenuGroups(): MenuGroup[] {
       ],
     },
     {
+      id: 'stock',
+      label: t('nav.groupStock'),
+      items: [
+        { id: 'warehouse', label: t('nav.warehouse'), icon: Warehouse },
+        { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
+      ],
+    },
+    {
       id: 'finance',
       label: t('nav.groupFinance'),
       items: [
         { id: 'expenses', label: t('nav.expenses'), icon: Receipt },
         { id: 'receivables', label: t('nav.receivables'), icon: HandCoins },
+        { id: 'payables', label: t('nav.payables'), icon: CircleDollarSign },
         { id: 'reports', label: t('nav.reports'), icon: BarChart3 },
       ],
     },

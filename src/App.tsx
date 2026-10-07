@@ -19,8 +19,10 @@ import { POS } from './features/POS';
 import { Expenses } from './features/Expenses';
 import { Reports } from './features/Reports';
 import { Receivables } from './features/Receivables';
+import { Payables } from './features/Payables';
 import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
+import { Warehouse } from './features/Warehouse';
 import { Settings } from './features/Settings';
 import { useAppState } from './hooks/useAppState';
 import { Screen } from './types';
@@ -52,6 +54,8 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.expenses');
     case 'receivables':
       return t('receivables.searchPlaceholder');
+    case 'payables':
+      return t('payables.searchPlaceholder');
     case 'reports':
     case 'settings':
       return t('app.search.unused');
@@ -68,6 +72,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.products');
     case 'import':
       return t('app.titles.import');
+    case 'warehouse':
+      return t('app.titles.warehouse');
     case 'categories':
       return t('app.titles.categories');
     case 'subcategories':
@@ -86,6 +92,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.expenses');
     case 'receivables':
       return t('app.titles.receivables');
+    case 'payables':
+      return t('app.titles.payables');
     case 'reports':
       return t('app.titles.reports');
     case 'inventory':
@@ -130,8 +138,17 @@ function AppView(props: AppState) {
     addProduct,
     updateProduct,
     receiveProductStock,
+    transferWarehouseToStore,
     deleteProduct,
     importProducts,
+    warehouseSections,
+    warehouseStock,
+    warehouseSummary,
+    warehouseMovements,
+    addWarehouseSection,
+    updateWarehouseSection,
+    deleteWarehouseSection,
+    reassignWarehouseSection,
     addExpense,
     updateExpense,
     deleteExpense,
@@ -139,6 +156,8 @@ function AppView(props: AppState) {
     updateTransaction,
     reverseSale,
     collectReceivable,
+    payPayable,
+    voidPayable,
     registerCustomerForReceivable,
     updateAppSettings,
     addProductCategory,
@@ -218,6 +237,23 @@ function AppView(props: AppState) {
         );
       case 'import':
         return <Import onImport={importProducts} />;
+      case 'warehouse':
+        return (
+          <Warehouse
+            products={products}
+            sections={warehouseSections}
+            stock={warehouseStock}
+            summary={warehouseSummary}
+            movements={warehouseMovements}
+            globalSearch={globalSearch}
+            onAddSection={addWarehouseSection}
+            onUpdateSection={updateWarehouseSection}
+            onDeleteSection={deleteWarehouseSection}
+            onReassignSection={reassignWarehouseSection}
+            onReceiveStock={receiveProductStock}
+            onTransferToStore={transferWarehouseToStore}
+          />
+        );
       case 'categories':
         return (
           <Categories
@@ -343,6 +379,17 @@ function AppView(props: AppState) {
             }}
           />
         );
+      case 'payables':
+        return (
+          <Payables
+            transactions={transactions}
+            globalSearch={globalSearch}
+            transferAccountNumber={appSettings.transferAccountNumber}
+            transferPhoneNumber={appSettings.transferPhoneNumber}
+            onPay={payPayable}
+            onVoid={voidPayable}
+          />
+        );
       case 'reports':
         return (
           <Reports
@@ -361,8 +408,6 @@ function AppView(props: AppState) {
             productCategories={productCategories}
             productSubcategories={productSubcategories}
             globalSearch={globalSearch}
-            onUpdateStock={(id, stock) => updateProduct(id, { stock })}
-            onReceiveStock={receiveProductStock}
             onSyncStock={refreshData}
             syncBusy={apiChecking}
           />

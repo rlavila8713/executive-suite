@@ -27,6 +27,7 @@ import {
 import { Card, Button, Input, Modal } from '../components/ui';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { mapMutationError } from '../lib/mutationErrors';
+import { reverseMixedSaleHint } from '../lib/mixedSale';
 import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { ProductThumb } from '../components/ProductThumb';
 import { CashStatusCard } from '../components/CashStatusCard';
@@ -34,14 +35,25 @@ import { CashSession, Transaction, Product, Expense, Screen, type PaymentMethod 
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import { transactionOperatorName, uniqueOperatorNames } from '../lib/operators';
-import { pendingDebtTotal, isPendingDebtSale } from '../lib/reporting';
+import {
+  pendingDebtTotal,
+  isPendingDebtSale,
+  localDayRange,
+  netSalesRevenueInRange,
+  expensesTotalInRange,
+  isReturnRow,
+} from '../lib/reporting';
 import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 
-function startOfLocalDay(ts: number = Date.now()): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+type RecentSalesTab = 'completed' | 'reversed';
+
+function isSaleCompletedRow(tx: Transaction): boolean {
+  return tx.type === 'sale' && tx.status === 'completed';
+}
+
+function isSaleReversalRow(tx: Transaction): boolean {
+  return isReturnRow(tx) || (tx.type === 'sale' && (tx.status === 'reversed' || tx.status === 'refunded'));
 }
 
 function canReverseSale(tx: Transaction, reversedSourceIds: Set<string>): boolean {
@@ -59,20 +71,10 @@ function lastSevenDayBars(transactions: Transaction[]): { name: string; value: n
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    d.setHours(0, 0, 0, 0);
-    const start = d.getTime();
-    const end = start + 86400000;
-    const sum = transactions
-      .filter(
-        (tx) =>
-          tx.createdAt >= start &&
-          tx.createdAt < end &&
-          tx.type === 'sale' &&
-          tx.status === 'completed',
-      )
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0);
+    const range = localDayRange(d.getTime());
+    const sum = netSalesRevenueInRange(transactions, range);
     const name = `${d.getMonth() + 1}/${d.getDate()}`;
-    out.push({ name, value: Math.round(sum * 100) / 100 });
+    out.push({ name, value: sum });
   }
   return out;
 }
@@ -115,19 +117,21 @@ export function Dashboard({
   );
   const maxBar = useMemo(() => Math.max(...chartData.map((d) => d.value), 1), [chartData]);
 
-  const todayRevenue = useMemo(() => {
-    const start = startOfLocalDay();
-    return transactions
-      .filter(
-        (tx) => tx.type === 'sale' && tx.status === 'completed' && tx.createdAt >= start,
-      )
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0);
-  }, [transactions]);
+  const todayRevenue = useMemo(
+    () => netSalesRevenueInRange(transactions, localDayRange()),
+    [transactions],
+  );
+  const todayExpenses = useMemo(
+    () => expensesTotalInRange(expenses, localDayRange()),
+    [expenses],
+  );
   const expenseMonthly = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses]);
   const budgetPct =
-    expenseMonthly > 0 ? Math.min(100, Math.round((expenseMonthly / (expenseMonthly * 1.5)) * 100)) : 0;
+    expenseMonthly > 0
+      ? Math.min(100, Math.round((todayExpenses / Math.max(expenseMonthly, 1)) * 100))
+      : 0;
 
-  const profitApprox = todayRevenue - expenseMonthly / 30;
+  const profitApprox = todayRevenue - todayExpenses;
 
   const debtTotal = useMemo(() => pendingDebtTotal(transactions), [transactions]);
   const debtCount = useMemo(() => transactions.filter((tx) => isPendingDebtSale(tx)).length, [transactions]);
@@ -138,6 +142,8 @@ export function Dashboard({
   const [reversingTx, setReversingTx] = useState<Transaction | null>(null);
   const [receiptViewTx, setReceiptViewTx] = useState<Transaction | null>(null);
   const [operatorFilter, setOperatorFilter] = useState('');
+  const [recentTab, setRecentTab] = useState<RecentSalesTab>('completed');
+  const [logTab, setLogTab] = useState<RecentSalesTab>('completed');
 
   const handleTxSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -192,8 +198,18 @@ export function Dashboard({
     );
   }, [transactions, headerSearch, operatorFilter]);
 
+  const recentListForTab = useMemo(() => {
+    const base = transactionsFiltered.filter((tx) => tx.type !== 'payable');
+    return base.filter(recentTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
+  }, [transactionsFiltered, recentTab]);
+
+  const logListForTab = useMemo(() => {
+    const base = transactionsFiltered.filter((tx) => tx.type !== 'payable');
+    return base.filter(logTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
+  }, [transactionsFiltered, logTab]);
+
   const { pageItems: recentPageItems, page: recentPage, setPage: setRecentPage, totalPages: recentTotalPages, total: recentTotal, pageSize: recentPageSize } =
-    usePagination(transactionsFiltered);
+    usePagination(recentListForTab);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -287,8 +303,10 @@ export function Dashboard({
                 {t('dashboard.allRecords')}
               </span>
             </div>
-            <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">{t('dashboard.totalExpenses')}</p>
-            <h4 className="text-2xl font-bold text-primary">${expenseMonthly.toLocaleString()}</h4>
+            <p className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-1">{t('dashboard.todayExpenses')}</p>
+            <h4 className="text-2xl font-bold text-primary">
+              ${todayExpenses.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </h4>
           </div>
           <div className="mt-4">
             <div className="h-1 bg-surface-container-highest rounded-full overflow-hidden">
@@ -307,7 +325,7 @@ export function Dashboard({
             </div>
             <p className="text-xs font-bold uppercase tracking-widest opacity-70 mb-1">{t('dashboard.todayMinusExpenses')}</p>
             <h4 className="text-2xl font-bold">
-              ${Math.round(profitApprox).toLocaleString()}
+              ${profitApprox.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </h4>
           </div>
           <div className="flex items-center gap-1 text-on-tertiary-container text-[10px] font-bold mt-4">
@@ -386,7 +404,32 @@ export function Dashboard({
       </div>
 
       <Card title={t('dashboard.recentTx')}>
-        <div className="space-y-3 mt-6">
+        <div className="flex flex-wrap gap-2 p-1 bg-surface-container-low rounded-xl border border-black/5 -mt-2 mb-4">
+          {(['completed', 'reversed'] as RecentSalesTab[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => {
+                setRecentTab(tab);
+                setRecentPage(1);
+              }}
+              className={cn(
+                'px-4 py-2 rounded-lg text-sm font-bold transition-all',
+                recentTab === tab
+                  ? 'bg-primary text-white shadow-md'
+                  : 'text-on-surface-variant hover:bg-surface-container-high',
+              )}
+            >
+              {tab === 'completed' ? t('dashboard.recentTabCompleted') : t('dashboard.recentTabReversed')}
+            </button>
+          ))}
+        </div>
+        <div className="space-y-3">
+          {recentPageItems.length === 0 ? (
+            <p className="text-sm text-on-surface-variant text-center py-8">
+              {recentTab === 'completed' ? t('dashboard.recentEmptyCompleted') : t('dashboard.recentEmptyReversed')}
+            </p>
+          ) : null}
           {recentPageItems.map((tx) => (
             <div
               key={tx.id}
@@ -414,7 +457,7 @@ export function Dashboard({
                       tx.type === 'return' ? 'text-error' : 'text-primary',
                     )}
                   >
-                    {tx.type === 'return' ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
+                    {isSaleReversalRow(tx) || tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
                   </p>
                   <span
                     className={cn(
@@ -585,6 +628,23 @@ export function Dashboard({
       </Modal>
 
       <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title={t('dashboard.txLogTitle')}>
+        <div className="flex flex-wrap gap-2 p-1 bg-surface-container-low rounded-xl border border-black/5 mb-3">
+          {(['completed', 'reversed'] as RecentSalesTab[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setLogTab(tab)}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
+                logTab === tab
+                  ? 'bg-primary text-white shadow-md'
+                  : 'text-on-surface-variant hover:bg-surface-container-high',
+              )}
+            >
+              {tab === 'completed' ? t('dashboard.recentTabCompleted') : t('dashboard.recentTabReversed')}
+            </button>
+          ))}
+        </div>
         <div className="mb-3">
           <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
             {t('dashboard.operatorFilter')}
@@ -603,7 +663,12 @@ export function Dashboard({
           </select>
         </div>
         <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
-          {transactionsFiltered.map((tx) => (
+          {logListForTab.length === 0 ? (
+            <p className="text-sm text-on-surface-variant text-center py-6">
+              {logTab === 'completed' ? t('dashboard.recentEmptyCompleted') : t('dashboard.recentEmptyReversed')}
+            </p>
+          ) : null}
+          {logListForTab.map((tx) => (
             <div
               key={tx.id}
               className="flex items-center justify-between gap-2 p-3 rounded-lg bg-surface-container-low text-sm"
@@ -664,11 +729,13 @@ export function Dashboard({
       <ConfirmDeleteModal
         target={reversingTx}
         title={t('dashboard.reverseTxTitle')}
-        renderMessage={(tx) =>
-          tx.receipt?.lines?.length
+        renderMessage={(tx) => {
+          const base = tx.receipt?.lines?.length
             ? t('dashboard.reverseTxBody', { order: tx.orderNumber })
-            : `${t('dashboard.reverseTxBody', { order: tx.orderNumber })} ${t('dashboard.reverseTxNoReceipt')}`
-        }
+            : `${t('dashboard.reverseTxBody', { order: tx.orderNumber })} ${t('dashboard.reverseTxNoReceipt')}`;
+          const mixedHint = reverseMixedSaleHint(tx, t);
+          return mixedHint ? `${base}\n\n${mixedHint}` : base;
+        }}
         onClose={() => setReversingTx(null)}
         onDelete={onReverseSale}
         mapError={(err) => mapMutationError(err, t)}

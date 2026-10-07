@@ -66,6 +66,20 @@ export function Import({ onImport }: ImportProps) {
     if (code.startsWith('ROW_INVALID_STOCK|')) {
       return t('import.errRowStock', { row: code.split('|')[1] });
     }
+    if (code.startsWith('ROW_INVALID_WAREHOUSE_STOCK|')) {
+      return t('import.errRowWarehouseStock', { row: code.split('|')[1] });
+    }
+    if (code.startsWith('ROW_INVALID_STORE_STOCK|')) {
+      return t('import.errRowStoreStock', { row: code.split('|')[1] });
+    }
+    if (code === 'ERR_IMPORT_STORE_STOCK_NOT_ALLOWED') return t('import.errImportStoreStock');
+    if (code === 'ERR_IMPORT_SECTION_REQUIRED') return t('import.errImportSectionRequired');
+    if (code.startsWith('ERR_IMPORT_UNKNOWN_SECTION|')) {
+      return t('import.errImportUnknownSection', { name: code.split('|')[1] });
+    }
+    if (code.startsWith('ERR_IMPORT_REVIEW_QTY|')) {
+      return t('import.errImportReviewQty', { name: code.split('|')[1] });
+    }
     return code;
   };
 
@@ -150,6 +164,8 @@ export function Import({ onImport }: ImportProps) {
               <li>{t('import.colPrice')}</li>
               <li>{t('import.colCost')}</li>
               <li>{t('import.colStock')}</li>
+              <li>{t('import.colStoreStock')}</li>
+              <li>{t('import.colSection')}</li>
             </ul>
             <p className="text-xs">{t('import.optionalColumns')}</p>
           </div>
@@ -199,7 +215,11 @@ export function Import({ onImport }: ImportProps) {
             <div className="flex justify-between items-center gap-3">
               <p className="text-sm font-bold text-primary">{t('import.previewTitle', { count: rows.length })}</p>
               <Button
-                disabled={busy || validating || (validation != null && validation.summary.new === 0)}
+                disabled={
+                  busy ||
+                  validating ||
+                  (validation != null && (validation.summary.new === 0 || validation.summary.review > 0))
+                }
                 onClick={() => void handleImport()}
               >
                 {busy ? t('import.importing') : t('import.runImport')}
@@ -225,6 +245,12 @@ export function Import({ onImport }: ImportProps) {
                     {t('import.summaryDuplicateInFile', { count: validation.summary.duplicateInFile })}
                   </span>
                 ) : null}
+                {validation.summary.review > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-200 px-2.5 py-1 font-semibold">
+                    <AlertTriangle size={14} />
+                    {t('import.summaryReview', { count: validation.summary.review })}
+                  </span>
+                ) : null}
               </div>
             ) : null}
             {validation && validation.summary.new === 0 ? (
@@ -244,6 +270,8 @@ export function Import({ onImport }: ImportProps) {
                   <th className="px-4 py-2 text-right">{t('import.colPrice')}</th>
                   <th className="px-4 py-2 text-right">{t('import.colCost')}</th>
                   <th className="px-4 py-2 text-right">{t('import.colStock')}</th>
+                  <th className="px-4 py-2 text-right">{t('import.colStoreStock')}</th>
+                  <th className="px-4 py-2">{t('import.colSection')}</th>
                   <th className="px-4 py-2">{t('import.colLocation')}</th>
                   <th className="px-4 py-2">{t('common.sku')}</th>
                   <th className="px-4 py-2">{t('import.colBarcode')}</th>
@@ -260,6 +288,7 @@ export function Import({ onImport }: ImportProps) {
                       'border-t border-black/5',
                       rowStatus === 'duplicate_existing' && 'bg-error/5',
                       rowStatus === 'duplicate_in_file' && 'bg-amber-500/10',
+                      rowStatus === 'review' && 'bg-amber-500/10',
                     )}
                   >
                     <td className="px-4 py-2 text-on-surface-variant">{i + 1 + (importPage - 1) * importPageSize}</td>
@@ -268,7 +297,9 @@ export function Import({ onImport }: ImportProps) {
                     <td className="px-4 py-2">{r.subcategory}</td>
                     <td className="px-4 py-2 text-right">${r.price.toFixed(2)}</td>
                     <td className="px-4 py-2 text-right">${r.cost.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-right">{r.stock}</td>
+                    <td className="px-4 py-2 text-right">{r.warehouseStock}</td>
+                    <td className="px-4 py-2 text-right">{r.storeStock}</td>
+                    <td className="px-4 py-2">{r.warehouseSection}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.location ?? '—'}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.sku ?? t('import.skuAuto')}</td>
                     <td className="px-4 py-2 text-on-surface-variant">{r.barcode ?? '—'}</td>
@@ -303,7 +334,7 @@ export function Import({ onImport }: ImportProps) {
             )}
             <p className="font-bold text-primary">{t('import.resultTitle')}</p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
             <div className="rounded-lg bg-surface-container-low p-3">
               <p className="text-[10px] uppercase font-bold text-on-surface-variant">{t('import.createdCategories')}</p>
               <p className="text-xl font-bold text-primary">{result.created.categories}</p>
@@ -319,6 +350,10 @@ export function Import({ onImport }: ImportProps) {
             <div className="rounded-lg bg-surface-container-low p-3">
               <p className="text-[10px] uppercase font-bold text-on-surface-variant">{t('import.createdProducts')}</p>
               <p className="text-xl font-bold text-primary">{result.created.products}</p>
+            </div>
+            <div className="rounded-lg bg-surface-container-low p-3">
+              <p className="text-[10px] uppercase font-bold text-on-surface-variant">{t('import.createdWarehouseEntries')}</p>
+              <p className="text-xl font-bold text-primary">{result.created.warehouseEntries}</p>
             </div>
           </div>
           {result.errors.length > 0 ? (

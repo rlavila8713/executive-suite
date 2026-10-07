@@ -4,6 +4,7 @@ export type Screen =
   | 'dashboard'
   | 'products'
   | 'import'
+  | 'warehouse'
   | 'categories'
   | 'subcategories'
   | 'locations'
@@ -14,6 +15,7 @@ export type Screen =
   | 'inventory'
   | 'expenses'
   | 'receivables'
+  | 'payables'
   | 'reports'
   | 'help'
   | 'settings';
@@ -41,6 +43,65 @@ export interface ProductLocation {
   name: string;
 }
 
+export interface Warehouse {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  createdAt: number;
+  updatedAt: number | null;
+}
+
+export interface WarehouseSection {
+  id: string;
+  warehouseId: string;
+  name: string;
+  isSystem: boolean;
+  createdAt: number;
+}
+
+export interface WarehouseStock {
+  id: string;
+  warehouseId: string;
+  sectionId: string;
+  sectionName: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  quantity: number;
+  unitCost: number;
+  updatedAt: number | null;
+}
+
+export type WarehouseMovementType = 'ENTRY' | 'TRANSFER_TO_STORE' | 'ADJUSTMENT' | 'SECTION_REASSIGN';
+
+export interface WarehouseMovement {
+  id: string;
+  warehouseId: string;
+  productId: string;
+  sectionId: string | null;
+  type: WarehouseMovementType;
+  quantityDelta: number;
+  unitCost: number | null;
+  balanceAfter: number | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  notes: string | null;
+  createdAt: number;
+  createdBy: string | null;
+}
+
+export interface WarehouseSummaryReport {
+  warehouseId: string;
+  overall: { productCount: number; units: number; valueAtCost: number };
+  bySection: {
+    sectionId: string;
+    sectionName: string;
+    productCount: number;
+    units: number;
+    valueAtCost: number;
+  }[];
+}
+
 export interface Customer {
   id: string;
   firstName: string;
@@ -57,7 +118,10 @@ export interface Product {
   sku: string;
   category: string;
   price: number;
+  /** Weighted average unit cost in store inventory (updated on transfer from warehouse). */
   cost: number;
+  /** Weighted average unit cost in warehouse (updated on warehouse entries). */
+  warehouseCost: number;
   stock: number;
   /** Data URL (e.g. image/png;base64,...) or built-in SVG placeholder — omitted from list when includeImages=false. */
   image: string;
@@ -77,9 +141,16 @@ export interface CartItem extends Product {
 }
 
 /** How the customer paid (stored on each transaction for reporting). */
-export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'debt';
+export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'debt' | 'mixed';
 
-export type DebtStatus = 'pending' | 'collected';
+export type SalePaymentPart = {
+  method: 'cash' | 'card' | 'transfer' | 'debt';
+  amount: number;
+};
+
+export type DebtStatus = 'pending' | 'collected' | 'reversed';
+
+export type PayableStatus = 'pending' | 'paid' | 'void';
 
 /** One line on a sale receipt (snapshot at checkout). */
 export interface SaleReceiptLine {
@@ -109,6 +180,16 @@ export interface SaleReceipt {
   taxRatePercent: number;
   total: number;
   paymentMethod: PaymentMethod;
+  /** Split checkout (cash + transfer and/or debt). */
+  payments?: SalePaymentPart[];
+  /** Outstanding receivable after a partial debt sale (0 when paid). */
+  balanceDue?: number;
+  /** Tax on the non-cash portion is included in total/balanceDue (no extra tax on collect). */
+  mixedTaxIncluded?: boolean;
+  /** Channel used when a pending debt was collected. */
+  collectedPaymentMethod?: PaymentMethod;
+  /** Amount collected when closing a receivable (audit). */
+  debtCollectedAmount?: number;
   /** Efectivo: importe entregado por el cliente. */
   amountPaid?: number;
   /** Efectivo: vuelto entregado (amountPaid - total). */
@@ -124,10 +205,10 @@ export interface Transaction {
   amount: number;
   status: 'completed' | 'refunded' | 'pending' | 'reversed';
   timestamp: string;
-  type: 'sale' | 'return';
+  type: 'sale' | 'return' | 'payable';
   /** Used for ordering in the local database (newest first). */
   createdAt: number;
-  /** Original sale id when this is an immutable return/reversal movement. */
+  /** Original sale id for return rows or payables from mixed reversals. */
   sourceSaleId?: string;
   /** Set for POS sales: printable ticket data. */
   receipt?: SaleReceipt;
@@ -145,6 +226,9 @@ export interface Transaction {
   collectedAt?: number;
   /** Registered customer linked to this sale. */
   customerId?: string;
+  /** Liability to customer after reversing a mixed cash + transfer sale. */
+  soldAsPayable?: boolean;
+  payableStatus?: PayableStatus;
 }
 
 /** Optional cash drawer session for reconciliation (Cash reports tab). */
@@ -280,5 +364,7 @@ export type CheckoutPayload = {
   receipt: SaleReceipt;
   /** Credit sale: customer name required; no cash in drawer. */
   isDebt?: boolean;
+  /** Partial or split sale with a pending receivable balance. */
+  isPartialDebt?: boolean;
   customerId?: string;
 };

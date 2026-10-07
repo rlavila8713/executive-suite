@@ -76,6 +76,14 @@ export function migrateCatalogSchema(db: SqliteStore): void {
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_customer_id ON transactions(customer_id)`);
 
+  if (!hasColumn(db, 'transactions', 'sold_as_payable')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN sold_as_payable INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!hasColumn(db, 'transactions', 'payable_status')) {
+    db.exec(`ALTER TABLE transactions ADD COLUMN payable_status TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_payable_status ON transactions(payable_status)`);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS customers (
       id TEXT PRIMARY KEY,

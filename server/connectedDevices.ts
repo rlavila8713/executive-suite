@@ -93,6 +93,12 @@ export function isDeviceRevoked(db: SqliteStore, deviceId: string): boolean {
   return row?.revoked_at != null;
 }
 
+/** Skip last_seen writes when unchanged recently (reduces full DB exports on polling). */
+export const DEVICE_TOUCH_MIN_INTERVAL_MS = 30_000;
+
+/** In-process guard: parallel requests can all pass the DB check before any UPDATE lands. */
+const deviceTouchClaimedAt = new Map<string, number>();
+
 export function touchConnectedDevice(
   db: SqliteStore,
   deviceId: string,
@@ -103,8 +109,8 @@ export function touchConnectedDevice(
   ensureConnectedDevicesSchema(db);
   const clientKind = inferClientKind(userAgent, clientKindHeader);
   const existing = db
-    .prepare('SELECT device_id, revoked_at FROM connected_devices WHERE device_id = ?')
-    .get(deviceId) as { device_id: string; revoked_at: number | null } | undefined;
+    .prepare('SELECT device_id, revoked_at, last_seen_at FROM connected_devices WHERE device_id = ?')
+    .get(deviceId) as { device_id: string; revoked_at: number | null; last_seen_at: number } | undefined;
 
   if (!existing) {
     db.prepare(
@@ -115,6 +121,15 @@ export function touchConnectedDevice(
   }
 
   if (existing.revoked_at != null) return;
+
+  const claimedAt = deviceTouchClaimedAt.get(deviceId) ?? 0;
+  if (now - claimedAt < DEVICE_TOUCH_MIN_INTERVAL_MS) return;
+
+  if (now - existing.last_seen_at < DEVICE_TOUCH_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  deviceTouchClaimedAt.set(deviceId, now);
 
   db.prepare(
     `UPDATE connected_devices

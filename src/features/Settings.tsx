@@ -108,6 +108,11 @@ export function Settings({
   const [serverQrOpen, setServerQrOpen] = useState(false);
   const [serverQrUrl, setServerQrUrl] = useState('');
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
+  const [diagSummary, setDiagSummary] = useState<Awaited<ReturnType<typeof api.getDiagnosticsSummary>> | null>(null);
+  const [adminDiagnostics, setAdminDiagnostics] = useState<Awaited<ReturnType<typeof api.getAdminDiagnostics>> | null>(
+    null,
+  );
+  const [imageMigrateBusy, setImageMigrateBusy] = useState(false);
 
   const [draft, setDraft] = useState({
     storeName: settings.storeName,
@@ -274,9 +279,58 @@ export function Settings({
       const health = await api.health();
       setHealthInfo(health);
       setServerMessage({ type: 'ok', text: t('settings.serverConnected') });
+      await loadDiagnostics();
     } catch {
       setHealthInfo(null);
+      setDiagSummary(null);
+      setAdminDiagnostics(null);
       setServerMessage({ type: 'err', text: t('settings.serverUnreachable') });
+    }
+  };
+
+  const loadDiagnostics = async () => {
+    try {
+      setDiagSummary(await api.getDiagnosticsSummary());
+      try {
+        setAdminDiagnostics(await api.getAdminDiagnostics());
+      } catch {
+        setAdminDiagnostics(null);
+      }
+    } catch {
+      setDiagSummary(null);
+      setAdminDiagnostics(null);
+    }
+  };
+
+  const formatBytes = (n: number | null | undefined) => {
+    if (n == null) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const runImageMigration = async (dryRun: boolean) => {
+    setImageMigrateBusy(true);
+    setServerMessage(null);
+    try {
+      const result = await api.migrateProductImages({ dryRun });
+      setServerMessage({
+        type: 'ok',
+        text: dryRun
+          ? t('settings.imageMigrateDryRun', {
+              migrated: result.migrated,
+              embedded: diagSummary?.database.embeddedImageCount ?? 0,
+            })
+          : t('settings.imageMigrateDone', {
+              migrated: result.migrated,
+              orphans: result.orphansRemoved,
+            }),
+      });
+      await loadDiagnostics();
+    } catch (e) {
+      setServerMessage({ type: 'err', text: e instanceof Error ? e.message : t('settings.imageMigrateFailed') });
+    } finally {
+      setImageMigrateBusy(false);
     }
   };
 
@@ -491,7 +545,9 @@ export function Settings({
     if (!pendingBackup) return;
     setBackupBusy(true);
     try {
-      await restoreBackupSnapshot(pendingBackup);
+      await restoreBackupSnapshot(pendingBackup, {
+        allowEmptyProducts: pendingBackup.products.length === 0,
+      });
       await onDataChanged?.();
       setImportConfirmOpen(false);
       setPendingBackup(null);
@@ -1049,6 +1105,77 @@ export function Settings({
                         </div>
                       )}
                     </>
+                  )}
+                </div>
+
+                <div className="p-4 bg-surface-container-low rounded-xl space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-bold">{t('settings.diagnosticsTitle')}</p>
+                    <Button variant="secondary" size="sm" onClick={() => void loadDiagnostics()}>
+                      {t('settings.diagnosticsLoad')}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-on-surface-variant">{t('settings.diagnosticsDataDirHelp')}</p>
+                  {diagSummary && (
+                    <>
+                      <p className="text-xs text-on-surface-variant">
+                        {t('settings.diagnosticsProducts', { count: diagSummary.database.products })}
+                      </p>
+                      <p className="text-xs text-on-surface-variant">
+                        {t('settings.diagnosticsDbSize', { size: formatBytes(diagSummary.database.sizeBytes) })}
+                      </p>
+                      <p className="text-xs text-on-surface-variant">
+                        {t('settings.diagnosticsImageStorage', {
+                          file: diagSummary.database.fileImageCount,
+                          embedded: diagSummary.database.embeddedImageCount,
+                        })}
+                      </p>
+                      {diagSummary.warnings.includes('CATALOG_EMPTY') && (
+                        <p className="text-xs font-medium text-error">{t('settings.warningCatalogEmpty')}</p>
+                      )}
+                      {diagSummary.warnings.includes('EMBEDDED_IMAGES_IN_SQLITE') && (
+                        <p className="text-xs font-medium text-on-surface-variant">
+                          {t('settings.warningEmbeddedImages')}
+                        </p>
+                      )}
+                      {diagSummary.persistence.lastSuccessfulPersist && (
+                        <p className="text-xs text-on-surface-variant">
+                          {t('settings.diagnosticsLastPersist', {
+                            time: new Date(diagSummary.persistence.lastSuccessfulPersist).toLocaleString(),
+                          })}
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {adminDiagnostics && (
+                    <>
+                      <p className="text-xs font-mono break-all text-on-surface-variant">
+                        {t('settings.diagnosticsDataDir', { path: adminDiagnostics.dataDir })}
+                      </p>
+                      <p className="text-xs text-on-surface-variant">
+                        {t('settings.diagnosticsBackups', { count: adminDiagnostics.backup.rotatedBackupCount })}
+                      </p>
+                    </>
+                  )}
+                  {diagSummary && diagSummary.database.embeddedImageCount > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={imageMigrateBusy}
+                        onClick={() => void runImageMigration(true)}
+                      >
+                        {t('settings.imageMigratePreview')}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={imageMigrateBusy}
+                        onClick={() => void runImageMigration(false)}
+                      >
+                        {t('settings.imageMigrateRun')}
+                      </Button>
+                    </div>
                   )}
                 </div>
 

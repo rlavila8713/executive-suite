@@ -2,14 +2,8 @@ import { useMemo } from 'react';
 import { ArrowRight, Banknote } from 'lucide-react';
 import type { CashSession, Screen, Transaction } from '../types';
 import { cn } from '../lib/utils';
-import { resolveTransactionPaymentMethod } from '../lib/reporting';
+import { localDayRange, netSalesRevenueInRange, paymentMethodBreakdown } from '../lib/reporting';
 import { useI18n } from '../i18n/I18nContext';
-
-function startOfLocalDay(ts: number = Date.now()): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
 
 function compactMoney(value: number, locale: string): string {
   const abs = Math.abs(value);
@@ -35,35 +29,15 @@ export function CashStatusCard({ cashSessions, transactions, onNavigate, classNa
   const openSession = cashSessions.find((s) => s.closedAt == null) ?? null;
   const isOpen = openSession != null;
 
-  const todayNetRevenue = useMemo(() => {
-    const start = startOfLocalDay();
-    return transactions
-      .filter((tx) => tx.createdAt >= start)
-      .reduce((sum, tx) => {
-        if (tx.type === 'sale' && tx.status === 'completed') return sum + Math.abs(tx.amount);
-        if (tx.type === 'return' || tx.status === 'reversed' || tx.status === 'refunded') {
-          return sum - Math.abs(tx.amount);
-        }
-        return sum;
-      }, 0);
-  }, [transactions]);
+  const todayNetRevenue = useMemo(
+    () => netSalesRevenueInRange(transactions, localDayRange()),
+    [transactions],
+  );
 
-  const todayByPayment = useMemo(() => {
-    const start = startOfLocalDay();
-    const totals = { cash: 0, card: 0, transfer: 0, other: 0 };
-    for (const tx of transactions) {
-      if (tx.createdAt < start) continue;
-      const pm = resolveTransactionPaymentMethod(tx);
-      const delta =
-        tx.type === 'sale' && tx.status === 'completed'
-          ? Math.abs(tx.amount)
-          : tx.type === 'return' || tx.status === 'reversed' || tx.status === 'refunded'
-            ? -Math.abs(tx.amount)
-            : 0;
-      if (delta !== 0) totals[pm] += delta;
-    }
-    return totals;
-  }, [transactions]);
+  const todayByPayment = useMemo(
+    () => paymentMethodBreakdown(transactions, localDayRange()),
+    [transactions],
+  );
 
   const openedLabel =
     openSession != null

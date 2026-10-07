@@ -3,6 +3,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,14 +20,14 @@ import { transactionOperatorName, uniqueOperatorNames } from '../../lib/operator
 import {
   dateRangeFromInputs,
   expensesTotalInRange,
-  groupSalesByBucket,
+  groupNetSalesByBucket,
   inventoryValuationAtCost,
   inventoryValuationAtRetail,
   inventoryTurnoverRatio,
   paymentMethodBreakdown,
+  mixedReversalPayablesSummary,
   previousPeriodOfSameLength,
   profitGrossInRange,
-  salesRevenueInRange,
   slowMovingProducts,
   topSellingProducts,
   type SalesBucket,
@@ -89,8 +92,10 @@ export function ReportsModule({
   const range = useMemo(() => dateRangeFromInputs(startStr, endStr), [startStr, endStr]);
   const prevRange = useMemo(() => previousPeriodOfSameLength(range), [range]);
 
-  const revenue = useMemo(() => salesRevenueInRange(scopedTransactions, range), [scopedTransactions, range]);
-  const prevRevenue = useMemo(() => salesRevenueInRange(scopedTransactions, prevRange), [scopedTransactions, prevRange]);
+  const profit = useMemo(() => profitGrossInRange(scopedTransactions, products, range), [scopedTransactions, products, range]);
+  const prevProfit = useMemo(() => profitGrossInRange(scopedTransactions, products, prevRange), [scopedTransactions, products, prevRange]);
+  const revenue = profit.netSales;
+  const prevRevenue = prevProfit.netSales;
   const changePct = useMemo(() => {
     if (prevRevenue <= 0) return revenue > 0 ? 100 : 0;
     return ((revenue - prevRevenue) / prevRevenue) * 100;
@@ -110,6 +115,10 @@ export function ReportsModule({
 
   const expensesR = useMemo(() => expensesTotalInRange(expenses, range), [expenses, range]);
   const payBreak = useMemo(() => paymentMethodBreakdown(scopedTransactions, range), [scopedTransactions, range]);
+  const reversalPayables = useMemo(
+    () => mixedReversalPayablesSummary(scopedTransactions, range),
+    [scopedTransactions, range],
+  );
 
   const paymentLabel = useCallback(
     (k: 'cash' | 'card' | 'transfer' | 'other') => {
@@ -131,11 +140,10 @@ export function ReportsModule({
   );
 
   const series = useMemo(
-    () => groupSalesByBucket(scopedTransactions, range, bucket, locale === 'es' ? 'es' : 'en-US'),
+    () => groupNetSalesByBucket(scopedTransactions, range, bucket, locale === 'es' ? 'es' : 'en-US'),
     [scopedTransactions, range, bucket, locale],
   );
 
-  const profit = useMemo(() => profitGrossInRange(scopedTransactions, products, range), [scopedTransactions, products, range]);
   const netOp = useMemo(() => profit.grossProfit - expensesR, [profit.grossProfit, expensesR]);
 
   const top = useMemo(() => topSellingProducts(scopedTransactions, range, 15), [scopedTransactions, range]);
@@ -289,40 +297,90 @@ export function ReportsModule({
 
       {tab === 'sales' && (
         <div className="space-y-6 print:space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <p className="text-xs text-on-surface-variant">{t('reports.salesTheoryNote')}</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <Card className="p-4">
-              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.revenue')}</p>
-              <p className="text-2xl font-black text-primary mt-1">${revenue.toLocaleString()}</p>
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.grossSales')}</p>
+              <p className="text-xl font-black text-primary mt-1">${profit.grossSales.toLocaleString()}</p>
             </Card>
             <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.returnsAmount')}</p>
+              <p className="text-xl font-bold text-error mt-1">−${profit.returnsAmount.toLocaleString()}</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.netSales')}</p>
+              <p className="text-xl font-black text-primary mt-1">${profit.netSales.toLocaleString()}</p>
+              <p className="text-[10px] text-on-surface-variant mt-1">{t('reports.netSalesHint')}</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.cogs')}</p>
+              <p className="text-xl font-bold mt-1">${profit.cogs.toLocaleString()}</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.grossProfit')}</p>
+              <p className={cn('text-xl font-black mt-1', profit.grossProfit >= 0 ? 'text-on-tertiary-container' : 'text-error')}>
+                ${profit.grossProfit.toLocaleString()}
+              </p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.orders')}</p>
+              <p className="text-xl font-black text-primary mt-1">{orders}</p>
+            </Card>
+            <Card className="p-4 border-rose-500/20">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.mixedReversalPayables')}</p>
+              <p className="text-xl font-black text-rose-700 dark:text-rose-300 mt-1">
+                ${reversalPayables.pendingTotal.toLocaleString()}
+              </p>
+              <p className="text-[10px] text-on-surface-variant mt-1">
+                {t('reports.mixedReversalPayablesHint', { count: reversalPayables.pendingCount })}
+              </p>
+            </Card>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.prevPeriod')}</p>
-              <p className="text-2xl font-bold text-on-surface-variant mt-1">${prevRevenue.toLocaleString()}</p>
+              <p className="text-lg font-bold text-on-surface-variant mt-1">${prevRevenue.toLocaleString()}</p>
+              <p className="text-[10px] text-on-surface-variant">{t('reports.netSales')}</p>
             </Card>
             <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.changePct')}</p>
-              <p className={cn('text-2xl font-bold mt-1', changePct >= 0 ? 'text-on-tertiary-container' : 'text-error')}>
+              <p className={cn('text-lg font-bold mt-1', changePct >= 0 ? 'text-on-tertiary-container' : 'text-error')}>
                 {changePct >= 0 ? '+' : ''}
                 {changePct.toFixed(1)}%
               </p>
             </Card>
             <Card className="p-4">
-              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.orders')}</p>
-              <p className="text-2xl font-black text-primary mt-1">{orders}</p>
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.expensesInRange')}</p>
+              <p className="text-lg font-bold text-primary mt-1">${expensesR.toLocaleString()}</p>
             </Card>
           </div>
-          <Card title={t('reports.expensesInRange')} className="p-4 sm:p-6">
-            <p className="text-2xl font-bold text-primary">${expensesR.toLocaleString()}</p>
-          </Card>
-          <Card title={t('reports.salesTrend')} className="p-4 sm:p-6">
-            <div className="h-64 mt-4">
+          <Card title={t('reports.salesTrend')} subtitle={t('reports.salesTrendSubtitle')} className="p-4 sm:p-6">
+            <div className="h-72 mt-4">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={series}>
+                <ComposedChart data={series}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                  <YAxis hide />
+                  <YAxis yAxisId="left" tick={{ fontSize: 10 }} width={48} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} width={48} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Bar dataKey="revenue" fill="#222a3e" radius={[4, 4, 0, 0]} name={t('reports.revenue')} />
-                </BarChart>
+                  <Legend />
+                  <Bar
+                    yAxisId="left"
+                    dataKey="revenue"
+                    fill="#222a3e"
+                    radius={[4, 4, 0, 0]}
+                    name={t('reports.dailyNetSales')}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="cumulative"
+                    stroke="#c45c26"
+                    strokeWidth={2}
+                    dot={false}
+                    name={t('reports.cumulativeRevenue')}
+                  />
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           </Card>
@@ -354,8 +412,8 @@ export function ReportsModule({
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Card className="p-4">
-              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.revenue')}</p>
-              <p className="text-2xl font-black text-primary mt-1">${profit.revenue.toLocaleString()}</p>
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.netSales')}</p>
+              <p className="text-2xl font-black text-primary mt-1">${profit.netSales.toLocaleString()}</p>
             </Card>
             <Card className="p-4">
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.cogs')}</p>

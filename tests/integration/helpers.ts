@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Server } from 'node:http';
 import { createApp } from '../../server/app.js';
-import { closeDb, initDb } from '../../server/db.js';
+import { closeDb, flushPendingDbPersist, initDb } from '../../server/db.js';
 
 export const TEST_DEVICE_ID = 'integration-test-device';
 
@@ -24,6 +24,49 @@ export async function setupTestServer(): Promise<string> {
     server = app.listen(0, '127.0.0.1', () => resolve());
   });
 
+  const addr = server!.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 4000;
+  baseUrl = `http://127.0.0.1:${port}`;
+  return baseUrl;
+}
+
+/** Stops HTTP and reloads SQLite from disk (simulates `npm run api` restart). */
+export async function restartTestServer(): Promise<string> {
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server!.close((err) => (err ? reject(err) : resolve()));
+    });
+    server = null;
+  }
+  flushPendingDbPersist();
+  closeDb();
+  await initDb();
+
+  const app = createApp();
+  await new Promise<void>((resolve) => {
+    server = app.listen(0, '127.0.0.1', () => resolve());
+  });
+  const addr = server!.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 4000;
+  baseUrl = `http://127.0.0.1:${port}`;
+  return baseUrl;
+}
+
+export async function stopTestServerHttp(): Promise<void> {
+  if (!server) return;
+  await new Promise<void>((resolve, reject) => {
+    server!.close((err) => (err ? reject(err) : resolve()));
+  });
+  server = null;
+}
+
+export async function startTestServerHttp(): Promise<string> {
+  if (server) return baseUrl;
+  await initDb();
+  const app = createApp();
+  await new Promise<void>((resolve) => {
+    server = app.listen(0, '127.0.0.1', () => resolve());
+  });
   const addr = server!.address();
   const port = typeof addr === 'object' && addr ? addr.port : 4000;
   baseUrl = `http://127.0.0.1:${port}`;
@@ -51,6 +94,25 @@ export type ApiResult<T = unknown> = {
   ok: boolean;
 };
 
+/** Put units on the store shelf via warehouse receive + transfer (store stock cannot be set directly). */
+export async function fillStoreStockFromWarehouse(
+  productId: string,
+  quantity: number,
+  unitCost = 1,
+  price = 0,
+): Promise<void> {
+  const receive = await api(`/api/products/${productId}/receive`, {
+    method: 'POST',
+    body: { quantity, unitCost, price },
+  });
+  if (!receive.ok) throw new Error(`receive failed: ${receive.status}`);
+  const transfer = await api(`/api/warehouse/stock/${productId}/transfer-to-store`, {
+    method: 'POST',
+    body: { quantity, price: price > 0 ? price : 1 },
+  });
+  if (!transfer.ok) throw new Error(`transfer failed: ${transfer.status}`);
+}
+
 export async function api<T = unknown>(
   apiPath: string,
   options: {
@@ -65,6 +127,7 @@ export async function api<T = unknown>(
   const headers: Record<string, string> = {
     ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     'X-Device-Id': options.deviceId ?? TEST_DEVICE_ID,
+    'X-Client-Kind': 'web',
     ...options.headers,
   };
 

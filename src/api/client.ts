@@ -14,6 +14,11 @@ import type {
   ProductLocation,
   ProductSubcategory,
   Transaction,
+  Warehouse,
+  WarehouseMovement,
+  WarehouseSection,
+  WarehouseStock,
+  WarehouseSummaryReport,
 } from '../types';
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
@@ -86,6 +91,7 @@ export type ProductImportResult = {
     subcategories: number;
     locations: number;
     products: number;
+    warehouseEntries: number;
   };
   errors: { row: number; message: string }[];
 };
@@ -95,8 +101,13 @@ export type ProductImportValidation = {
     new: number;
     duplicateExisting: number;
     duplicateInFile: number;
+    review: number;
   };
-  rows: { row: number; status: 'new' | 'duplicate_existing' | 'duplicate_in_file'; code?: string }[];
+  rows: {
+    row: number;
+    status: 'new' | 'duplicate_existing' | 'duplicate_in_file' | 'review';
+    code?: string;
+  }[];
 };
 
 export const api = {
@@ -114,17 +125,21 @@ export const api = {
     request<Product>(`/api/products/${id}/stock`, { method: 'PATCH', body: JSON.stringify({ stock }) }),
   receiveProductStock: (
     id: string,
-    payload: { quantity: number; unitCost: number; price: number },
+    payload: { quantity: number; unitCost: number; price?: number },
   ) =>
     request<{
       product: Product;
-      previousStock: number;
-      previousCost: number;
-      newStock: number;
-      newCost: number;
+      previousWarehouseQty: number;
+      newWarehouseQty: number;
+      warehouseStock: WarehouseStock;
       receivedQuantity: number;
       receivedUnitCost: number;
     }>(`/api/products/${id}/receive`, { method: 'POST', body: JSON.stringify(payload) }),
+  transferWarehouseToStore: (productId: string, quantity: number, price: number) =>
+    request<{ product: Product; warehouseStock: WarehouseStock }>(
+      `/api/warehouse/stock/${encodeURIComponent(productId)}/transfer-to-store`,
+      { method: 'POST', body: JSON.stringify({ quantity, price }) },
+    ),
   deleteProduct: (id: string) => request<void>(`/api/products/${id}`, { method: 'DELETE' }),
 
   importProducts: (rows: {
@@ -133,9 +148,12 @@ export const api = {
     subcategory: string;
     price: number;
     cost: number;
-    stock: number;
+    warehouseStock: number;
+    storeStock: number;
+    warehouseSection: string;
     location?: string;
     sku?: string;
+    barcode?: string;
   }[]) =>
     request<ProductImportResult>('/api/import/products', { method: 'POST', body: JSON.stringify({ rows }) }),
 
@@ -145,9 +163,12 @@ export const api = {
     subcategory: string;
     price: number;
     cost: number;
-    stock: number;
+    warehouseStock: number;
+    storeStock: number;
+    warehouseSection: string;
     location?: string;
     sku?: string;
+    barcode?: string;
   }[]) =>
     request<ProductImportValidation>('/api/import/products/validate', {
       method: 'POST',
@@ -194,6 +215,41 @@ export const api = {
       `/api/products/next-sku?categoryId=${encodeURIComponent(categoryId)}&subcategoryId=${encodeURIComponent(subcategoryId)}`,
     ),
 
+  getWarehouses: () => request<Warehouse[]>('/api/warehouse'),
+  updateWarehouse: (id: string, name: string) =>
+    request<Warehouse>(`/api/warehouse/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  getWarehouseSections: () => request<WarehouseSection[]>('/api/warehouse/sections'),
+  createWarehouseSection: (name: string) =>
+    request<WarehouseSection>('/api/warehouse/sections', { method: 'POST', body: JSON.stringify({ name }) }),
+  updateWarehouseSection: (id: string, name: string) =>
+    request<WarehouseSection>(`/api/warehouse/sections/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteWarehouseSection: (id: string) =>
+    request<void>(`/api/warehouse/sections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getWarehouseStock: (sectionId?: string) =>
+    request<WarehouseStock[]>(
+      sectionId
+        ? `/api/warehouse/stock?sectionId=${encodeURIComponent(sectionId)}`
+        : '/api/warehouse/stock',
+    ),
+  reassignWarehouseSection: (productId: string, sectionId: string) =>
+    request<WarehouseStock>(`/api/warehouse/stock/${encodeURIComponent(productId)}/section`, {
+      method: 'PATCH',
+      body: JSON.stringify({ sectionId }),
+    }),
+  getWarehouseMovements: (productId?: string) =>
+    request<WarehouseMovement[]>(
+      productId
+        ? `/api/warehouse/movements?productId=${encodeURIComponent(productId)}`
+        : '/api/warehouse/movements',
+    ),
+  getWarehouseSummary: () => request<WarehouseSummaryReport>('/api/warehouse/reports/summary'),
+
   getTransactions: () => request<Transaction[]>('/api/transactions'),
   createTransaction: (row: Omit<Transaction, 'id'>) =>
     request<Transaction>('/api/transactions', { method: 'POST', body: JSON.stringify(row) }),
@@ -209,6 +265,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ paymentMethod }),
     }),
+  payPayable: (id: string) =>
+    request<Transaction>(`/api/payables/${encodeURIComponent(id)}/pay`, {
+      method: 'POST',
+      body: JSON.stringify({ paymentMethod: 'transfer' }),
+    }),
+  voidPayable: (id: string) =>
+    request<Transaction>(`/api/payables/${encodeURIComponent(id)}/void`, { method: 'POST' }),
   linkTransactionCustomer: (transactionId: string, customerId: string) =>
     request<Transaction>(`/api/transactions/${encodeURIComponent(transactionId)}/customer`, {
       method: 'PATCH',
@@ -241,8 +304,73 @@ export const api = {
     }),
 
   exportBackup: () => request<ExecutiveSuiteBackup>('/api/backup'),
-  importBackup: (data: ExecutiveSuiteBackup) =>
-    request<{ ok: boolean }>('/api/backup/import', { method: 'POST', body: JSON.stringify(data) }),
+  importBackup: (data: ExecutiveSuiteBackup, options?: { allowEmptyProducts?: boolean }) =>
+    request<{ ok: boolean }>('/api/backup/import', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, allowEmptyProducts: options?.allowEmptyProducts === true }),
+    }),
+
+  getDiagnosticsSummary: () =>
+    request<{
+      apiUrl: string;
+      appVersion: string;
+      database: {
+        products: number;
+        categories: number;
+        transactions: number;
+        sizeBytes: number | null;
+        embeddedImageCount: number;
+        fileImageCount: number;
+      };
+      persistence: { lastSuccessfulPersist: string | null; lastPersistDurationMs: number | null };
+      warnings: string[];
+      mobileClientHints: {
+        maxImageDimensionPx: number;
+        preferSequentialUploads: boolean;
+        productListUseIncludeImagesFalse: boolean;
+      };
+    }>('/api/diagnostics/summary'),
+
+  getAdminDiagnostics: () =>
+    request<{
+      appVersion: string;
+      dataDir: string;
+      database: {
+        path: string;
+        sizeBytes: number | null;
+        lastModified: string | null;
+        products: number;
+        categories: number;
+        transactions: number;
+        schemaVersion: number;
+      };
+      persistence: {
+        lastSuccessfulPersist: string | null;
+        lastPersistDurationMs: number | null;
+        lastPersistSizeBytes: number | null;
+        lastPersistError: string | null;
+      };
+      backup: {
+        lastSuccessfulBackup: string | null;
+        lastBackupPath: string | null;
+        lastBackupSizeBytes: number | null;
+        lastBackupError: string | null;
+        rotatedBackupCount: number;
+      };
+    }>('/api/admin/diagnostics'),
+
+  migrateProductImages: (options?: { dryRun?: boolean }) =>
+    request<{
+      dryRun: boolean;
+      scanned: number;
+      migrated: number;
+      skipped: number;
+      errors: { productId: string; message: string }[];
+      orphansRemoved: number;
+    }>(`/api/admin/migrate-product-images${options?.dryRun ? '?dryRun=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify({ dryRun: options?.dryRun === true }),
+    }),
 
   getLicense: () => request<LicenseInfo>('/api/license'),
   requestLicense: (planId: LicensePlanId) =>

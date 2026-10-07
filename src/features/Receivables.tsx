@@ -6,7 +6,8 @@ import type { Customer, Transaction } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
-import { isDebtSaleRecord, isPendingDebtSale } from '../lib/reporting';
+import { isDebtSaleRecord, isPendingDebtSale, isReversedDebtSale } from '../lib/reporting';
+import { receivableBalanceDue, receivableDisplayAmount } from '../lib/paymentSplits';
 import { ReceiptViewModal } from '../components/ReceiptViewModal';
 import { TablePagination } from '../components/TablePagination';
 import { usePagination } from '../lib/usePagination';
@@ -101,14 +102,25 @@ export function Receivables({
   const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const totalPending = useMemo(
-    () => Math.round(pending.reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100) / 100,
+    () => Math.round(pending.reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100) / 100,
     [pending],
   );
 
-  const collectSubtotal = collectTx ? Math.abs(collectTx.receipt?.subtotal ?? collectTx.amount) : 0;
+  const collectBalanceDue = collectTx ? receivableBalanceDue(collectTx) : 0;
+  const collectMixedTaxIncluded = collectTx?.receipt?.mixedTaxIncluded === true;
+  const collectPartialMixedDebt =
+    collectTx?.receipt?.paymentMethod === 'mixed' &&
+    (collectTx.receipt?.payments?.some((p) => p.method === 'cash') ?? false);
+  const collectTaxBase = collectPartialMixedDebt
+    ? collectBalanceDue
+    : collectTx
+      ? Math.abs(collectTx.receipt?.subtotal ?? collectTx.amount)
+      : 0;
   const collectTax =
-    collectTx && collectMethod === 'transfer' ? Math.round(collectSubtotal * (taxRatePercent / 100) * 100) / 100 : 0;
-  const collectTotal = collectSubtotal + collectTax;
+    collectTx && collectMethod === 'transfer' && !collectMixedTaxIncluded
+      ? Math.round(collectTaxBase * (taxRatePercent / 100) * 100) / 100
+      : 0;
+  const collectTotal = collectMixedTaxIncluded ? collectBalanceDue : collectTaxBase + collectTax;
 
   const payQrPayload = useMemo(() => {
     if (collectMethod === 'transfer') {
@@ -264,6 +276,7 @@ export function Receivables({
               ) : (
                 pageItems.map((tx) => {
                   const pendingRow = isPendingDebtSale(tx);
+                  const reversedRow = isReversedDebtSale(tx);
                   const customerId = resolveCustomerId(tx);
                   const showRegister = needsCustomerRegistration(tx);
                   return (
@@ -287,7 +300,7 @@ export function Receivables({
                         {(tx.receipt?.lines ?? []).map((l) => l.name).join(', ')}
                       </td>
                       <td className="px-4 py-3 text-right font-bold tabular-nums">
-                        ${Math.abs(tx.amount).toFixed(2)}
+                        ${receivableDisplayAmount(tx).toFixed(2)}
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -295,10 +308,16 @@ export function Receivables({
                             'text-[10px] font-bold uppercase px-2 py-0.5 rounded',
                             pendingRow
                               ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200'
-                              : 'bg-on-tertiary-container/15 text-on-tertiary-container',
+                              : reversedRow
+                                ? 'bg-on-surface-variant/15 text-on-surface-variant'
+                                : 'bg-on-tertiary-container/15 text-on-tertiary-container',
                           )}
                         >
-                          {pendingRow ? t('receivables.statusPending') : t('receivables.statusCollected')}
+                          {pendingRow
+                            ? t('receivables.statusPending')
+                            : reversedRow
+                              ? t('receivables.statusReversed')
+                              : t('receivables.statusCollected')}
                         </span>
                       </td>
                       <td className="px-4 py-3">

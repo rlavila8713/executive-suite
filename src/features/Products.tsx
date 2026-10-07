@@ -25,6 +25,7 @@ import { TablePagination } from '../components/TablePagination';
 import { nextSkuFromProducts } from '../lib/sku';
 import { downloadCsv } from '../lib/printDocument';
 import { computeProductMargin } from '../lib/productMargin';
+import { enqueueUpload } from '../lib/uploadQueue';
 
 const STATUSES: ProductStatus[] = ['active', 'inactive', 'pending'];
 const UNITS: UnitOfMeasure[] = ['unidad', 'par', 'caja', 'paquete', 'metro', 'kg', 'litro'];
@@ -66,7 +67,7 @@ export function Products({
   const [unitOfMeasure, setUnitOfMeasure] = useState<UnitOfMeasure>('unidad');
   const [locationId, setLocationId] = useState<string>('');
   const [priceInput, setPriceInput] = useState('');
-  const [costInput, setCostInput] = useState('');
+  const [priceError, setPriceError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isModalOpen) return;
@@ -79,17 +80,16 @@ export function Products({
     setUnitOfMeasure(editingProduct?.unitOfMeasure ?? 'unidad');
     setLocationId(editingProduct?.locationId ?? '');
     setPriceInput(editingProduct != null ? String(editingProduct.price) : '');
-    setCostInput('');
+    setPriceError(null);
   }, [isModalOpen, editingProduct]);
 
   const marginPreview = useMemo(() => {
+    if (!editingProduct) return null;
     const price = parseFloat(priceInput.replace(',', '.'));
-    const cost = editingProduct ? editingProduct.cost : parseFloat(costInput.replace(',', '.'));
     if (!Number.isFinite(price) || priceInput.trim() === '') return null;
-    if (!editingProduct && costInput.trim() === '') return null;
-    if (!Number.isFinite(cost)) return null;
-    return computeProductMargin(price, cost);
-  }, [priceInput, costInput, editingProduct]);
+    if (editingProduct.cost <= 0 && editingProduct.stock <= 0) return null;
+    return computeProductMargin(price, editingProduct.cost);
+  }, [priceInput, editingProduct]);
 
   const categoryOptions = [...productCategories].sort((a, b) => a.name.localeCompare(b.name));
   const subsForCategory = useMemo(
@@ -127,9 +127,10 @@ export function Products({
       name: formData.get('name') as string,
       sku: (formData.get('sku') as string) || sku,
       category: cat?.name ?? (formData.get('category') as string),
-      price: parseFloat(priceInput.replace(',', '.')),
-      cost: editingProduct ? editingProduct.cost : parseFloat(costInput.replace(',', '.')),
-      stock: editingProduct ? editingProduct.stock : parseInt(formData.get('stock') as string, 10),
+      price: editingProduct?.price ?? 0,
+      cost: editingProduct?.cost ?? 0,
+      warehouseCost: editingProduct?.warehouseCost ?? 0,
+      stock: editingProduct ? editingProduct.stock : 0,
       image: productImage,
       categoryId: categoryId,
       subcategoryId: subcategoryId,
@@ -141,11 +142,20 @@ export function Products({
     };
 
     if (editingProduct) {
-      const { cost: _c, stock: _s, ...catalogUpdates } = productData;
+      const priceParsed = parseFloat(priceInput.replace(',', '.'));
+      if (!Number.isFinite(priceParsed) || priceParsed < 0) {
+        setPriceError(t('products.invalidPrice'));
+        return;
+      }
+      const { cost: _c, stock: _s, price: _p, warehouseCost: _w, ...catalogUpdates } = productData;
       if (!imageDirty) {
         delete (catalogUpdates as { image?: string }).image;
       }
-      await onUpdate(editingProduct.id, catalogUpdates);
+      const save = async () => {
+        await onUpdate(editingProduct.id, { ...catalogUpdates, price: priceParsed });
+      };
+      if (imageDirty) await enqueueUpload(save);
+      else await save();
     } else {
       await onAdd(productData);
     }
@@ -268,7 +278,9 @@ export function Products({
                   </td>
                   <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{product.category}</td>
                   <td className="py-4 px-6 text-right text-sm text-on-surface-variant">{product.subcategory || '—'}</td>
-                  <td className="py-4 px-6 text-right text-sm font-bold text-primary">${product.price.toFixed(2)}</td>
+                  <td className="py-4 px-6 text-right text-sm font-bold text-primary">
+                    {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
+                  </td>
                   <td className="py-4 px-6 text-center">
                     <span
                       className={cn(
@@ -401,51 +413,59 @@ export function Products({
             <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.barcode')}</label>
             <Input name="barcode" defaultValue={editingProduct?.barcode ?? ''} />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.price')}</label>
-              <Input
-                name="price"
-                type="number"
-                step="0.01"
-                value={priceInput}
-                onChange={(e) => setPriceInput(e.target.value)}
-                required
-              />
+          <p className="text-xs text-on-surface-variant rounded-xl bg-surface-container-low px-4 py-3">
+            {t('products.catalogPricingHint')}
+          </p>
+          {editingProduct ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1 sm:col-span-2">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.price')}</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={priceInput}
+                  onChange={(e) => {
+                    setPriceInput(e.target.value);
+                    setPriceError(null);
+                  }}
+                  required
+                  className="mt-1"
+                />
+                <p className="text-[10px] text-on-surface-variant">{t('products.priceEditHint')}</p>
+                {priceError ? <p className="text-xs text-error">{priceError}</p> : null}
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.warehouseCost')}</label>
+                <Input
+                  value={
+                    editingProduct.warehouseCost > 0
+                      ? editingProduct.warehouseCost.toFixed(2)
+                      : t('products.costNotSet')
+                  }
+                  readOnly
+                  className="opacity-80"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.weightedCost')}</label>
+                <Input
+                  value={editingProduct.cost > 0 ? editingProduct.cost.toFixed(2) : t('products.costNotSet')}
+                  readOnly
+                  className="opacity-80"
+                />
+                <p className="text-[10px] text-on-surface-variant">{t('products.weightedCostHint')}</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
+                <Input value={String(editingProduct.stock)} readOnly className="opacity-80" />
+                <p className="text-[10px] text-on-surface-variant">{t('products.stockEditHint')}</p>
+              </div>
             </div>
-            {editingProduct ? (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.weightedCost')}</label>
-                  <Input value={editingProduct.cost.toFixed(2)} readOnly className="opacity-80" />
-                  <p className="text-[10px] text-on-surface-variant">{t('products.weightedCostHint')}</p>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
-                  <Input value={String(editingProduct.stock)} readOnly className="opacity-80" />
-                  <p className="text-[10px] text-on-surface-variant">{t('products.stockEditHint')}</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.cost')}</label>
-                  <Input
-                    name="cost"
-                    type="number"
-                    step="0.01"
-                    value={costInput}
-                    onChange={(e) => setCostInput(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('products.stock')}</label>
-                  <Input name="stock" type="number" defaultValue={0} required />
-                </div>
-              </>
-            )}
-          </div>
+          ) : (
+            <p className="text-xs text-on-surface-variant">{t('products.stockCreateHint')}</p>
+          )}
           {marginPreview ? (
             <div
               className={cn(

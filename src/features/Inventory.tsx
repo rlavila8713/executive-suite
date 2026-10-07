@@ -1,22 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Search,
   Download,
-  AlertTriangle,
   Package,
   PackageX,
   RefreshCw,
-  PackagePlus,
   ChevronDown,
 } from 'lucide-react';
-import { Card, Button, Input, Modal } from '../components/ui';
+import { Card, Button, Input } from '../components/ui';
 import { ProductThumb } from '../components/ProductThumb';
 import { Product, ProductCategory, ProductSubcategory } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import { printTableDocument, downloadCsv } from '../lib/printDocument';
-import { computeWeightedAverageCost } from '../lib/inventoryCost';
-import { mapMutationError } from '../lib/mutationErrors';
 import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import {
@@ -26,6 +22,7 @@ import {
   type CatalogFilter,
 } from '../components/CatalogFilterModal';
 import { ViewModeToggle, type ViewMode } from '../components/ViewModeToggle';
+import { StatMetricCard } from '../components/StatMetricCard';
 
 type StockChip = 'all' | 'available' | 'low' | 'out';
 
@@ -34,25 +31,8 @@ interface InventoryProps {
   productCategories: ProductCategory[];
   productSubcategories: ProductSubcategory[];
   globalSearch?: string;
-  onUpdateStock: (id: string, newStock: number) => void | Promise<void>;
-  onReceiveStock: (
-    id: string,
-    payload: { quantity: number; unitCost: number; price: number },
-  ) => void | Promise<void>;
   onSyncStock?: () => void | Promise<void>;
   syncBusy?: boolean;
-}
-
-function parsePositiveNumber(raw: string): number | null {
-  const v = parseFloat(raw.replace(',', '.'));
-  if (!Number.isFinite(v) || v < 0) return null;
-  return v;
-}
-
-function parsePositiveInt(raw: string): number | null {
-  const v = parseInt(raw.replace(',', '.'), 10);
-  if (!Number.isFinite(v) || v <= 0) return null;
-  return v;
 }
 
 function matchesStockChip(product: Product, chip: StockChip): boolean {
@@ -68,13 +48,21 @@ function stockStatusKey(product: Product): 'healthy' | 'critical' | 'out' {
   return 'healthy';
 }
 
+function stockStatusChipClass(key: ReturnType<typeof stockStatusKey>): string {
+  if (key === 'healthy') {
+    return 'bg-tertiary-container/15 text-on-tertiary-container ring-1 ring-tertiary-container/35';
+  }
+  if (key === 'critical') {
+    return 'bg-error-container/40 text-on-error-container ring-1 ring-error/30';
+  }
+  return 'bg-surface-container-high text-on-surface-variant ring-1 ring-black/10';
+}
+
 export function Inventory({
   products,
   productCategories,
   productSubcategories,
   globalSearch = '',
-  onUpdateStock,
-  onReceiveStock,
   onSyncStock,
   syncBusy,
 }: InventoryProps) {
@@ -83,18 +71,18 @@ export function Inventory({
   const [stockChip, setStockChip] = useState<StockChip>('all');
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>({ kind: 'all' });
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [receiveProduct, setReceiveProduct] = useState<Product | null>(null);
-  const [quantityInput, setQuantityInput] = useState('');
-  const [unitCostInput, setUnitCostInput] = useState('');
-  const [priceInput, setPriceInput] = useState('');
-  const [receiveMsg, setReceiveMsg] = useState<string | null>(null);
-  const [receiveBusy, setReceiveBusy] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
 
-  const inventoryValue = useMemo(
+  const inventoryValueAtCost = useMemo(
     () => products.reduce((sum, p) => sum + p.cost * p.stock, 0),
     [products],
   );
+  const inventoryValueAtRetail = useMemo(
+    () => products.reduce((sum, p) => sum + p.price * p.stock, 0),
+    [products],
+  );
+  const formatMoney = (n: number) =>
+    n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const outOfStockCount = useMemo(() => products.filter((p) => p.stock === 0).length, [products]);
 
   const visibleProducts = useMemo(
@@ -112,25 +100,6 @@ export function Inventory({
   const { pageItems: inventoryPageItems, page: inventoryPage, setPage: setInventoryPage, totalPages: inventoryTotalPages, total: inventoryTotal, pageSize: inventoryPageSize } =
     usePagination(visibleProducts);
 
-  useEffect(() => {
-    if (!receiveProduct) return;
-    setQuantityInput('');
-    setUnitCostInput('');
-    setPriceInput(String(receiveProduct.price));
-    setReceiveMsg(null);
-  }, [receiveProduct]);
-
-  const preview = useMemo(() => {
-    if (!receiveProduct) return null;
-    const qty = parsePositiveInt(quantityInput);
-    const unitCost = parsePositiveNumber(unitCostInput);
-    if (qty == null || unitCost == null) return null;
-    return {
-      newStock: receiveProduct.stock + qty,
-      newCost: computeWeightedAverageCost(receiveProduct.stock, receiveProduct.cost, qty, unitCost),
-    };
-  }, [receiveProduct, quantityInput, unitCostInput]);
-
   const statusLabel = (product: Product) => {
     const key = stockStatusKey(product);
     if (key === 'healthy') return t('inventory.statusHealthy');
@@ -143,7 +112,8 @@ export function Inventory({
       p.name,
       p.sku,
       String(p.stock),
-      p.cost.toFixed(2),
+      p.price > 0 ? p.price.toFixed(2) : '—',
+      p.stock > 0 || p.cost > 0 ? p.cost.toFixed(2) : '',
       statusLabel(p),
     ]);
     const ok = printTableDocument(
@@ -153,6 +123,7 @@ export function Inventory({
         t('inventory.colDetails'),
         t('common.sku'),
         t('inventory.colCurrentStock'),
+        t('inventory.colSalePrice'),
         t('inventory.colAvgCost'),
         t('inventory.colStatus'),
       ],
@@ -161,42 +132,9 @@ export function Inventory({
     if (!ok) {
       downloadCsv(
         `stock-${new Date().toISOString().slice(0, 10)}.csv`,
-        ['name', 'sku', 'stock', 'cost', 'status'],
+        ['name', 'sku', 'stock', 'price', 'cost', 'status'],
         rows,
       );
-    }
-  };
-
-  const handleReceiveSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!receiveProduct) return;
-    setReceiveMsg(null);
-
-    const quantity = parsePositiveInt(quantityInput);
-    const unitCost = parsePositiveNumber(unitCostInput);
-    const price = parsePositiveNumber(priceInput);
-
-    if (quantity == null) {
-      setReceiveMsg(t('inventory.receiveInvalidQty'));
-      return;
-    }
-    if (unitCost == null) {
-      setReceiveMsg(t('inventory.receiveInvalidCost'));
-      return;
-    }
-    if (price == null) {
-      setReceiveMsg(t('inventory.receiveInvalidPrice'));
-      return;
-    }
-
-    setReceiveBusy(true);
-    try {
-      await onReceiveStock(receiveProduct.id, { quantity, unitCost, price });
-      setReceiveProduct(null);
-    } catch (err) {
-      setReceiveMsg(mapMutationError(err, t));
-    } finally {
-      setReceiveBusy(false);
     }
   };
 
@@ -206,26 +144,6 @@ export function Inventory({
     { id: 'low', label: t('inventory.filterLow') },
     { id: 'out', label: t('inventory.filterOut') },
   ];
-
-  const renderActions = (product: Product) => (
-    <div className="flex justify-end gap-2 flex-wrap">
-      <Button variant="secondary" size="sm" className="gap-1" onClick={() => setReceiveProduct(product)}>
-        <PackagePlus size={14} />
-        {t('inventory.receiveStock')}
-      </Button>
-      <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => onUpdateStock(product.id, product.stock + 1)}>
-        +1
-      </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        className="h-8 w-8 p-0"
-        onClick={() => onUpdateStock(product.id, Math.max(0, product.stock - 1))}
-      >
-        -1
-      </Button>
-    </div>
-  );
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -244,32 +162,30 @@ export function Inventory({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card>
-          <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold mb-1">{t('inventory.inventoryValue')}</p>
-          <h3 className="text-2xl font-bold text-primary">${inventoryValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
-          <p className="text-xs text-on-surface-variant mt-1">{t('inventory.inventoryValueHint')}</p>
-        </Card>
-        <Card>
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold mb-1">{t('inventory.totalProducts')}</p>
-              <h3 className="text-2xl font-bold text-primary">{products.length}</h3>
-            </div>
-            <Package size={22} className="text-primary/60" />
-          </div>
-          <p className="text-xs text-on-surface-variant mt-1">{t('inventory.acrossCategories')}</p>
-        </Card>
-        <Card className="bg-error-container/20 border-error/20">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-[10px] text-on-error-container uppercase tracking-widest font-bold mb-1">{t('inventory.outOfStock')}</p>
-              <h3 className="text-2xl font-bold text-error">{outOfStockCount}</h3>
-            </div>
-            <PackageX size={22} className="text-error/70" />
-          </div>
-          <p className="text-xs text-on-surface-variant mt-1">{t('inventory.outOfStockHint')}</p>
-        </Card>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatMetricCard
+          label={t('inventory.valueAtCost')}
+          value={`$${formatMoney(inventoryValueAtCost)}`}
+          hint={t('inventory.inventoryValueHint')}
+        />
+        <StatMetricCard
+          label={t('inventory.valueAtRetail')}
+          value={`$${formatMoney(inventoryValueAtRetail)}`}
+          hint={t('inventory.valueAtRetailHint')}
+        />
+        <StatMetricCard
+          label={t('inventory.totalProducts')}
+          value={products.length}
+          hint={t('inventory.acrossCategories')}
+          icon={Package}
+        />
+        <StatMetricCard
+          label={t('inventory.outOfStock')}
+          value={outOfStockCount}
+          hint={t('inventory.outOfStockHint')}
+          icon={PackageX}
+          variant="danger"
+        />
       </div>
 
       <Card className="p-0 overflow-hidden">
@@ -332,7 +248,7 @@ export function Inventory({
 
         {viewMode === 'grid' ? (
           <div className="p-4 sm:p-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {visibleProducts.map((product) => (
+            {inventoryPageItems.map((product) => (
               <div
                 key={product.id}
                 className="rounded-xl border border-black/5 bg-surface-container-lowest overflow-hidden flex flex-col"
@@ -341,12 +257,8 @@ export function Inventory({
                   <ProductThumb src={product.image} imageUrl={product.imageUrl} className="w-full h-full object-cover" alt={product.name} />
                   <span
                     className={cn(
-                      'absolute top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase',
-                      stockStatusKey(product) === 'healthy'
-                        ? 'bg-tertiary-container/90 text-white'
-                        : stockStatusKey(product) === 'critical'
-                          ? 'bg-error/80 text-white'
-                          : 'bg-surface-container-high text-on-surface-variant',
+                      'absolute top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide',
+                      stockStatusChipClass(stockStatusKey(product)),
                     )}
                   >
                     {statusLabel(product)}
@@ -357,17 +269,27 @@ export function Inventory({
                     <p className="text-sm font-bold text-primary line-clamp-2 leading-tight">{product.name}</p>
                     <p className="text-[10px] text-on-surface-variant">{product.sku}</p>
                   </div>
-                  <div className="text-xs flex justify-between">
-                    <span className="font-bold text-primary">{product.stock} uds</span>
-                    <span className="text-on-surface-variant">${product.cost.toFixed(2)}</span>
+                  <div className="text-xs flex justify-between gap-2">
+                    <span className="font-bold text-primary">{product.stock} unidades</span>
+                    <span className="text-on-surface-variant text-right">
+                      {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
+                    </span>
                   </div>
-                  <div className="mt-auto pt-2">{renderActions(product)}</div>
                 </div>
               </div>
             ))}
-            {visibleProducts.length === 0 ? (
+            {inventoryPageItems.length === 0 ? (
               <p className="col-span-full text-center text-sm text-on-surface-variant py-8">{t('inventory.noResults')}</p>
             ) : null}
+            <div className="col-span-full">
+              <TablePagination
+                page={inventoryPage}
+                totalPages={inventoryTotalPages}
+                total={inventoryTotal}
+                pageSize={inventoryPageSize}
+                onPageChange={setInventoryPage}
+              />
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -376,9 +298,9 @@ export function Inventory({
                 <tr className="bg-surface-container-low border-b border-black/5">
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">{t('inventory.colDetails')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colCurrentStock')}</th>
+                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colSalePrice')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colAvgCost')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-center">{t('inventory.colStatus')}</th>
-                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colActions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -394,11 +316,22 @@ export function Inventory({
                       </div>
                     </td>
                     <td className="py-3 px-4 text-right font-bold text-primary">{product.stock}</td>
-                    <td className="py-3 px-4 text-right text-sm">${product.cost.toFixed(2)}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="text-[10px] font-bold uppercase">{statusLabel(product)}</span>
+                    <td className="py-3 px-4 text-right text-sm">
+                      {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
                     </td>
-                    <td className="py-3 px-4">{renderActions(product)}</td>
+                    <td className="py-3 px-4 text-right text-sm">
+                      {product.stock > 0 || product.cost > 0 ? `$${product.cost.toFixed(2)}` : t('products.costNotSet')}
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span
+                        className={cn(
+                          'inline-flex items-center justify-center min-w-[5.5rem] px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide',
+                          stockStatusChipClass(stockStatusKey(product)),
+                        )}
+                      >
+                        {statusLabel(product)}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -431,64 +364,6 @@ export function Inventory({
           if (filter.kind !== 'all') setStockChip('all');
         }}
       />
-
-      <Modal isOpen={receiveProduct != null} onClose={() => !receiveBusy && setReceiveProduct(null)} title={t('inventory.receiveTitle')}>
-        {receiveProduct ? (
-          <form onSubmit={(e) => void handleReceiveSubmit(e)} className="space-y-5">
-            <div className="rounded-xl bg-surface-container-low p-4">
-              <p className="text-sm font-bold text-primary">{receiveProduct.name}</p>
-              <p className="text-xs text-on-surface-variant mt-1">{receiveProduct.sku}</p>
-              <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-                <div>
-                  <p className="text-[10px] uppercase font-bold text-on-surface-variant">{t('inventory.colCurrentStock')}</p>
-                  <p className="font-bold text-primary">{receiveProduct.stock}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase font-bold text-on-surface-variant">{t('inventory.currentAvgCost')}</p>
-                  <p className="font-bold text-primary">${receiveProduct.cost.toFixed(2)}</p>
-                </div>
-              </div>
-            </div>
-            <p className="text-xs text-on-surface-variant">{t('inventory.receiveHelp')}</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('inventory.receiveQty')}</label>
-                <Input type="number" min={1} step={1} value={quantityInput} onChange={(e) => setQuantityInput(e.target.value)} required className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('inventory.receiveUnitCost')}</label>
-                <Input type="number" min={0} step="0.01" value={unitCostInput} onChange={(e) => setUnitCostInput(e.target.value)} required className="mt-1" />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('inventory.receiveSalePrice')}</label>
-                <Input type="number" min={0} step="0.01" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} required className="mt-1" />
-              </div>
-            </div>
-            {preview ? (
-              <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
-                <p className="text-[10px] font-bold uppercase text-on-surface-variant mb-2">{t('inventory.receivePreview')}</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <p>
-                    {t('inventory.colCurrentStock')}: <span className="font-bold">{receiveProduct.stock}</span> →{' '}
-                    <span className="font-bold text-primary">{preview.newStock}</span>
-                  </p>
-                  <p>
-                    {t('inventory.currentAvgCost')}: <span className="font-bold">${receiveProduct.cost.toFixed(2)}</span> →{' '}
-                    <span className="font-bold text-primary">${preview.newCost.toFixed(2)}</span>
-                  </p>
-                </div>
-              </div>
-            ) : null}
-            {receiveMsg ? <p className="text-sm text-error">{receiveMsg}</p> : null}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="secondary" disabled={receiveBusy} onClick={() => setReceiveProduct(null)}>
-                {t('common.cancel')}
-              </Button>
-              <Button type="submit" disabled={receiveBusy}>{t('inventory.receiveConfirm')}</Button>
-            </div>
-          </form>
-        ) : null}
-      </Modal>
     </div>
   );
 }

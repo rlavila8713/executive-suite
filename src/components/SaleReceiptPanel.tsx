@@ -108,15 +108,43 @@ export function SaleReceiptPanel({
         <div className="flex justify-between text-xs pt-1 text-zinc-600">
           <span>{t('receipt.payment')}</span>
           <span className="font-bold text-zinc-900">
-            {receipt.paymentMethod === 'card'
-              ? t('receipt.paymentOnline')
-              : receipt.paymentMethod === 'transfer'
-                ? t('receipt.paymentTransfer')
-                : receipt.paymentMethod === 'other'
-                  ? t('receipt.paymentOther')
-                  : t('receipt.paymentCash')}
+            {receipt.paymentMethod === 'mixed'
+              ? t('pos.receiptPaymentMixed')
+              : receipt.paymentMethod === 'card'
+                ? t('receipt.paymentOnline')
+                : receipt.paymentMethod === 'transfer'
+                  ? t('receipt.paymentTransfer')
+                  : receipt.paymentMethod === 'other'
+                    ? t('receipt.paymentOther')
+                    : receipt.paymentMethod === 'debt'
+                      ? t('pos.saleAsDebt')
+                      : t('receipt.paymentCash')}
           </span>
         </div>
+        {receipt.payments?.length ? (
+          <div className="mt-2 space-y-1 text-xs">
+            {receipt.payments.map((p) => (
+              <div key={`${p.method}-${p.amount}`} className="flex justify-between">
+                <span className="text-zinc-600">
+                  {p.method === 'cash'
+                    ? t('receipt.paymentCash')
+                    : p.method === 'transfer'
+                      ? t('receipt.paymentTransfer')
+                      : p.method === 'debt'
+                        ? t('pos.saleAsDebt')
+                        : t('receipt.paymentOther')}
+                </span>
+                <span className="font-semibold">${money(p.amount)}</span>
+              </div>
+            ))}
+            {receipt.balanceDue != null && receipt.balanceDue > 0 ? (
+              <div className="flex justify-between font-bold text-amber-800">
+                <span>{t('pos.receiptBalanceDue')}</span>
+                <span>${money(receipt.balanceDue)}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {receipt.paymentMethod === 'cash' && receipt.amountPaid != null ? (
           <div className="mt-2 pt-2 border-t border-dashed border-zinc-300 space-y-1 text-xs">
             <div className="flex justify-between">

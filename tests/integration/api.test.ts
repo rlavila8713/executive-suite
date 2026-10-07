@@ -12,6 +12,7 @@ import {
   setupTestServer,
   teardownTestServer,
   TEST_DEVICE_ID,
+  fillStoreStockFromWarehouse,
 } from './helpers.js';
 
 function readPrivateKey(): string | null {
@@ -201,8 +202,67 @@ describe('Executive Suite API integration', () => {
     });
   });
 
+  describe('warehouse', () => {
+    it('seeds default warehouse stock without changing store stock on migration', async () => {
+      const product = await api<{ id: string; stock: number }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Tornillo',
+          sku: 'TOR-001',
+          category: 'Ferretería',
+          price: 5,
+          cost: 2,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      assert.equal(product.body.stock, 0);
+
+      const stock = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      assert.equal(stock.status, 200);
+      const row = stock.body.find((r) => r.productId === product.body.id);
+      assert.ok(row);
+      assert.equal(row!.quantity, 0);
+    });
+
+    it('receives to warehouse and transfers to store', async () => {
+      const product = await api<{ id: string; stock: number }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Clavo',
+          sku: 'CLA-001',
+          category: 'Ferretería',
+          price: 3,
+          cost: 1,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      const receive = await api<{ newWarehouseQty: number; product: { stock: number } }>(
+        `/api/products/${product.body.id}/receive`,
+        { method: 'POST', body: { quantity: 10, unitCost: 1, price: 3 } },
+      );
+      assert.equal(receive.status, 200);
+      assert.equal(receive.body.newWarehouseQty, 10);
+      assert.equal(receive.body.product.stock, 0);
+      assert.equal(receive.body.product.cost, 1);
+      assert.equal(receive.body.product.warehouseCost, 1);
+      assert.equal(receive.body.product.price, 3);
+
+      const transfer = await api<{ product: { stock: number; cost: number; price: number }; warehouseStock: { quantity: number } }>(
+        `/api/warehouse/stock/${product.body.id}/transfer-to-store`,
+        { method: 'POST', body: { quantity: 4, price: 3 } },
+      );
+      assert.equal(transfer.status, 200);
+      assert.equal(transfer.body.product.stock, 4);
+      assert.equal(transfer.body.product.cost, 1);
+      assert.equal(transfer.body.warehouseStock.quantity, 6);
+    });
+  });
+
   describe('products & categories', () => {
-    it('creates category and product, updates stock', async () => {
+    it('creates category and product; blocks direct store stock edits', async () => {
       const cat = await api<{ id: string; name: string }>('/api/categories', {
         method: 'POST',
         body: { name: 'Bebidas' },
@@ -218,18 +278,22 @@ describe('Executive Suite API integration', () => {
           categoryId: cat.body.id,
           price: 50,
           cost: 20,
-          stock: 10,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
-      assert.equal(product.body.stock, 10);
+      assert.equal(product.body.stock, 0);
 
-      const stock = await api<{ stock: number }>(`/api/products/${product.body.id}/stock`, {
+      await fillStoreStockFromWarehouse(product.body.id, 10, 20, 50);
+      const refreshed = await api<{ stock: number }>(`/api/products/${product.body.id}`);
+      assert.equal(refreshed.body.stock, 10);
+
+      const stock = await api<{ code?: string }>(`/api/products/${product.body.id}/stock`, {
         method: 'PATCH',
         body: { stock: 7 },
       });
-      assert.equal(stock.status, 200);
-      assert.equal(stock.body.stock, 7);
+      assert.equal(stock.status, 409);
+      assert.equal(stock.body.code, 'ERR_STORE_STOCK_DIRECT_EDIT');
 
       const list = await api<{ id: string }[]>('/api/products?includeImages=false');
       assert.equal(list.status, 200);
@@ -380,10 +444,11 @@ describe('Executive Suite API integration', () => {
           category: 'Alimentos',
           price: 10,
           cost: 4,
-          stock: 5,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 5, 4, 10);
 
       const sale = await api('/api/sales', {
         method: 'POST',
@@ -411,10 +476,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 25,
           cost: 10,
-          stock: 8,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 8, 10, 25);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -471,6 +537,223 @@ describe('Executive Suite API integration', () => {
       assert.equal(closed.body.totalCashSales, 0);
     });
 
+    it('accepts mixed cash + transfer on web and mobile', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Combo',
+          sku: 'COM-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 5, 40, 100);
+
+      await api('/api/settings', { method: 'PATCH', body: { taxRate: 10 } });
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const mobileId = 'mobile-mixed-pay';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const operatorAssigned = await api<{ operatorName: string }>(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorName: 'Cajero móvil' },
+      });
+      assert.equal(operatorAssigned.status, 200);
+
+      const mobileMixed = await api<{ amount: number; receipt: { total: number; payments: { method: string; amount: number }[] } }>(
+        '/api/sales',
+        {
+          method: 'POST',
+          deviceId: mobileId,
+          headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+          body: {
+            customerName: 'Cliente',
+            amount: 105,
+            receipt: {
+              subtotal: 100,
+              tax: 5,
+              taxRatePercent: 10,
+              total: 105,
+              paymentMethod: 'mixed',
+              payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+              lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+            },
+          },
+        },
+      );
+      assert.equal(mobileMixed.status, 201);
+      assert.equal(mobileMixed.body.amount, 105);
+      assert.equal(mobileMixed.body.receipt.payments.length, 2);
+
+      const mixed = await api<{ amount: number; receipt: { total: number; payments: { method: string; amount: number }[] } }>(
+        '/api/sales',
+        {
+          method: 'POST',
+          body: {
+            customerName: 'Cliente',
+            amount: 105,
+            receipt: {
+              subtotal: 100,
+              tax: 5,
+              taxRatePercent: 10,
+              total: 105,
+              paymentMethod: 'mixed',
+              payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+              lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+            },
+          },
+        },
+      );
+      assert.equal(mixed.status, 201);
+      assert.equal(mixed.body.amount, 105);
+      assert.equal(mixed.body.receipt.payments.length, 2);
+
+      const closed = await api<{ totalCashSales: number; totalTransferSales: number }>(
+        `/api/cash-sessions/${session.body.id}/close`,
+        { method: 'POST', body: { closingCash: 100 } },
+      );
+      assert.equal(closed.status, 200);
+      assert.equal(closed.body.totalCashSales, 100);
+      assert.equal(closed.body.totalTransferSales, 110);
+    });
+
+    it('creates a payable when reversing mixed cash + transfer', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'MixRev',
+          sku: 'MIX-REV-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 40, 100);
+      await api('/api/settings', { method: 'PATCH', body: { taxRate: 10 } });
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const sale = await api<{ id: string }>('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Cliente Mix',
+          amount: 105,
+          receipt: {
+            subtotal: 100,
+            tax: 5,
+            taxRatePercent: 10,
+            total: 105,
+            paymentMethod: 'mixed',
+            payments: [{ method: 'cash', amount: 50 }, { method: 'transfer', amount: 55 }],
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+          },
+        },
+      });
+      assert.equal(sale.status, 201);
+
+      const reversal = await api('/api/transactions/' + sale.body.id + '/reverse', { method: 'POST' });
+      assert.equal(reversal.status, 200);
+
+      const txs = await api<
+        {
+          type: string;
+          soldAsPayable?: boolean;
+          payableStatus?: string;
+          amount: number;
+          sourceSaleId?: string;
+        }[]
+      >('/api/transactions');
+      const payable = txs.body.find(
+        (tx) => tx.type === 'payable' && tx.soldAsPayable && tx.sourceSaleId === sale.body.id,
+      );
+      assert.ok(payable);
+      assert.equal(payable!.payableStatus, 'pending');
+      assert.equal(payable!.amount, 55);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+
+    it('marks receivable debt reversed when reversing mixed cash + debt', async () => {
+      const product = await api<{ id: string; sku: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'MixDebt',
+          sku: 'MIX-DEBT-01',
+          category: 'General',
+          price: 100,
+          cost: 40,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 40, 100);
+
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const sale = await api<{ id: string; soldAsDebt?: boolean; debtStatus?: string }>('/api/sales', {
+        method: 'POST',
+        body: {
+          customerName: 'Deudor Mix',
+          amount: 100,
+          isPartialDebt: true,
+          receipt: {
+            subtotal: 100,
+            tax: 0,
+            taxRatePercent: 0,
+            total: 100,
+            paymentMethod: 'mixed',
+            payments: [{ method: 'cash', amount: 40 }, { method: 'debt', amount: 60 }],
+            balanceDue: 60,
+            lines: [{ productId: product.body.id, sku: product.body.sku, quantity: 1 }],
+          },
+        },
+      });
+      assert.equal(sale.status, 201);
+      assert.equal(sale.body.soldAsDebt, true);
+      assert.equal(sale.body.debtStatus, 'pending');
+
+      const reversal = await api('/api/transactions/' + sale.body.id + '/reverse', { method: 'POST' });
+      assert.equal(reversal.status, 200);
+
+      const txs = await api<
+        {
+          id: string;
+          amount: number;
+          debtStatus?: string;
+          receipt?: { debtReversedAmount?: number; balanceDue?: number };
+        }[]
+      >('/api/transactions');
+      const refreshed = txs.body.find((tx) => tx.id === sale.body.id);
+      assert.ok(refreshed);
+      assert.equal(refreshed!.debtStatus, 'reversed');
+      assert.equal(refreshed!.amount, 100);
+      assert.equal(refreshed!.receipt?.debtReversedAmount, 60);
+      assert.equal(refreshed!.receipt?.balanceDue, 0);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+
     it('rejects selling more units than available stock', async () => {
       const product = await api<{ id: string; sku: string }>('/api/products', {
         method: 'POST',
@@ -480,10 +763,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 5,
           cost: 1,
-          stock: 1,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 1, 1, 5);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -533,10 +817,11 @@ describe('Executive Suite API integration', () => {
           category: 'Bebidas',
           price: 12,
           cost: 4,
-          stock: 3,
+          stock: 0,
         },
       });
       assert.equal(product.status, 201);
+      await fillStoreStockFromWarehouse(product.body.id, 3, 4, 12);
 
       const session = await api<{ id: string }>('/api/cash-sessions', {
         method: 'POST',
@@ -732,12 +1017,102 @@ describe('Executive Suite API integration', () => {
     });
   });
 
+  describe('diagnostics', () => {
+    it('GET /api/diagnostics/summary returns counts', async () => {
+      const res = await api<{ database: { products: number } }>('/api/diagnostics/summary');
+      assert.equal(res.status, 200);
+      assert.ok(typeof res.body.database.products === 'number');
+    });
+
+    it('GET /api/admin/diagnostics includes dataDir', async () => {
+      const res = await api<{ dataDir: string }>('/api/admin/diagnostics', {
+        headers: { 'X-Client-Kind': 'web' },
+      });
+      assert.equal(res.status, 200);
+      assert.ok(res.body.dataDir.length > 0);
+    });
+
+    it('rejects admin diagnostics from mobile clients', async () => {
+      const res = await api('/api/admin/diagnostics', {
+        headers: { 'User-Agent': 'Dart/3.0 (flutter)', 'X-Client-Kind': 'mobile' },
+      });
+      assert.equal(res.status, 403);
+      assert.equal((res.body as { code: string }).code, 'ERR_ADMIN_WEB_ONLY');
+    });
+  });
+
   describe('backup & factory reset', () => {
     it('exports backup JSON', async () => {
       const backup = await api<{ app: string; products: unknown[] }>('/api/backup');
       assert.equal(backup.status, 200);
       assert.equal(backup.body.app, 'executive-suite');
       assert.ok(Array.isArray(backup.body.products));
+    });
+
+    it('round-trips backup including warehouse_cost and warehouse stock', async () => {
+      const created = await api<{ id: string }>('/api/products', {
+        method: 'POST',
+        body: { name: 'Backup SKU', sku: 'BKP-99', category: 'Test', price: 9, cost: 0, stock: 0 },
+      });
+      assert.equal(created.status, 201);
+      const productId = created.body.id;
+
+      await api(`/api/products/${productId}/receive`, {
+        method: 'POST',
+        body: { quantity: 12, unitCost: 3.5, price: 9 },
+      });
+      await api(`/api/warehouse/stock/${productId}/transfer-to-store`, {
+        method: 'POST',
+        body: { quantity: 4, price: 9 },
+      });
+
+      const customer = await api<{ id: string }>('/api/customers', {
+        method: 'POST',
+        body: { firstName: 'María', lastName: 'López', phone: '555-0100' },
+      });
+      assert.equal(customer.status, 201);
+
+      const backup = await api<{
+        schemaVersion: number;
+        products: { id: string; warehouseCost: number; stock: number; cost: number }[];
+        warehouseStock: { productId: string; quantity: number }[];
+        warehouses: unknown[];
+        customers: { id: string; firstName: string }[];
+      }>('/api/backup');
+      assert.equal(backup.status, 200);
+      assert.equal(backup.body.schemaVersion, 6);
+      const snap = backup.body.products.find((p) => p.id === productId);
+      assert.ok(snap);
+      assert.equal(snap!.warehouseCost, 3.5);
+      assert.equal(snap!.stock, 4);
+      assert.equal(snap!.cost, 3.5);
+      assert.ok(backup.body.warehouses.length >= 1);
+      assert.ok(backup.body.customers.some((c) => c.id === customer.body.id));
+      const whRow = backup.body.warehouseStock.find((r) => r.productId === productId);
+      assert.ok(whRow);
+      assert.equal(whRow!.quantity, 8);
+
+      const reset = await api('/api/admin/factory-reset', { method: 'POST' });
+      assert.equal(reset.status, 200);
+
+      const imported = await api('/api/backup/import', { method: 'POST', body: backup.body });
+      assert.equal(imported.status, 200);
+
+      const after = await api<{ id: string; warehouseCost: number; stock: number }[]>(
+        '/api/products?includeImages=false',
+      );
+      const restored = after.body.find((p) => p.id === productId);
+      assert.ok(restored);
+      assert.equal(restored!.warehouseCost, 3.5);
+      assert.equal(restored!.stock, 4);
+
+      const wh = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      const restoredWh = wh.body.find((r) => r.productId === productId);
+      assert.ok(restoredWh);
+      assert.equal(restoredWh!.quantity, 8);
+
+      const customers = await api<{ id: string; firstName: string }[]>('/api/customers');
+      assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
     });
 
     it('factory reset clears operational data without restarting the trial', async () => {
@@ -747,7 +1122,7 @@ describe('Executive Suite API integration', () => {
 
       await api('/api/products', {
         method: 'POST',
-        body: { name: 'Temp', sku: 'TMP-1', category: 'X', price: 1, cost: 1, stock: 1 },
+        body: { name: 'Temp', sku: 'TMP-1', category: 'X', price: 1, cost: 1, stock: 0 },
       });
 
       const reset = await api('/api/admin/factory-reset', { method: 'POST' });

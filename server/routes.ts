@@ -16,6 +16,20 @@ import { computeSessionPaymentTotals } from './reporting.js';
 import { computeWeightedAverageCost } from './inventoryCost.js';
 import { DEFAULT_APP_SETTINGS, normalizeTransferPhone } from './constants.js';
 import { registerCatalogRoutes } from './catalogRoutes.js';
+import { registerWarehouseRoutes } from './warehouseRoutes.js';
+import {
+  ensureWarehouseStockRow,
+  getDefaultWarehouse,
+  MIGRATION_SECTION_NAME,
+  receiveProductToWarehouse,
+  requireWebClientForWarehouse,
+  rowToWarehouse,
+  rowToWarehouseMovement,
+  rowToWarehouseSection,
+  rowToWarehouseStock,
+} from './warehouse.js';
+import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { normalizeInitialStoreStock, rejectDirectStoreStockMutation } from './storeStockPolicy.js';
 import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
 import {
@@ -28,6 +42,14 @@ import {
 import { detectCashAnomalies } from './cashAnomalies.js';
 import { resolveProductImage } from './productImage.js';
 import { normalizeStoreLogo } from './storeLogo.js';
+import { normalizeProductImageForStore } from './normalizeProductImage.js';
+import { buildServerDiagnostics, buildClientDiagnostics } from './diagnostics.js';
+import { importBackupWithSafety } from './backupImport.js';
+import { createSqliteBackup } from './dbBackup.js';
+import { inlineProductImageForBackup } from './backupImageInline.js';
+import { ApiError } from './apiError.js';
+import { assertWebAdminClient } from './adminGuard.js';
+import { migrateEmbeddedProductImagesToFiles } from './migrateProductImages.js';
 import {
   getDeviceOperatorName,
   inferClientKind,
@@ -36,20 +58,13 @@ import {
   revokeConnectedDevice,
   setDeviceOperatorName,
 } from './connectedDevices.js';
+import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesCheckout.js';
+import { debtAmountFromReceipt, mixedSaleShape, transferAmountFromReceipt } from './mixedReversal.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public code?: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
+export { ApiError } from './apiError.js';
 
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -194,13 +209,14 @@ export function registerRoutes(router: import('express').Router): void {
       if (!name || !sku || !category) throw new ApiError(400, 'name, sku and category required');
       const price = Number(body.price);
       const cost = Number(body.cost);
-      const stock = Number(body.stock);
-      const image = String(body.image ?? '');
-      if (!Number.isFinite(price) || !Number.isFinite(cost) || !Number.isFinite(stock)) {
-        throw new ApiError(400, 'price, cost and stock must be numbers');
+      if (!Number.isFinite(price) || !Number.isFinite(cost) || price < 0 || cost < 0) {
+        throw new ApiError(400, 'price and cost must be non-negative numbers');
       }
+      const stock = normalizeInitialStoreStock(Number(body.stock));
+      const warehouseCost = 0;
       const db = getDb();
       const id = newId();
+      const image = normalizeProductImageForStore(id, String(body.image ?? ''));
       const categoryId = String(body.categoryId ?? '');
       const subcategoryId = String(body.subcategoryId ?? '');
       const subcategory = String(body.subcategory ?? '');
@@ -208,9 +224,16 @@ export function registerRoutes(router: import('express').Router): void {
       const unitOfMeasure = String(body.unitOfMeasure ?? 'unidad');
       const locationId = body.locationId != null && body.locationId !== '' ? String(body.locationId) : null;
       const barcode = body.barcode != null && body.barcode !== '' ? String(body.barcode) : null;
+      const warehouse = getDefaultWarehouse(db);
+      const migrationSection = db
+        .prepare(
+          'SELECT id FROM warehouse_sections WHERE warehouse_id = ? AND name = ? COLLATE NOCASE LIMIT 1',
+        )
+        .get(warehouse.id, MIGRATION_SECTION_NAME) as { id: string } | undefined;
+
       db.prepare(
-        `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO products (id, name, sku, category, price, cost, warehouse_cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         name,
@@ -218,6 +241,7 @@ export function registerRoutes(router: import('express').Router): void {
         category,
         price,
         cost,
+        warehouseCost,
         stock,
         image,
         categoryId,
@@ -228,6 +252,9 @@ export function registerRoutes(router: import('express').Router): void {
         locationId,
         barcode,
       );
+      if (migrationSection) {
+        ensureWarehouseStockRow(db, warehouse.id, migrationSection.id, id, cost);
+      }
       const row = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
       res.status(201).json(rowToProduct(row as Parameters<typeof rowToProduct>[0]));
     }),
@@ -240,6 +267,16 @@ export function registerRoutes(router: import('express').Router): void {
       const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
       if (!existing) throw new ApiError(404, 'Product not found');
       const body = req.body as Record<string, unknown>;
+      if (body.stock !== undefined) {
+        rejectDirectStoreStockMutation();
+      }
+      if (body.cost !== undefined || body.warehouseCost !== undefined) {
+        throw new ApiError(
+          409,
+          'Product costs are set via warehouse entry or transfer',
+          'ERR_PRODUCT_COST_READONLY',
+        );
+      }
       const fields: string[] = [];
       const values: unknown[] = [];
       const map: Record<string, string> = {
@@ -247,8 +284,6 @@ export function registerRoutes(router: import('express').Router): void {
         sku: 'sku',
         category: 'category',
         price: 'price',
-        cost: 'cost',
-        stock: 'stock',
         image: 'image',
         categoryId: 'category_id',
         subcategoryId: 'subcategory_id',
@@ -259,8 +294,20 @@ export function registerRoutes(router: import('express').Router): void {
         barcode: 'barcode',
       };
       for (const [key, col] of Object.entries(map)) {
-        if (body[key] !== undefined) {
+        if (body[key] === undefined) continue;
+        if (key === 'price') {
+          const price = Number(body.price);
+          if (!Number.isFinite(price) || price < 0) {
+            throw new ApiError(400, 'price must be a non-negative number', 'ERR_INVALID_PRODUCT_PRICE');
+          }
           fields.push(`${col} = ?`);
+          values.push(price);
+          continue;
+        }
+        fields.push(`${col} = ?`);
+        if (key === 'image') {
+          values.push(normalizeProductImageForStore(req.params.id, String(body[key])));
+        } else {
           values.push(body[key]);
         }
       }
@@ -274,29 +321,19 @@ export function registerRoutes(router: import('express').Router): void {
 
   router.patch(
     '/products/:id/stock',
-    asyncHandler(async (req, res) => {
-      const body = requireBody<{ stock: number }>(req.body, ['stock']);
-      const db = getDb();
-      const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-      if (!existing) throw new ApiError(404, 'Product not found');
-      const stock = Math.max(0, Math.floor(body.stock));
-      db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(stock, req.params.id);
-      const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-      res.json(rowToProduct(row as Parameters<typeof rowToProduct>[0]));
+    asyncHandler(async (_req, _res) => {
+      rejectDirectStoreStockMutation();
     }),
   );
 
   router.post(
     '/products/:id/receive',
     asyncHandler(async (req, res) => {
-      const body = requireBody<{ quantity: number; unitCost: number; price: number }>(req.body, [
-        'quantity',
-        'unitCost',
-        'price',
-      ]);
+      requireWebClientForWarehouse(req);
+      const body = req.body as { quantity?: number; unitCost?: number; price?: number };
       const quantity = Math.floor(Number(body.quantity));
       const unitCost = Number(body.unitCost);
-      const price = Number(body.price);
+      const price = body.price === undefined || body.price === null ? 0 : Number(body.price);
       if (!Number.isFinite(quantity) || quantity <= 0) {
         throw new ApiError(400, 'quantity must be a positive integer', 'ERR_INVALID_RECEIVE_QTY');
       }
@@ -308,30 +345,22 @@ export function registerRoutes(router: import('express').Router): void {
       }
 
       const db = getDb();
-      const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as
-        | Parameters<typeof rowToProduct>[0]
-        | undefined;
-      if (!existing) throw new ApiError(404, 'Product not found');
-
-      const previousStock = Number(existing.stock);
-      const previousCost = Number(existing.cost);
-      const newStock = previousStock + quantity;
-      const newCost = computeWeightedAverageCost(previousStock, previousCost, quantity, unitCost);
-
-      db.prepare('UPDATE products SET stock = ?, cost = ?, price = ? WHERE id = ?').run(
-        newStock,
-        newCost,
-        price,
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const operator = getDeviceOperatorName(db, deviceId);
+      const result = receiveProductToWarehouse(
+        db,
         req.params.id,
+        quantity,
+        unitCost,
+        price,
+        operator || null,
       );
 
-      const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
       res.json({
-        product: rowToProduct(row as Parameters<typeof rowToProduct>[0]),
-        previousStock,
-        previousCost,
-        newStock,
-        newCost,
+        product: rowToProduct(result.product as Parameters<typeof rowToProduct>[0]),
+        previousWarehouseQty: result.previousWarehouseQty,
+        newWarehouseQty: result.newWarehouseQty,
+        warehouseStock: result.warehouseStock,
         receivedQuantity: quantity,
         receivedUnitCost: unitCost,
       });
@@ -509,6 +538,8 @@ export function registerRoutes(router: import('express').Router): void {
         null,
         0,
         typeof body.customerId === 'string' ? body.customerId : null,
+        body.soldAsPayable ? 1 : 0,
+        typeof body.payableStatus === 'string' ? body.payableStatus : null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -595,6 +626,14 @@ export function registerRoutes(router: import('express').Router): void {
       if (existing.status !== 'completed') {
         throw new ApiError(409, 'Only completed sales can be reversed', 'ERR_SALE_CANNOT_REVERSE');
       }
+      const debtRow = existing as { sold_as_debt?: number; debt_status?: string | null };
+      if (debtRow.sold_as_debt === 1 && debtRow.debt_status === 'collected') {
+        throw new ApiError(
+          409,
+          'Cannot reverse a sale whose debt was already collected',
+          'ERR_SALE_DEBT_COLLECTED_CANNOT_REVERSE',
+        );
+      }
       const alreadyReversed = db
         .prepare('SELECT id FROM transactions WHERE source_sale_id = ? LIMIT 1')
         .get(existing.id);
@@ -602,6 +641,22 @@ export function registerRoutes(router: import('express').Router): void {
         throw new ApiError(409, 'Sale already reversed', 'ERR_SALE_ALREADY_REVERSED');
       }
       requireCurrentDayCashSession(db);
+
+      const receiptParsed = existing.receipt_json ? JSON.parse(existing.receipt_json) : null;
+      const mixedShape = mixedSaleShape(receiptParsed);
+      const transferOwed = mixedShape === 'cash_transfer' ? transferAmountFromReceipt(receiptParsed) : 0;
+      const debtPart = mixedShape === 'cash_debt' ? debtAmountFromReceipt(receiptParsed) : 0;
+      const pendingReceivable =
+        debtRow.sold_as_debt === 1 && debtRow.debt_status === 'pending' && (debtPart > 0 || mixedShape !== 'cash_transfer');
+
+      if (transferOwed > 0) {
+        const existingPayable = db
+          .prepare(`SELECT id FROM transactions WHERE type = 'payable' AND source_sale_id = ? AND payable_status = 'pending' LIMIT 1`)
+          .get(existing.id);
+        if (existingPayable) {
+          throw new ApiError(409, 'Payable already exists for this sale', 'ERR_PAYABLE_EXISTS');
+        }
+      }
 
       const lines = parseReceiptLines(existing.receipt_json);
       const reversalId = newId();
@@ -643,7 +698,61 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           0,
           (existing as { customer_id?: string | null }).customer_id ?? null,
+          0,
+          null,
         );
+
+        if (pendingReceivable) {
+          const debtDisplayAmount =
+            debtPart > 0
+              ? debtPart
+              : typeof receiptParsed?.balanceDue === 'number' && receiptParsed.balanceDue > 0
+                ? receiptParsed.balanceDue
+                : Math.abs(existing.amount);
+          const reversedReceipt =
+            receiptParsed != null
+              ? {
+                  ...receiptParsed,
+                  debtReversedAmount: debtDisplayAmount,
+                  balanceDue: 0,
+                }
+              : null;
+          db.prepare(`UPDATE transactions SET debt_status = 'reversed', receipt_json = ? WHERE id = ?`).run(
+            reversedReceipt ? JSON.stringify(reversedReceipt) : existing.receipt_json,
+            existing.id,
+          );
+        }
+
+        if (transferOwed > 0) {
+          const payableId = newId();
+          const payableReceipt = {
+            reason: 'mixed_reversal_transfer',
+            transferAmount: transferOwed,
+            originalOrderNumber: existing.order_number,
+            originalSaleId: existing.id,
+          };
+          db.prepare(TX_INSERT_SQL).run(
+            payableId,
+            `#PP-${existing.order_number.replace(/^#/, '')}`,
+            existing.customer,
+            transferOwed,
+            'pending',
+            'Just now',
+            'payable',
+            createdAt,
+            'transfer',
+            JSON.stringify(payableReceipt),
+            existing.id,
+            existing.operator_name ?? null,
+            existing.source_device_id ?? null,
+            null,
+            null,
+            0,
+            (existing as { customer_id?: string | null }).customer_id ?? null,
+            1,
+            'pending',
+          );
+        }
       });
 
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(reversalId);
@@ -660,19 +769,17 @@ export function registerRoutes(router: import('express').Router): void {
         customerId?: string;
         amount?: number;
         isDebt?: boolean;
+        isPartialDebt?: boolean;
         receipt?: {
           lines: { productId?: string; sku: string; quantity: number; name?: string }[];
           paymentMethod?: string;
           total?: number;
+          subtotal?: number;
+          payments?: { method: string; amount: number }[];
+          [key: string]: unknown;
         };
       };
       if (!body.receipt?.lines?.length) throw new ApiError(400, 'Receipt lines required');
-
-      const isDebt = body.isDebt === true;
-      const customerTrim = (body.customerName ?? '').trim();
-      if (isDebt && !customerTrim) {
-        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
-      }
 
       const db = getDb();
       requireCurrentDayCashSession(db);
@@ -690,13 +797,38 @@ export function registerRoutes(router: import('express').Router): void {
         throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
       }
 
-      const amount = body.amount && body.amount > 0 ? body.amount : (body.receipt.total ?? 0);
-      const paymentMethod = isDebt
+      const settingsRow = db.prepare('SELECT tax_rate FROM app_settings WHERE id = ?').get('main') as
+        | { tax_rate: number }
+        | undefined;
+      const taxRate = settingsRow?.tax_rate ?? 0;
+
+      const isDebtFull = body.isDebt === true && body.isPartialDebt !== true;
+      let checkout;
+      try {
+        checkout = normalizeMixedSaleReceipt(body.receipt as import('./salesCheckout.js').SaleReceiptInput, taxRate, {
+          isDebt: isDebtFull,
+          isPartialDebt: body.isPartialDebt === true,
+          clientKind,
+        });
+      } catch (e) {
+        if (e instanceof SaleCheckoutValidationError) {
+          throw new ApiError(e.status, e.message, e.code);
+        }
+        throw e;
+      }
+
+      const soldAsDebt = checkout.soldAsDebt || isDebtFull;
+      const customerTrim = (body.customerName ?? '').trim();
+      if (soldAsDebt && !customerTrim) {
+        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
+      }
+
+      const amount = body.amount && body.amount > 0 ? body.amount : (checkout.receipt.total ?? 0);
+      const paymentMethod = soldAsDebt && !checkout.receipt.payments?.length
         ? ('debt' as const)
-        : ((body.receipt.paymentMethod ?? 'other') as 'cash' | 'card' | 'transfer' | 'other');
+        : (checkout.paymentMethod as 'cash' | 'card' | 'transfer' | 'other' | 'mixed' | 'debt');
       const receipt = {
-        ...body.receipt,
-        paymentMethod,
+        ...checkout.receipt,
         ...(operatorName ? { operatorName } : {}),
       };
       const newTransaction = {
@@ -712,8 +844,8 @@ export function registerRoutes(router: import('express').Router): void {
         paymentMethod,
         operatorName: operatorName || undefined,
         sourceDeviceId: deviceId || undefined,
-        soldAsDebt: isDebt,
-        debtStatus: isDebt ? ('pending' as const) : undefined,
+        soldAsDebt,
+        debtStatus: soldAsDebt ? ('pending' as const) : undefined,
         customerId: customerId ?? undefined,
       };
 
@@ -757,10 +889,12 @@ export function registerRoutes(router: import('express').Router): void {
           null,
           operatorName || null,
           deviceId || null,
-          isDebt ? 'pending' : null,
+          soldAsDebt ? 'pending' : null,
           null,
-          isDebt ? 1 : 0,
+          soldAsDebt ? 1 : 0,
           customerId,
+          0,
+          null,
         );
 
         for (const line of body.receipt!.lines) {
@@ -812,28 +946,90 @@ export function registerRoutes(router: import('express').Router): void {
         | undefined;
       const taxRate = settingsRow?.tax_rate ?? 0;
       let receipt = existing.receipt_json ? JSON.parse(existing.receipt_json) : {};
-      let amount = Math.abs(
-        (existing as { amount: number }).amount ?? (receipt.total as number) ?? 0,
-      );
-      if (method === 'transfer' && taxRate > 0) {
-        const subtotal = typeof receipt.subtotal === 'number' ? receipt.subtotal : amount;
-        const tax = Math.round(subtotal * (taxRate / 100) * 100) / 100;
-        const total = Math.round((subtotal + tax) * 100) / 100;
+      const balanceDue =
+        typeof receipt.balanceDue === 'number' && receipt.balanceDue > 0
+          ? receipt.balanceDue
+          : Math.abs((existing as { amount?: number }).amount ?? (receipt.total as number) ?? 0);
+      let amount = balanceDue;
+      const mixedTaxIncluded = receipt.mixedTaxIncluded === true;
+      if (mixedTaxIncluded) {
+        receipt = {
+          ...receipt,
+          balanceDue: 0,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: balanceDue,
+        };
+      } else if (method === 'transfer' && taxRate > 0) {
+        const partialMixedDebt =
+          receipt.paymentMethod === 'mixed' &&
+          Array.isArray(receipt.payments) &&
+          receipt.payments.some((p: { method: string }) => p.method === 'cash');
+        const taxBase = partialMixedDebt ? balanceDue : typeof receipt.subtotal === 'number' ? receipt.subtotal : amount;
+        const tax = Math.round(taxBase * (taxRate / 100) * 100) / 100;
+        const total = Math.round((balanceDue + tax) * 100) / 100;
         receipt = {
           ...receipt,
           paymentMethod: method,
-          subtotal,
           tax,
           taxRatePercent: taxRate,
-          total,
+          total: typeof receipt.total === 'number' ? Math.round((receipt.total + tax) * 100) / 100 : total,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: total,
         };
         amount = total;
       } else {
-        receipt = { ...receipt, paymentMethod: method };
+        receipt = {
+          ...receipt,
+          paymentMethod: method,
+          collectedPaymentMethod: method,
+          debtCollectedAmount: balanceDue,
+        };
       }
       db.prepare(
         `UPDATE transactions SET debt_status = 'collected', collected_at = ?, payment_method = ?, receipt_json = ?, amount = ? WHERE id = ?`,
       ).run(collectedAt, method, JSON.stringify(receipt), amount, req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  router.post(
+    '/payables/:id/pay',
+    asyncHandler(async (req, res) => {
+      const body = requireBody<{ paymentMethod: string }>(req.body, ['paymentMethod']);
+      if (body.paymentMethod !== 'transfer') {
+        throw new ApiError(400, 'Payables from mixed reversals are settled by transfer', 'ERR_INVALID_PAYABLE_METHOD');
+      }
+      const db = getDb();
+      requireCurrentDayCashSession(db);
+      const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
+        | { id: string; type: string; sold_as_payable: number; payable_status: string | null; receipt_json: string | null }
+        | undefined;
+      if (!existing || existing.type !== 'payable' || existing.sold_as_payable !== 1 || existing.payable_status !== 'pending') {
+        throw new ApiError(404, 'Pending payable not found', 'ERR_PAYABLE_NOT_FOUND');
+      }
+      const paidAt = Date.now();
+      let receipt = existing.receipt_json ? JSON.parse(existing.receipt_json) : {};
+      receipt = { ...receipt, paidPaymentMethod: 'transfer', paidAt };
+      db.prepare(
+        `UPDATE transactions SET payable_status = 'paid', status = 'completed', collected_at = ?, payment_method = 'transfer', receipt_json = ? WHERE id = ?`,
+      ).run(paidAt, JSON.stringify(receipt), req.params.id);
+      const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+      res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
+    }),
+  );
+
+  router.post(
+    '/payables/:id/void',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id) as
+        | { id: string; type: string; sold_as_payable: number; payable_status: string | null }
+        | undefined;
+      if (!existing || existing.type !== 'payable' || existing.sold_as_payable !== 1 || existing.payable_status !== 'pending') {
+        throw new ApiError(404, 'Pending payable not found', 'ERR_PAYABLE_NOT_FOUND');
+      }
+      db.prepare(`UPDATE transactions SET payable_status = 'void', status = 'void' WHERE id = ?`).run(req.params.id);
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
       res.json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
     }),
@@ -1355,10 +1551,46 @@ export function registerRoutes(router: import('express').Router): void {
   // --- Admin ---
   router.post(
     '/admin/factory-reset',
-    asyncHandler(async (_req, res) => {
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
       const db = getDb();
+      createSqliteBackup('pre-factory-reset');
       factoryResetDb(db);
       res.json({ ok: true });
+    }),
+  );
+
+  router.get(
+    '/admin/diagnostics',
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
+      const db = getDb();
+      res.json(buildServerDiagnostics(db));
+    }),
+  );
+
+  router.post(
+    '/admin/migrate-product-images',
+    asyncHandler(async (req, res) => {
+      assertWebAdminClient(req);
+      const db = getDb();
+      const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
+      const body = (req.body ?? {}) as { dryRun?: boolean };
+      const result = migrateEmbeddedProductImagesToFiles(db, {
+        dryRun: dryRun || body.dryRun === true,
+      });
+      res.json(result);
+    }),
+  );
+
+  router.get(
+    '/diagnostics/summary',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const host = req.get('host') ?? '';
+      const proto = req.protocol;
+      const apiBaseUrl = host ? `${proto}://${host}` : '';
+      res.json(buildClientDiagnostics(db, apiBaseUrl));
     }),
   );
 
@@ -1367,7 +1599,13 @@ export function registerRoutes(router: import('express').Router): void {
     '/backup',
     asyncHandler(async (_req, res) => {
       const db = getDb();
-      const products = db.prepare('SELECT * FROM products').all().map((r) => rowToProduct(r as Parameters<typeof rowToProduct>[0]));
+      const products = db
+        .prepare('SELECT * FROM products')
+        .all()
+        .map((r) => {
+          const p = rowToProduct(r as Parameters<typeof rowToProduct>[0]);
+          return { ...p, image: inlineProductImageForBackup(p.image) };
+        });
       const transactions = db
         .prepare('SELECT * FROM transactions')
         .all()
@@ -1398,13 +1636,32 @@ export function registerRoutes(router: import('express').Router): void {
           }
         : { ...DEFAULT_APP_SETTINGS, storeLogo: '' };
 
+      const warehouses = db.prepare('SELECT * FROM warehouses ORDER BY name').all();
+      const warehouseSections = db.prepare('SELECT * FROM warehouse_sections ORDER BY name').all();
+      const warehouseStock = db
+        .prepare(
+          `SELECT ws.*, s.name AS section_name, p.name AS product_name, p.sku AS product_sku
+           FROM warehouse_stock ws
+           JOIN warehouse_sections s ON s.id = ws.section_id
+           JOIN products p ON p.id = ws.product_id`,
+        )
+        .all();
+      const warehouseMovements = db
+        .prepare('SELECT * FROM warehouse_movements ORDER BY created_at DESC LIMIT 5000')
+        .all();
+      const customers = db
+        .prepare('SELECT * FROM customers ORDER BY first_name, last_name')
+        .all()
+        .map((r) => rowToCustomer(r as Parameters<typeof rowToCustomer>[0]));
+
       res.json({
-        schemaVersion: 4,
+        schemaVersion: 6,
         exportedAt: new Date().toISOString(),
         app: 'executive-suite',
         products,
         transactions,
         expenses,
+        customers,
         appSettings,
         productCategories,
         productSubcategories: subcategories.map((s) => ({
@@ -1415,6 +1672,20 @@ export function registerRoutes(router: import('express').Router): void {
         })),
         productLocations: locations.map((l) => ({ id: l.id, name: l.name })),
         cashSessions,
+        warehouses: warehouses.map((w) => rowToWarehouse(w as Parameters<typeof rowToWarehouse>[0])),
+        warehouseSections: warehouseSections.map((s) =>
+          rowToWarehouseSection(s as Parameters<typeof rowToWarehouseSection>[0]),
+        ),
+        warehouseStock: warehouseStock.map((r) =>
+          rowToWarehouseStock(r as Parameters<typeof rowToWarehouseStock>[0], {
+            sectionName: (r as { section_name: string }).section_name,
+            productName: (r as { product_name: string }).product_name,
+            productSku: (r as { product_sku: string }).product_sku,
+          }),
+        ),
+        warehouseMovements: warehouseMovements.map((m) =>
+          rowToWarehouseMovement(m as Parameters<typeof rowToWarehouseMovement>[0]),
+        ),
       });
     }),
   );
@@ -1422,162 +1693,15 @@ export function registerRoutes(router: import('express').Router): void {
   router.post(
     '/backup/import',
     asyncHandler(async (req, res) => {
-      const data = req.body;
-      if (!data || data.app !== 'executive-suite') throw new ApiError(400, 'Invalid backup');
+      assertWebAdminClient(req);
       const db = getDb();
-
-      db.runInTransaction(() => {
-        db.prepare('DELETE FROM products').run();
-        db.prepare('DELETE FROM transactions').run();
-        db.prepare('DELETE FROM expenses').run();
-        db.prepare('DELETE FROM categories').run();
-        db.prepare('DELETE FROM subcategories').run();
-        db.prepare('DELETE FROM locations').run();
-        db.prepare('DELETE FROM cash_sessions').run();
-        db.prepare('DELETE FROM app_settings').run();
-
-        const insertProduct = db.prepare(
-          `INSERT INTO products (id, name, sku, category, price, cost, stock, image, category_id, subcategory_id, subcategory, status, unit_of_measure, location_id, barcode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const p of data.products ?? []) {
-          insertProduct.run(
-            p.id,
-            p.name,
-            p.sku,
-            p.category,
-            p.price,
-            p.cost,
-            p.stock,
-            p.image,
-            p.categoryId ?? '',
-            p.subcategoryId ?? '',
-            p.subcategory ?? '',
-            p.status ?? 'active',
-            p.unitOfMeasure ?? 'unidad',
-            p.locationId ?? null,
-            p.barcode ?? null,
-          );
-        }
-
-        const insertTx = db.prepare(TX_INSERT_SQL);
-        for (const tx of data.transactions ?? []) {
-          insertTx.run(
-            tx.id,
-            tx.orderNumber,
-            tx.customer,
-            tx.amount,
-            tx.status,
-            tx.timestamp,
-            tx.type,
-            tx.createdAt,
-            tx.paymentMethod ?? null,
-            tx.receipt ? JSON.stringify(tx.receipt) : null,
-            tx.sourceSaleId ?? null,
-            tx.operatorName ?? tx.receipt?.operatorName ?? null,
-            tx.sourceDeviceId ?? null,
-            tx.debtStatus ?? null,
-            tx.collectedAt ?? null,
-            tx.soldAsDebt ? 1 : 0,
-            tx.customerId ?? null,
-          );
-        }
-
-        const insertExpense = db.prepare(
-          'INSERT INTO expenses (id, title, amount, category, date, locked) VALUES (?, ?, ?, ?, ?, ?)',
-        );
-        for (const e of data.expenses ?? []) {
-          insertExpense.run(e.id, e.title, e.amount, e.category, e.date, e.locked ? 1 : 0);
-        }
-
-        const categories = data.productCategories?.length
-          ? data.productCategories
-          : [...new Set((data.products ?? []).map((p: { category: string }) => p.category.trim()).filter(Boolean))].map(
-              (name: string) => ({ id: newId(), name, code: codeFromCategoryName(name) }),
-            );
-        const insertCat = db.prepare('INSERT INTO categories (id, name, code) VALUES (?, ?, ?)');
-        for (const c of categories) {
-          const code = (c as { code?: string }).code ?? codeFromCategoryName(c.name);
-          insertCat.run(c.id, c.name, code);
-        }
-
-        const insertSub = db.prepare(
-          'INSERT INTO subcategories (id, category_id, name, code) VALUES (?, ?, ?, ?)',
-        );
-        for (const s of data.productSubcategories ?? []) {
-          insertSub.run(s.id, s.categoryId, s.name, s.code);
-        }
-        // Ensure each category has at least General subcategory
-        for (const c of categories) {
-          const count = db
-            .prepare('SELECT COUNT(*) AS n FROM subcategories WHERE category_id = ?')
-            .get(c.id) as { n: number };
-          if (count.n === 0) {
-            insertSub.run(newId(), c.id, 'General', 'GEN');
-          }
-        }
-
-        const insertLoc = db.prepare('INSERT INTO locations (id, name) VALUES (?, ?)');
-        for (const l of data.productLocations ?? []) {
-          insertLoc.run(l.id, l.name);
-        }
-
-        const insertSession = db.prepare(
-          `INSERT INTO cash_sessions (id, opened_at, closed_at, opening_cash, closing_cash, total_cash_sales, total_card_sales, total_transfer_sales, total_other_sales, total_debt_sales, expected_cash, cash_variance, anomalies_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const s of data.cashSessions ?? []) {
-          insertSession.run(
-            s.id,
-            s.openedAt,
-            s.closedAt,
-            s.openingCash,
-            s.closingCash,
-            s.totalCashSales,
-            s.totalCardSales,
-            s.totalTransferSales,
-            s.totalOtherSales,
-            s.totalDebtSales ?? 0,
-            s.expectedCash ?? null,
-            s.cashVariance ?? null,
-            s.anomalies?.length ? JSON.stringify(s.anomalies) : null,
-          );
-        }
-
-        const s = { ...DEFAULT_APP_SETTINGS, ...(data.appSettings ?? {}), id: 'main' };
-        let storeLogo = '';
-        try {
-          storeLogo = normalizeStoreLogo((data.appSettings as { storeLogo?: string } | undefined)?.storeLogo ?? '');
-        } catch (err) {
-          throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo in backup');
-        }
-        db.prepare(
-          `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          'main',
-          s.storeName,
-          s.branch,
-          s.currency,
-          s.taxRate,
-          s.cardQrPayload,
-          s.transferBank ?? '',
-          s.transferAccountHolder ?? '',
-          s.transferAccountNumber ?? '',
-          normalizeTransferPhone(String(s.transferPhoneNumber ?? '')),
-          s.transferQrExtra ?? '',
-          s.darkMode ? 1 : 0,
-          s.lowStockNotifications ? 1 : 0,
-          s.managerName,
-          s.managerTitle,
-          s.locale,
-          storeLogo,
-        );
-      });
-
+      const body = req.body as { allowEmptyProducts?: boolean };
+      const allowEmptyProducts = body?.allowEmptyProducts === true;
+      importBackupWithSafety(db, req.body, { allowEmptyProducts });
       res.json({ ok: true });
     }),
   );
 
   registerCatalogRoutes(router);
+  registerWarehouseRoutes(router);
 }

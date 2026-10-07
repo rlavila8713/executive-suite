@@ -7,9 +7,16 @@ import type {
   ProductCategory,
   SaleReceipt,
   SaleReceiptLine,
+  Customer,
   Transaction,
+  Warehouse,
+  WarehouseMovement,
+  WarehouseSection,
+  WarehouseStock,
 } from '../types';
-import { DEFAULT_APP_SETTINGS, DEFAULT_PRODUCT_CATEGORY_NAMES, MOCK_PRODUCTS } from '../constants';
+import { DEFAULT_APP_SETTINGS } from '../constants';
+import { decideDexieMigration } from './dexieMigration';
+import { logDexieMigration } from './dexieMigrationLog';
 
 const DEXIE_MIGRATED_KEY = 'executive-suite.dexieMigrated';
 
@@ -29,25 +36,20 @@ function markDexieMigrated(): void {
   }
 }
 
-/** True when the API still has only the demo seed, not user-created catalog rows. */
-function apiIsFreshSeed(products: Product[], categories: ProductCategory[]): boolean {
-  const mockIds = new Set(MOCK_PRODUCTS.map((p) => p.id));
-  if (products.some((p) => !mockIds.has(p.id))) return false;
-  if (products.length > MOCK_PRODUCTS.length) return false;
-  const defaultNames = new Set<string>(DEFAULT_PRODUCT_CATEGORY_NAMES);
-  return !categories.some((c) => !defaultNames.has(c.name));
-}
+/** Current export format. Imports accept schema versions 1–6. */
+export const BACKUP_SCHEMA_VERSION = 6;
 
-/** Current export format. Imports still accept schema version 1–3. */
-export const BACKUP_SCHEMA_VERSION = 5;
+const SUPPORTED_BACKUP_VERSIONS = [1, 2, 3, 4, 5, 6] as const;
 
 export type ExecutiveSuiteBackup = {
-  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  schemaVersion: (typeof SUPPORTED_BACKUP_VERSIONS)[number];
   exportedAt: string;
   app: 'executive-suite';
   products: Product[];
   transactions: Transaction[];
   expenses: Expense[];
+  /** Customer directory (included in exports since schema 6). */
+  customers?: Customer[];
   appSettings: AppSettings;
   /** Omitted on v1 backups; restore infers from product rows when missing or empty. */
   productCategories?: ProductCategory[];
@@ -55,6 +57,11 @@ export type ExecutiveSuiteBackup = {
   productLocations?: import('../types').ProductLocation[];
   /** Cash drawer sessions (schema ≥ 3). */
   cashSessions?: CashSession[];
+  /** Warehouse module (schema ≥ 6). */
+  warehouses?: Warehouse[];
+  warehouseSections?: WarehouseSection[];
+  warehouseStock?: WarehouseStock[];
+  warehouseMovements?: WarehouseMovement[];
 };
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -69,7 +76,8 @@ function isProduct(x: unknown): x is Product {
     (x.status === undefined || typeof x.status === 'string') &&
     (x.unitOfMeasure === undefined || typeof x.unitOfMeasure === 'string') &&
     (x.locationId === undefined || x.locationId === null || typeof x.locationId === 'string') &&
-    (x.barcode === undefined || x.barcode === null || typeof x.barcode === 'string');
+    (x.barcode === undefined || x.barcode === null || typeof x.barcode === 'string') &&
+    (x.warehouseCost === undefined || typeof x.warehouseCost === 'number');
   return (
     typeof x.id === 'string' &&
     typeof x.name === 'string' &&
@@ -113,7 +121,8 @@ function isSaleReceipt(x: unknown): x is SaleReceipt {
       x.paymentMethod === 'card' ||
       x.paymentMethod === 'transfer' ||
       x.paymentMethod === 'other' ||
-      x.paymentMethod === 'debt') &&
+      x.paymentMethod === 'debt' ||
+      x.paymentMethod === 'mixed') &&
     (x.operatorName === undefined || typeof x.operatorName === 'string')
   );
 }
@@ -127,11 +136,13 @@ function isTransaction(x: unknown): x is Transaction {
     x.paymentMethod === 'card' ||
     x.paymentMethod === 'transfer' ||
     x.paymentMethod === 'other' ||
-    x.paymentMethod === 'debt';
+    x.paymentMethod === 'debt' ||
+    x.paymentMethod === 'mixed';
   const debtOk =
     x.debtStatus === undefined ||
     x.debtStatus === 'pending' ||
-    x.debtStatus === 'collected';
+    x.debtStatus === 'collected' ||
+    x.debtStatus === 'reversed';
   const soldAsDebtOk = x.soldAsDebt === undefined || typeof x.soldAsDebt === 'boolean';
   const collectedAtOk = x.collectedAt === undefined || typeof x.collectedAt === 'number';
   const operatorOk = x.operatorName === undefined || typeof x.operatorName === 'string';
@@ -219,6 +230,19 @@ function isProductCategory(x: unknown): x is ProductCategory {
   return typeof x.id === 'string' && typeof x.name === 'string' && (x.code === undefined || typeof x.code === 'string');
 }
 
+function isCustomer(x: unknown): x is Customer {
+  if (!isRecord(x)) return false;
+  return (
+    typeof x.id === 'string' &&
+    typeof x.firstName === 'string' &&
+    (x.lastName === undefined || typeof x.lastName === 'string') &&
+    (x.address === undefined || typeof x.address === 'string') &&
+    (x.phone === undefined || typeof x.phone === 'string') &&
+    (x.notes === undefined || typeof x.notes === 'string') &&
+    (x.createdAt === undefined || typeof x.createdAt === 'number')
+  );
+}
+
 export function parseBackupJson(text: string): ExecutiveSuiteBackup {
   let raw: unknown;
   try {
@@ -230,8 +254,18 @@ export function parseBackupJson(text: string): ExecutiveSuiteBackup {
   if (raw.app !== 'executive-suite') {
     throw new Error('This file is not an Executive Suite backup.');
   }
-  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3 && raw.schemaVersion !== 4 && raw.schemaVersion !== 5) {
-    throw new Error(`Unsupported backup version: ${String(raw.schemaVersion)}. Expected 1, 2, 3, 4, or 5.`);
+  const version = raw.schemaVersion;
+  if (
+    version !== 1 &&
+    version !== 2 &&
+    version !== 3 &&
+    version !== 4 &&
+    version !== 5 &&
+    version !== 6
+  ) {
+    throw new Error(
+      `Unsupported backup version: ${String(version)}. Expected ${SUPPORTED_BACKUP_VERSIONS.join(', ')}.`,
+    );
   }
   if (raw.productCategories !== undefined && raw.productCategories !== null) {
     if (!Array.isArray(raw.productCategories) || !raw.productCategories.every(isProductCategory)) {
@@ -246,6 +280,11 @@ export function parseBackupJson(text: string): ExecutiveSuiteBackup {
   }
   if (!Array.isArray(raw.expenses) || !raw.expenses.every(isExpense)) {
     throw new Error('Invalid or missing "expenses" array.');
+  }
+  if (raw.customers !== undefined && raw.customers !== null) {
+    if (!Array.isArray(raw.customers) || !raw.customers.every(isCustomer)) {
+      throw new Error('Invalid "customers" array.');
+    }
   }
   if (!isAppSettings(raw.appSettings)) {
     throw new Error('Invalid or missing "appSettings" object.');
@@ -278,8 +317,11 @@ export function downloadBackupFile(data: ExecutiveSuiteBackup): void {
 }
 
 /** Replaces all server data with the backup contents. */
-export async function restoreBackupSnapshot(data: ExecutiveSuiteBackup): Promise<void> {
-  await api.importBackup(data);
+export async function restoreBackupSnapshot(
+  data: ExecutiveSuiteBackup,
+  options?: { allowEmptyProducts?: boolean },
+): Promise<void> {
+  await api.importBackup(data, options);
 }
 
 export async function readBackupFromFile(file: File): Promise<ExecutiveSuiteBackup> {
@@ -327,13 +369,24 @@ export async function migrateDexieToApi(): Promise<boolean> {
     let apiProducts: Product[];
     let apiCategories: ProductCategory[];
     try {
-      [apiProducts, apiCategories] = await Promise.all([api.getProducts(), api.getCategories()]);
+      [apiProducts, apiCategories] = await Promise.all([
+        api.getProducts({ includeImages: false }),
+        api.getCategories(),
+      ]);
     } catch {
       return false;
     }
 
-    // API already has user data — never clobber it with a stale IndexedDB snapshot.
-    if (!apiIsFreshSeed(apiProducts, apiCategories)) return discardIndexedDb();
+    const decision = decideDexieMigration(apiProducts, apiCategories, products);
+    logDexieMigration(decision.action, decision.reason);
+
+    if (decision.action === 'skip') {
+      markDexieMigrated();
+      return false;
+    }
+    if (decision.action === 'discard_local') {
+      return discardIndexedDb();
+    }
 
     const appSettings = settingsRows[0] ?? DEFAULT_APP_SETTINGS;
     await api.importBackup({

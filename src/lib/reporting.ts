@@ -1,4 +1,5 @@
 import type { Expense, PaymentMethod, Product, SaleReceiptLine, Transaction } from '../types';
+import { applyPaymentPartsToBreakdown, receivableBalanceDue } from './paymentSplits';
 
 export type DateRangeMs = { start: number; end: number };
 
@@ -32,6 +33,42 @@ export function isPendingDebtSale(tx: Transaction): boolean {
 
 export function isDebtSaleRecord(tx: Transaction): boolean {
   return isCompletedSale(tx) && !!tx.soldAsDebt;
+}
+
+export function isReversedDebtSale(tx: Transaction): boolean {
+  return isDebtSaleRecord(tx) && tx.debtStatus === 'reversed';
+}
+
+export function isPayableRecord(tx: Transaction): boolean {
+  return tx.type === 'payable' || !!tx.soldAsPayable;
+}
+
+export function isPendingPayable(tx: Transaction): boolean {
+  if (!isPayableRecord(tx)) return false;
+  if (tx.payableStatus === 'paid' || tx.payableStatus === 'void') return false;
+  return tx.payableStatus === 'pending' || tx.status === 'pending';
+}
+
+/** Customer liabilities from reversed mixed cash + transfer sales. */
+export function mixedReversalPayablesSummary(transactions: Transaction[], range: DateRangeMs) {
+  let pendingTotal = 0;
+  let pendingCount = 0;
+  let createdInPeriod = 0;
+  for (const tx of transactions) {
+    if (!isPayableRecord(tx)) continue;
+    if (tx.createdAt >= range.start && tx.createdAt <= range.end) {
+      createdInPeriod += Math.abs(tx.amount);
+    }
+    if (tx.payableStatus === 'pending') {
+      pendingTotal += Math.abs(tx.amount);
+      pendingCount++;
+    }
+  }
+  return {
+    pendingTotal: Math.round(pendingTotal * 100) / 100,
+    pendingCount,
+    createdInPeriod: Math.round(createdInPeriod * 100) / 100,
+  };
 }
 
 export function resolveTransactionPaymentMethod(tx: Transaction): PaymentMethod {
@@ -82,6 +119,25 @@ export function dateRangeFromInputs(startDate: string, endDate: string): DateRan
 export function previousPeriodOfSameLength(range: DateRangeMs): DateRangeMs {
   const len = range.end - range.start + 1;
   return { start: range.start - len, end: range.start - 1 };
+}
+
+/** Local calendar day from midnight through end of day. */
+export function localDayRange(now: number = Date.now()): DateRangeMs {
+  const start = startOfLocalDay(now);
+  return { start, end: endOfLocalDay(start) };
+}
+
+/**
+ * Net ticket revenue in range: completed sales minus return/reversal movements (by `createdAt`).
+ */
+export function netSalesRevenueInRange(transactions: Transaction[], range: DateRangeMs): number {
+  let sum = 0;
+  for (const tx of transactions) {
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    if (isCompletedSale(tx)) sum += Math.abs(tx.amount);
+    else if (isReturnRow(tx) || isReversedSale(tx)) sum -= Math.abs(tx.amount);
+  }
+  return Math.round(sum * 100) / 100;
 }
 
 export function completedSalesInRange(transactions: Transaction[], range: DateRangeMs): Transaction[] {
@@ -141,6 +197,52 @@ function bucketKeyForMonth(ts: number): { key: string; label: string } {
   return { key, label: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}` };
 }
 
+export type SalesSeriesPointWithCumulative = SalesSeriesPoint & { cumulative: number };
+
+/** Net sales per bucket (completed sales minus returns/reversals in the same range). */
+export function groupNetSalesByBucket(
+  transactions: Transaction[],
+  range: DateRangeMs,
+  bucket: SalesBucket,
+  locale: string,
+): SalesSeriesPointWithCumulative[] {
+  const inRange = transactions.filter((tx) => tx.createdAt >= range.start && tx.createdAt <= range.end);
+  const map = new Map<string, { label: string; revenue: number; orderCount: number }>();
+
+  for (const tx of inRange) {
+    let sign = 0;
+    if (isCompletedSale(tx)) sign = 1;
+    else if (isReturnRow(tx) || isReversedSale(tx)) sign = -1;
+    else continue;
+
+    let k: { key: string; label: string };
+    if (bucket === 'day') k = bucketKeyForDay(tx.createdAt);
+    else if (bucket === 'week') k = bucketKeyForWeek(tx.createdAt, locale);
+    else k = bucketKeyForMonth(tx.createdAt);
+
+    const cur = map.get(k.key) ?? { label: k.label, revenue: 0, orderCount: 0 };
+    cur.revenue += sign * Math.abs(tx.amount);
+    if (sign > 0) cur.orderCount += 1;
+    cur.label = k.label;
+    map.set(k.key, cur);
+  }
+
+  let cumulative = 0;
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, v]) => {
+      const revenue = Math.round(v.revenue * 100) / 100;
+      cumulative = Math.round((cumulative + revenue) * 100) / 100;
+      return {
+        key,
+        label: v.label,
+        revenue,
+        orderCount: v.orderCount,
+        cumulative,
+      };
+    });
+}
+
 export function groupSalesByBucket(
   transactions: Transaction[],
   range: DateRangeMs,
@@ -170,8 +272,11 @@ export function groupSalesByBucket(
     .map(([key, v]) => ({ key, label: v.label, revenue: Math.round(v.revenue * 100) / 100, orderCount: v.orderCount }));
 }
 
-export function paymentMethodBreakdown(transactions: Transaction[], range: DateRangeMs): Record<PaymentMethod, number> {
-  const init = (): Record<PaymentMethod, number> => ({
+export function paymentMethodBreakdown(
+  transactions: Transaction[],
+  range: DateRangeMs,
+): Record<'cash' | 'card' | 'transfer' | 'other', number> {
+  const init = (): Record<'cash' | 'card' | 'transfer' | 'other', number> => ({
     cash: 0,
     card: 0,
     transfer: 0,
@@ -179,13 +284,17 @@ export function paymentMethodBreakdown(transactions: Transaction[], range: DateR
   });
   const out = init();
   for (const tx of transactions) {
+    if (tx.receipt?.payments?.length) {
+      applyPaymentPartsToBreakdown(out, tx, range);
+      continue;
+    }
     if (!appliesToSessionPaymentBreakdown(tx, range)) continue;
     const sign = isCompletedSale(tx) ? 1 : isReturnRow(tx) || isReversedSale(tx) ? -1 : 0;
     if (sign === 0) continue;
     const m = resolveTransactionPaymentMethod(tx);
     out[m] += sign * Math.abs(tx.amount);
   }
-  (Object.keys(out) as PaymentMethod[]).forEach((k) => {
+  (Object.keys(out) as (keyof typeof out)[]).forEach((k) => {
     out[k] = Math.round(out[k] * 100) / 100;
   });
   return out;
@@ -195,7 +304,7 @@ export function pendingDebtTotal(transactions: Transaction[]): number {
   return Math.round(
     transactions
       .filter((tx) => isPendingDebtSale(tx))
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+      .reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100,
   ) / 100;
 }
 
@@ -209,7 +318,7 @@ export function sessionDebtSalesTotal(transactions: Transaction[], openedAt: num
           tx.createdAt >= openedAt &&
           tx.createdAt <= closedAt,
       )
-      .reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100,
+      .reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100,
   ) / 100;
 }
 
@@ -246,17 +355,46 @@ export function cogsInRange(transactions: Transaction[], products: Product[], ra
 }
 
 export function profitGrossInRange(transactions: Transaction[], products: Product[], range: DateRangeMs): {
+  grossSales: number;
+  returnsAmount: number;
+  netSales: number;
   revenue: number;
   cogs: number;
   grossProfit: number;
 } {
-  const revenue = salesRevenueInRange(transactions, range);
-  const cogs = cogsInRange(transactions, products, range);
+  let grossSales = 0;
+  let returnsAmount = 0;
+  const inRange = transactions.filter((tx) => tx.createdAt >= range.start && tx.createdAt <= range.end);
+  for (const tx of inRange) {
+    if (isCompletedSale(tx)) grossSales += Math.abs(tx.amount);
+    else if (isReturnRow(tx) || isReversedSale(tx)) returnsAmount += Math.abs(tx.amount);
+  }
+  const netSales = Math.round((grossSales - returnsAmount) * 100) / 100;
+  const cogsRounded = netCogsInRange(transactions, products, range);
   return {
-    revenue: Math.round(revenue * 100) / 100,
-    cogs,
-    grossProfit: Math.round((revenue - cogs) * 100) / 100,
+    grossSales: Math.round(grossSales * 100) / 100,
+    returnsAmount: Math.round(returnsAmount * 100) / 100,
+    netSales,
+    revenue: netSales,
+    cogs: cogsRounded,
+    grossProfit: Math.round((netSales - cogsRounded) * 100) / 100,
   };
+}
+
+/** COGS for completed sales minus COGS restored on returns/reversals in range. */
+export function netCogsInRange(transactions: Transaction[], products: Product[], range: DateRangeMs): number {
+  let sum = 0;
+  for (const tx of transactions) {
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    const lines = tx.receipt?.lines;
+    if (!lines?.length) continue;
+    if (isCompletedSale(tx)) {
+      for (const line of lines) sum += lineCOGS(line, products);
+    } else if (isReturnRow(tx) || isReversedSale(tx)) {
+      for (const line of lines) sum -= lineCOGS(line, products);
+    }
+  }
+  return Math.round(sum * 100) / 100;
 }
 
 export type TopSellerRow = {

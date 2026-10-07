@@ -6,6 +6,9 @@ type SqlParam = number | string | Uint8Array | null;
 import { DEFAULT_APP_SETTINGS } from './constants.js';
 import { ensureLicenseRow } from './license.js';
 import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
+import { persistDatabaseAtomic } from './persistDb.js';
+import { migrateLegacyProductPhotoLayout } from './legacyImageLayout.js';
+import { migrateWarehouseSchema } from './warehouseMigrations.js';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
@@ -52,16 +55,47 @@ class Statement {
   }
 }
 
+/** Batch rapid mutations (e.g. parallel /api refresh) into one disk write. Transactions still flush immediately. */
+const PERSIST_DEBOUNCE_MS = 400;
+
+function createDebouncedPersist(db: SqlDatabase) {
+  let dirty = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushNow = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    dirty = false;
+    persistDatabaseAtomic(db);
+  };
+
+  const schedule = () => {
+    dirty = true;
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (!dirty) return;
+      dirty = false;
+      persistDatabaseAtomic(db);
+    }, PERSIST_DEBOUNCE_MS);
+  };
+
+  return { schedule, flushNow };
+}
+
 export class SqliteStore {
   private inTransaction = false;
 
   constructor(
     private db: SqlDatabase,
-    private persist: () => void,
+    private schedulePersist: () => void,
+    private flushPersist: () => void,
   ) {}
 
   private persistIfNeeded(): void {
-    if (!this.inTransaction) this.persist();
+    if (!this.inTransaction) this.schedulePersist();
   }
 
   prepare(sql: string): Statement {
@@ -76,17 +110,27 @@ export class SqliteStore {
   runInTransaction(fn: () => void): void {
     this.inTransaction = true;
     this.db.run('BEGIN');
+    let committed = false;
     try {
       fn();
       this.db.run('COMMIT');
-      this.persist();
+      committed = true;
+      this.flushPersist();
     } catch (err) {
-      try {
-        this.db.run('ROLLBACK');
-      } catch {
-        // ignore rollback errors
+      if (!committed) {
+        try {
+          this.db.run('ROLLBACK');
+        } catch {
+          // ignore rollback errors
+        }
+        throw err;
       }
-      throw err;
+      // COMMIT succeeded but disk persist failed — retry once (do not ROLLBACK; that cannot undo COMMIT).
+      try {
+        this.flushPersist();
+      } catch (retryErr) {
+        throw retryErr;
+      }
     } finally {
       this.inTransaction = false;
     }
@@ -95,12 +139,11 @@ export class SqliteStore {
 
 let store: SqliteStore | null = null;
 let initPromise: Promise<void> | null = null;
+let flushPersistRef: (() => void) | null = null;
 
-function persistDb(db: SqlDatabase): void {
-  const dataDir = getDataDir();
-  fs.mkdirSync(dataDir, { recursive: true });
-  const data = db.export();
-  fs.writeFileSync(getDbPath(), Buffer.from(data));
+/** Force pending debounced writes to disk (tests / graceful shutdown). */
+export function flushPendingDbPersist(): void {
+  flushPersistRef?.();
 }
 
 export async function initDb(): Promise<void> {
@@ -114,12 +157,16 @@ export async function initDb(): Promise<void> {
     const db = fs.existsSync(dbPath)
       ? new SQL.Database(fs.readFileSync(dbPath))
       : new SQL.Database();
-    const sqliteStore = new SqliteStore(db, () => persistDb(db));
+    const { schedule, flushNow } = createDebouncedPersist(db);
+    flushPersistRef = flushNow;
+    const sqliteStore = new SqliteStore(db, schedule, flushNow);
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
+    migrateWarehouseSchema(sqliteStore);
     ensureSeeded(sqliteStore);
     ensureLicenseRow(sqliteStore);
-    persistDb(db);
+    migrateLegacyProductPhotoLayout(sqliteStore);
+    flushNow();
     store = sqliteStore;
   })();
 
@@ -131,10 +178,22 @@ export function getDb(): SqliteStore {
   return store;
 }
 
-export function closeDb(): void {
+export type CloseDbOptions = {
+  /** Test-only: simulate SIGKILL before debounced flush lands (default: flush). */
+  skipFlush?: boolean;
+};
+
+export function closeDb(options: CloseDbOptions = {}): void {
+  if (!options.skipFlush) {
+    flushPersistRef?.();
+  }
+  flushPersistRef = null;
   store = null;
   initPromise = null;
 }
+
+/** Debounce window used before automatic disk write (for tests). */
+export const DB_PERSIST_DEBOUNCE_MS = PERSIST_DEBOUNCE_MS;
 
 function initSchema(db: SqliteStore): void {
   db.exec(`
@@ -255,17 +314,23 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM categories').run();
     db.prepare('DELETE FROM subcategories').run();
     db.prepare('DELETE FROM locations').run();
+    db.prepare('DELETE FROM warehouse_movements').run();
+    db.prepare('DELETE FROM warehouse_stock').run();
+    db.prepare('DELETE FROM warehouse_sections').run();
+    db.prepare('DELETE FROM warehouses').run();
     db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
+    migrateWarehouseSchema(db);
   });
 }
 
 // --- Row mappers ---
 
 import { productImagePath, isPlaceholderProductImage } from './productImage.js';
+import { isFileImageRef } from './productImageStorage.js';
 import { storeLogoPath } from './storeLogo.js';
 
 export type ProductRow = {
@@ -275,6 +340,7 @@ export type ProductRow = {
   category: string;
   price: number;
   cost: number;
+  warehouse_cost?: number;
   stock: number;
   image: string;
   category_id?: string;
@@ -293,6 +359,9 @@ export type RowToProductOptions = {
 
 export function rowToProduct(row: ProductRow, options: RowToProductOptions = {}) {
   const includeImageData = options.includeImageData ?? true;
+  const storedImage = row.image ?? '';
+  const inlineImage =
+    includeImageData && storedImage && !isFileImageRef(storedImage) ? storedImage : '';
   return {
     id: row.id,
     name: row.name,
@@ -300,8 +369,9 @@ export function rowToProduct(row: ProductRow, options: RowToProductOptions = {})
     category: row.category,
     price: row.price,
     cost: row.cost,
+    warehouseCost: row.warehouse_cost ?? 0,
     stock: row.stock,
-    image: includeImageData ? row.image : '',
+    image: inlineImage,
     imageUrl:
       row.image && !isPlaceholderProductImage(row.image)
         ? productImagePath(row.id, row.image)
@@ -369,9 +439,17 @@ export function rowToTransaction(row: {
   collected_at?: number | null;
   sold_as_debt?: number | null;
   customer_id?: string | null;
+  sold_as_payable?: number | null;
+  payable_status?: string | null;
 }) {
   const debtStatus =
-    row.debt_status === 'pending' || row.debt_status === 'collected' ? row.debt_status : undefined;
+    row.debt_status === 'pending' || row.debt_status === 'collected' || row.debt_status === 'reversed'
+      ? row.debt_status
+      : undefined;
+  const payableStatus =
+    row.payable_status === 'pending' || row.payable_status === 'paid' || row.payable_status === 'void'
+      ? row.payable_status
+      : undefined;
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -390,6 +468,8 @@ export function rowToTransaction(row: {
     debtStatus,
     collectedAt: row.collected_at ?? undefined,
     customerId: row.customer_id ?? undefined,
+    soldAsPayable: row.sold_as_payable === 1,
+    payableStatus,
   };
 }
 
