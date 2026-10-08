@@ -3,8 +3,18 @@
  */
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
+
+function resolveWindowIcon() {
+  const root = path.join(__dirname, '..');
+  for (const name of ['icon.ico', 'icon.png']) {
+    const candidate = path.join(root, 'build', name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 const isDev = !app.isPackaged;
 let apiProcess = null;
@@ -68,12 +78,14 @@ function startApiServer() {
 }
 
 function createWindow() {
+  const icon = resolveWindowIcon();
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     autoHideMenuBar: true,
+    ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
