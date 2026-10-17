@@ -44,6 +44,7 @@ import { getApiBaseUrl, setApiBaseUrl, DEFAULT_API_BASE_URL } from '../api/confi
 import type { HealthResponse } from '../api/client';
 import { CardQrModal } from '../components/CardQrModal';
 import { buildServerConnectQrPayload, isValidTransferPhone, normalizeTransferPhone } from '../lib/paymentQr';
+import { formatAppDate, formatAppDateTime } from '../lib/dateFormat';
 
 type Section = 'general' | 'payments' | 'profile' | 'notifications' | 'security' | 'regional' | 'billing' | 'data' | 'server';
 
@@ -76,7 +77,7 @@ export function Settings({
   onDataChanged,
   initialSection,
 }: SettingsProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
   const deviceSearchPrevRef = useRef('');
   const [section, setSection] = useState<Section>(initialSection ?? 'general');
@@ -402,8 +403,7 @@ export function Settings({
     setServerQrOpen(true);
   };
 
-  const formatDeviceTime = (timestamp: number) =>
-    new Date(timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  const formatDeviceTime = (timestamp: number) => formatAppDateTime(timestamp, locale, 'short');
 
   const formatSessionDuration = (firstSeenAt: number, lastSeenAt: number) => {
     const ms = Math.max(0, lastSeenAt - firstSeenAt);
@@ -872,17 +872,13 @@ export function Settings({
                     {licenseInfo.paidUntil ? (
                       <p className="text-xs text-on-surface-variant">
                         {t('settings.billingPaidUntil', {
-                          date: new Date(licenseInfo.paidUntil).toLocaleDateString(
-                            settings.locale === 'es' ? 'es' : 'en-US',
-                          ),
+                          date: formatAppDate(licenseInfo.paidUntil, settings.locale, 'medium'),
                         })}
                       </p>
                     ) : (
                       <p className="text-xs text-on-surface-variant">
                         {t('settings.billingTrialEnds', {
-                          date: new Date(licenseInfo.trialEndsAt).toLocaleDateString(
-                            settings.locale === 'es' ? 'es' : 'en-US',
-                          ),
+                          date: formatAppDate(licenseInfo.trialEndsAt, settings.locale, 'medium'),
                         })}
                       </p>
                     )}
@@ -1130,10 +1126,10 @@ export function Settings({
                           embedded: diagSummary.database.embeddedImageCount,
                         })}
                       </p>
-                      {diagSummary.warnings.includes('CATALOG_EMPTY') && (
+                      {(diagSummary.warnings ?? []).includes('CATALOG_EMPTY') && (
                         <p className="text-xs font-medium text-error">{t('settings.warningCatalogEmpty')}</p>
                       )}
-                      {diagSummary.warnings.includes('EMBEDDED_IMAGES_IN_SQLITE') && (
+                      {(diagSummary.warnings ?? []).includes('EMBEDDED_IMAGES_IN_SQLITE') && (
                         <p className="text-xs font-medium text-on-surface-variant">
                           {t('settings.warningEmbeddedImages')}
                         </p>
@@ -1141,7 +1137,7 @@ export function Settings({
                       {diagSummary.persistence.lastSuccessfulPersist && (
                         <p className="text-xs text-on-surface-variant">
                           {t('settings.diagnosticsLastPersist', {
-                            time: new Date(diagSummary.persistence.lastSuccessfulPersist).toLocaleString(),
+                            time: formatAppDateTime(diagSummary.persistence.lastSuccessfulPersist, locale, 'short'),
                           })}
                         </p>
                       )}

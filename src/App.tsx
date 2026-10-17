@@ -23,6 +23,7 @@ import { Payables } from './features/Payables';
 import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
 import { Warehouse } from './features/Warehouse';
+import { StockMovements } from './features/StockMovements';
 import { Settings } from './features/Settings';
 import { useAppState } from './hooks/useAppState';
 import { Screen } from './types';
@@ -36,6 +37,7 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.transactions');
     case 'products':
     case 'inventory':
+    case 'stockMovements':
     case 'pos':
       return t('app.search.products');
     case 'categories':
@@ -98,6 +100,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.reports');
     case 'inventory':
       return t('app.titles.inventory');
+    case 'stockMovements':
+      return t('app.titles.stockMovements');
     case 'help':
       return t('app.titles.help');
     case 'settings':
@@ -144,14 +148,18 @@ function AppView(props: AppState) {
     warehouseSections,
     warehouseStock,
     warehouseSummary,
-    warehouseMovements,
     addWarehouseSection,
     updateWarehouseSection,
     deleteWarehouseSection,
     reassignWarehouseSection,
+    expenseCategories,
     addExpense,
     updateExpense,
     deleteExpense,
+    addExpenseCategory,
+    renameExpenseCategory,
+    deleteExpenseCategory,
+    createInventoryConsumptionExpense,
     addTransaction,
     updateTransaction,
     reverseSale,
@@ -217,7 +225,6 @@ function AppView(props: AppState) {
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
-            onUpdateTransaction={updateTransaction}
             onReverseSale={reverseSale}
           />
         );
@@ -244,7 +251,6 @@ function AppView(props: AppState) {
             sections={warehouseSections}
             stock={warehouseStock}
             summary={warehouseSummary}
-            movements={warehouseMovements}
             globalSearch={globalSearch}
             onAddSection={addWarehouseSection}
             onUpdateSection={updateWarehouseSection}
@@ -252,6 +258,7 @@ function AppView(props: AppState) {
             onReassignSection={reassignWarehouseSection}
             onReceiveStock={receiveProductStock}
             onTransferToStore={transferWarehouseToStore}
+            onAfterStockMutation={refreshData}
           />
         );
       case 'categories':
@@ -352,10 +359,17 @@ function AppView(props: AppState) {
         return (
           <Expenses
             expenses={expenses}
+            expenseCategories={expenseCategories}
+            products={products}
+            warehouseStock={warehouseStock}
             globalSearch={globalSearch}
             onAdd={addExpense}
             onUpdate={updateExpense}
             onDelete={deleteExpense}
+            onAddCategory={addExpenseCategory}
+            onRenameCategory={renameExpenseCategory}
+            onDeleteCategory={deleteExpenseCategory}
+            onInventoryConsumption={createInventoryConsumptionExpense}
           />
         );
       case 'receivables':
@@ -412,6 +426,10 @@ function AppView(props: AppState) {
             syncBusy={apiChecking}
           />
         );
+      case 'stockMovements':
+        return (
+          <StockMovements products={products} globalSearch={globalSearch} onAfterMutation={refreshData} />
+        );
       case 'help':
         return <Help onNavigate={setCurrentScreen} />;
       case 'settings':
@@ -440,7 +458,6 @@ function AppView(props: AppState) {
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
-            onUpdateTransaction={updateTransaction}
             onReverseSale={reverseSale}
           />
         );

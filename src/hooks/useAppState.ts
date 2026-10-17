@@ -7,6 +7,7 @@ import {
   AppSettings,
   CheckoutPayload,
   Expense,
+  ExpenseCategory,
   ProductCategory,
   ProductSubcategory,
   ProductLocation,
@@ -17,7 +18,6 @@ import {
   WarehouseSection,
   WarehouseStock,
   WarehouseSummaryReport,
-  WarehouseMovement,
 } from '../types';
 import { DEFAULT_APP_SETTINGS } from '../constants';
 import { api, ApiConnectionError, ApiRequestError } from '../api/client';
@@ -32,6 +32,7 @@ export function useAppState() {
   const [products, setProducts] = useState<Product[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
   const [productSubcategories, setProductSubcategories] = useState<ProductSubcategory[]>([]);
@@ -42,17 +43,17 @@ export function useAppState() {
   const [warehouseSections, setWarehouseSections] = useState<WarehouseSection[]>([]);
   const [warehouseStock, setWarehouseStock] = useState<WarehouseStock[]>([]);
   const [warehouseSummary, setWarehouseSummary] = useState<WarehouseSummaryReport | null>(null);
-  const [warehouseMovements, setWarehouseMovements] = useState<WarehouseMovement[]>([]);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const refreshGen = useRef(0);
 
   const refreshAll = useCallback(async () => {
     const gen = ++refreshGen.current;
-    const [p, t, e, s, c, subs, locs, cust, cs, lic, wSecs, wStock, wSum, wMov] = await Promise.all([
+    const [p, t, e, expCats, s, c, subs, locs, cust, cs, lic, wSecs, wStock, wSum] = await Promise.all([
       api.getProducts({ includeImages: false }),
       api.getTransactions(),
       api.getExpenses(),
+      api.getExpenseCategories(),
       api.getSettings(),
       api.getCategories(),
       api.getSubcategories(),
@@ -63,12 +64,12 @@ export function useAppState() {
       api.getWarehouseSections(),
       api.getWarehouseStock(),
       api.getWarehouseSummary(),
-      api.getWarehouseMovements(),
     ]);
     if (gen !== refreshGen.current) return;
     setProducts(p);
     setTransactions(t);
     setExpenses(e);
+    setExpenseCategories(expCats);
     setAppSettings(s);
     setProductCategories(c);
     setProductSubcategories(subs);
@@ -78,7 +79,6 @@ export function useAppState() {
     setWarehouseSections(wSecs);
     setWarehouseStock(wStock);
     setWarehouseSummary(wSum);
-    setWarehouseMovements(wMov);
     setLicenseInfo(lic);
     setCart((prev) =>
       prev.flatMap((item) => {
@@ -387,6 +387,36 @@ export function useAppState() {
     beginLocalCommit();
     setExpenses((prev) => removeById(prev, id));
     void refreshAfterMutation();
+  };
+
+  const addExpenseCategory = async (name: string) => {
+    guardMutation();
+    const created = await api.createExpenseCategory(name);
+    setExpenseCategories((prev) => upsertById(prev, created));
+  };
+
+  const renameExpenseCategory = async (id: string, name: string) => {
+    guardMutation();
+    const updated = await api.renameExpenseCategory(id, name);
+    setExpenseCategories((prev) => upsertById(prev, updated));
+  };
+
+  const deleteExpenseCategory = async (id: string) => {
+    guardMutation();
+    await api.deleteExpenseCategory(id);
+    setExpenseCategories((prev) => removeById(prev, id));
+  };
+
+  const createInventoryConsumptionExpense = async (payload: {
+    productId: string;
+    quantity: number;
+    source: 'store' | 'warehouse';
+    title?: string;
+    date: string;
+  }) => {
+    guardMutation();
+    await api.createInventoryConsumptionExpense(payload);
+    await refreshAfterMutation();
   };
 
   const addTransaction = async (row: Omit<Transaction, 'id'>) => {
@@ -718,14 +748,18 @@ export function useAppState() {
     warehouseSections,
     warehouseStock,
     warehouseSummary,
-    warehouseMovements,
     addWarehouseSection,
     updateWarehouseSection,
     deleteWarehouseSection,
     reassignWarehouseSection,
+    expenseCategories,
     addExpense,
     updateExpense,
     deleteExpense,
+    addExpenseCategory,
+    renameExpenseCategory,
+    deleteExpenseCategory,
+    createInventoryConsumptionExpense,
     addTransaction,
     updateTransaction,
     reverseSale,

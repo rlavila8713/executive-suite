@@ -10,3 +10,16 @@ export function computeWeightedAverageCost(
   const totalValue = currentStock * currentCost + receivedQty * receivedUnitCost;
   return Math.round((totalValue / totalQty) * 100) / 100;
 }
+
+/** Undo a receipt layer at a known unit cost (warehouse entry reversal). */
+export function computeCostAfterRemovingLayer(
+  currentStock: number,
+  currentCost: number,
+  removedQty: number,
+  removedUnitCost: number,
+): number {
+  const newQty = currentStock - removedQty;
+  if (newQty <= 0) return currentCost;
+  const newValue = currentStock * currentCost - removedQty * removedUnitCost;
+  return Math.round((newValue / newQty) * 100) / 100;
+}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Search, HandCoins, Banknote, CreditCard, ArrowLeftRight, CheckCircle2, UserPlus } from 'lucide-react';
+import { Search, HandCoins, Banknote, CreditCard, ArrowLeftRight, CheckCircle2, UserPlus, FileText } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { CardQrModal } from '../components/CardQrModal';
 import type { Customer, Transaction } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
@@ -13,9 +14,11 @@ import { TablePagination } from '../components/TablePagination';
 import { usePagination } from '../lib/usePagination';
 import { findCustomerByDisplayName, formatCustomerName, isAdHocSaleCustomerName } from '../lib/customers';
 import { buildOnlineQrPayload, buildTransferQrPayload } from '../lib/paymentQr';
+import { createAppDateTimeFormatter } from '../lib/dateFormat';
 import { cn } from '../lib/utils';
 
 type DateFilter = 'all' | 'today' | 'month' | 'range';
+type DebtStatusFilter = 'all' | 'pending' | 'collected';
 
 function startOfLocalDay(ts: number = Date.now()): number {
   const d = new Date(ts);
@@ -58,6 +61,7 @@ export function Receivables({
   const { t, locale } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<DebtStatusFilter>('all');
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
   const [collectTx, setCollectTx] = useState<Transaction | null>(null);
@@ -78,12 +82,18 @@ export function Receivables({
   );
 
   const pending = useMemo(() => debtSales.filter((tx) => isPendingDebtSale(tx)), [debtSales]);
+  const collected = useMemo(
+    () => debtSales.filter((tx) => tx.debtStatus === 'collected'),
+    [debtSales],
+  );
 
   const filtered = useMemo(() => {
     const now = Date.now();
     const monthStart = startOfLocalMonth(now);
     const dayStart = startOfLocalDay(now);
     return debtSales.filter((tx) => {
+      if (statusFilter === 'pending' && !isPendingDebtSale(tx)) return false;
+      if (statusFilter === 'collected' && tx.debtStatus !== 'collected') return false;
       if (dateFilter === 'today' && tx.createdAt < dayStart) return false;
       if (dateFilter === 'month' && tx.createdAt < monthStart) return false;
       if (dateFilter === 'range' && rangeStart && rangeEnd) {
@@ -97,13 +107,20 @@ export function Receivables({
         rowMatchesSearch(globalSearch, [tx.customer, tx.orderNumber, productText, String(tx.amount)])
       );
     });
-  }, [debtSales, dateFilter, rangeStart, rangeEnd, searchTerm, globalSearch]);
+  }, [debtSales, statusFilter, dateFilter, rangeStart, rangeEnd, searchTerm, globalSearch]);
 
   const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(filtered);
 
   const totalPending = useMemo(
     () => Math.round(pending.reduce((s, tx) => s + receivableBalanceDue(tx), 0) * 100) / 100,
     [pending],
+  );
+  const totalCollected = useMemo(
+    () =>
+      Math.round(
+        collected.reduce((s, tx) => s + receivableDisplayAmount(tx), 0) * 100,
+      ) / 100,
+    [collected],
   );
 
   const collectBalanceDue = collectTx ? receivableBalanceDue(collectTx) : 0;
@@ -176,10 +193,7 @@ export function Receivables({
     }
   };
 
-  const dateFmt = new Intl.DateTimeFormat(locale === 'es' ? 'es' : 'en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const dateFmt = useMemo(() => createAppDateTimeFormatter(locale, 'medium'), [locale]);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -206,11 +220,16 @@ export function Receivables({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="bg-gradient-to-br from-amber-500 to-orange-600 text-white md:col-span-1">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card className="bg-gradient-to-br from-amber-500 to-orange-600 text-white">
           <p className="text-[10px] opacity-80 uppercase tracking-widest font-bold mb-1">{t('receivables.totalPending')}</p>
           <h3 className="text-3xl font-black tabular-nums">${totalPending.toLocaleString()}</h3>
           <p className="text-xs mt-2 opacity-90">{t('receivables.pendingCount', { count: pending.length })}</p>
+        </Card>
+        <Card className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white">
+          <p className="text-[10px] opacity-80 uppercase tracking-widest font-bold mb-1">{t('receivables.totalCollected')}</p>
+          <h3 className="text-3xl font-black tabular-nums">${totalCollected.toLocaleString()}</h3>
+          <p className="text-xs mt-2 opacity-90">{t('receivables.collectedCount', { count: collected.length })}</p>
         </Card>
       </div>
 
@@ -225,22 +244,47 @@ export function Receivables({
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="flex flex-wrap gap-2">
-            {(['all', 'today', 'month', 'range'] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setDateFilter(f)}
-                className={cn(
-                  'px-3 py-1.5 rounded-full text-xs font-bold border transition-colors',
-                  dateFilter === f
-                    ? 'bg-primary text-white border-primary'
-                    : 'border-black/10 text-on-surface-variant',
-                )}
-              >
-                {t(`receivables.filter.${f}`)}
-              </button>
-            ))}
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 sm:items-center">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant shrink-0">
+                {t('receivables.filterStatusLabel')}
+              </span>
+              {(['all', 'pending', 'collected'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setStatusFilter(f)}
+                  className={cn(
+                    'px-3 py-1.5 rounded-full text-xs font-bold border transition-colors',
+                    statusFilter === f
+                      ? 'bg-primary text-white border-primary'
+                      : 'border-black/10 text-on-surface-variant',
+                  )}
+                >
+                  {t(`receivables.statusFilter.${f}`)}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant shrink-0">
+                {t('receivables.filterDateLabel')}
+              </span>
+              {(['all', 'today', 'month', 'range'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setDateFilter(f)}
+                  className={cn(
+                    'px-3 py-1.5 rounded-full text-xs font-bold border transition-colors',
+                    dateFilter === f
+                      ? 'bg-primary text-white border-primary'
+                      : 'border-black/10 text-on-surface-variant',
+                  )}
+                >
+                  {t(`receivables.filter.${f}`)}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         {dateFilter === 'range' ? (
@@ -258,6 +302,7 @@ export function Receivables({
             <thead className="bg-surface-container-low">
               <tr className="text-[10px] uppercase text-on-surface-variant">
                 <th className="px-4 py-3">{t('receivables.colDate')}</th>
+                <th className="px-4 py-3">{t('receivables.colCollectedDate')}</th>
                 <th className="px-4 py-3">{t('receivables.colCustomer')}</th>
                 <th className="px-4 py-3">{t('receivables.colOrder')}</th>
                 <th className="px-4 py-3">{t('receivables.colProducts')}</th>
@@ -269,7 +314,7 @@ export function Receivables({
             <tbody>
               {pageItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-on-surface-variant">
+                  <td colSpan={8} className="px-4 py-10 text-center text-on-surface-variant">
                     {t('receivables.empty')}
                   </td>
                 </tr>
@@ -282,6 +327,9 @@ export function Receivables({
                   return (
                     <tr key={tx.id} className="border-t border-black/5 hover:bg-surface-container-low/50">
                       <td className="px-4 py-3 whitespace-nowrap text-xs">{dateFmt.format(tx.createdAt)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-xs text-on-surface-variant">
+                        {tx.collectedAt ? dateFmt.format(tx.collectedAt) : '—'}
+                      </td>
                       <td className="px-4 py-3 font-semibold">
                         {customerId ? (
                           <button
@@ -321,30 +369,33 @@ export function Receivables({
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2 flex-wrap">
-                          <Button type="button" variant="secondary" size="sm" onClick={() => setReceiptTx(tx)}>
-                            {t('receivables.viewReceipt')}
-                          </Button>
+                        <TableActionGroup>
+                          <TableIconAction
+                            icon={FileText}
+                            label={t('receivables.viewReceipt')}
+                            tone="neutral"
+                            onClick={() => setReceiptTx(tx)}
+                          />
                           {pendingRow ? (
                             <>
                               {showRegister ? (
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="sm"
-                                  className="gap-1"
+                                <TableIconAction
+                                  icon={UserPlus}
+                                  label={t('receivables.registerCustomer')}
+                                  tone="violet"
                                   disabled={registerBusyId === tx.id}
                                   onClick={() => void handleRegisterCustomer(tx)}
-                                >
-                                  <UserPlus size={14} /> {t('receivables.registerCustomer')}
-                                </Button>
+                                />
                               ) : null}
-                              <Button type="button" size="sm" className="gap-1" onClick={() => setCollectTx(tx)}>
-                                <HandCoins size={14} /> {t('receivables.collect')}
-                              </Button>
+                              <TableIconAction
+                                icon={HandCoins}
+                                label={t('receivables.collect')}
+                                tone="success"
+                                onClick={() => setCollectTx(tx)}
+                              />
                             </>
                           ) : null}
-                        </div>
+                        </TableActionGroup>
                       </td>
                     </tr>
                   );

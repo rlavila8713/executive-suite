@@ -15,6 +15,7 @@ import {
   BarChart3,
   Boxes,
   Warehouse,
+  History,
   Settings,
   Bell,
   Search,
@@ -77,6 +78,7 @@ function useMenuGroups(): MenuGroup[] {
       items: [
         { id: 'warehouse', label: t('nav.warehouse'), icon: Warehouse },
         { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
+        { id: 'stockMovements', label: t('nav.stockMovements'), icon: History },
       ],
     },
     {
