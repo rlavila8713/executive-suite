@@ -8,6 +8,7 @@ import { normalizeStoreLogo } from './storeLogo.js';
 import { ApiError } from './apiError.js';
 import { normalizeProductImageForStore } from './normalizeProductImage.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 
 const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -347,8 +348,8 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
     }
 
     const insertWMove = db.prepare(
-      `INSERT INTO warehouse_movements (id, warehouse_id, product_id, section_id, type, quantity_delta, unit_cost, balance_after, reference_type, reference_id, notes, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO warehouse_movements (id, warehouse_id, product_id, section_id, type, quantity_delta, unit_cost, balance_after, reference_type, reference_id, notes, created_at, created_by, reversed_at, reverses_movement_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const m of data.warehouseMovements ?? []) {
       const row = m as {
@@ -365,6 +366,8 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
         notes: string | null;
         createdAt: number;
         createdBy: string | null;
+        reversedAt?: number | null;
+        reversesMovementId?: string | null;
       };
       insertWMove.run(
         row.id,
@@ -380,11 +383,14 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
         row.notes,
         row.createdAt,
         row.createdBy,
+        row.reversedAt ?? null,
+        row.reversesMovementId ?? null,
       );
     }
 
     if (!data.warehouses?.length) {
       migrateWarehouseSchema(db);
+      migrateExpenseCategoriesSchema(db);
     }
   });
 }

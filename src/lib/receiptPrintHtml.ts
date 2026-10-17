@@ -1,4 +1,5 @@
 import type { SaleReceipt } from '../types';
+import { formatAppDateTime } from './dateFormat';
 
 export type ReceiptPrintLabels = {
   order: string;
@@ -35,10 +36,7 @@ export function buildReceiptPrintHtml(
   labels: ReceiptPrintLabels,
   logoSrc?: string | null,
 ): string {
-  const dateStr = new Date(createdAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const dateStr = formatAppDateTime(createdAt, locale, 'medium');
   const rateStr =
     receipt.taxRatePercent % 1 === 0 ? receipt.taxRatePercent.toFixed(0) : receipt.taxRatePercent.toFixed(2);
   const taxLabel = receipt.tax > 0 ? labels.taxWithRate(rateStr) : labels.tax;

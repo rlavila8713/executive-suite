@@ -25,8 +25,10 @@ const HELP_SECTIONS: HelpSection[] = [
   { id: 'customers', screen: 'customers', groupKey: 'help.groupCatalogMaster', titleKey: 'help.customersTitle', bodyKey: 'help.customersBody' },
   { id: 'warehouse', screen: 'warehouse', groupKey: 'help.groupStock', titleKey: 'help.warehouseTitle', bodyKey: 'help.warehouseBody' },
   { id: 'inventory', screen: 'inventory', groupKey: 'help.groupStock', titleKey: 'help.inventoryTitle', bodyKey: 'help.inventoryBody' },
+  { id: 'stockMovements', screen: 'stockMovements', groupKey: 'help.groupStock', titleKey: 'help.stockMovementsTitle', bodyKey: 'help.stockMovementsBody' },
   { id: 'expenses', screen: 'expenses', groupKey: 'help.groupFinance', titleKey: 'help.expensesTitle', bodyKey: 'help.expensesBody' },
   { id: 'receivables', screen: 'receivables', groupKey: 'help.groupFinance', titleKey: 'help.receivablesTitle', bodyKey: 'help.receivablesBody' },
+  { id: 'payables', screen: 'payables', groupKey: 'help.groupFinance', titleKey: 'help.payablesTitle', bodyKey: 'help.payablesBody' },
   { id: 'reports', screen: 'reports', groupKey: 'help.groupFinance', titleKey: 'help.reportsTitle', bodyKey: 'help.reportsBody' },
   { id: 'settings', screen: 'settings', groupKey: 'help.groupSystem', titleKey: 'help.settingsTitle', bodyKey: 'help.settingsBody' },
 ];

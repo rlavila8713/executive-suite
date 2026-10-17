@@ -29,6 +29,13 @@ import {
   rowToWarehouseStock,
 } from './warehouse.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import {
+  createExpenseCategory,
+  deleteExpenseCategory,
+  listExpenseCategories,
+  renameExpenseCategory,
+} from './expenseCategories.js';
+import { createInventoryConsumptionExpense } from './inventoryConsumption.js';
 import { normalizeInitialStoreStock, rejectDirectStoreStockMutation } from './storeStockPolicy.js';
 import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
@@ -337,8 +344,8 @@ export function registerRoutes(router: import('express').Router): void {
       if (!Number.isFinite(quantity) || quantity <= 0) {
         throw new ApiError(400, 'quantity must be a positive integer', 'ERR_INVALID_RECEIVE_QTY');
       }
-      if (!Number.isFinite(unitCost) || unitCost < 0) {
-        throw new ApiError(400, 'unitCost must be a non-negative number', 'ERR_INVALID_RECEIVE_COST');
+      if (!Number.isFinite(unitCost) || unitCost <= 0) {
+        throw new ApiError(400, 'unitCost must be greater than zero', 'ERR_INVALID_RECEIVE_COST');
       }
       if (!Number.isFinite(price) || price < 0) {
         throw new ApiError(400, 'price must be a non-negative number', 'ERR_INVALID_RECEIVE_PRICE');
@@ -644,7 +651,13 @@ export function registerRoutes(router: import('express').Router): void {
 
       const receiptParsed = existing.receipt_json ? JSON.parse(existing.receipt_json) : null;
       const mixedShape = mixedSaleShape(receiptParsed);
-      const transferOwed = mixedShape === 'cash_transfer' ? transferAmountFromReceipt(receiptParsed) : 0;
+      let transferOwed = mixedShape === 'cash_transfer' ? transferAmountFromReceipt(receiptParsed) : 0;
+      if (transferOwed <= 0 && mixedShape == null) {
+        const pm = (existing.payment_method ?? receiptParsed?.paymentMethod ?? '').toLowerCase();
+        if (pm === 'transfer') {
+          transferOwed = Math.round(Math.abs(existing.amount) * 100) / 100;
+        }
+      }
       const debtPart = mixedShape === 'cash_debt' ? debtAmountFromReceipt(receiptParsed) : 0;
       const pendingReceivable =
         debtRow.sold_as_debt === 1 && debtRow.debt_status === 'pending' && (debtPart > 0 || mixedShape !== 'cash_transfer');
@@ -726,7 +739,7 @@ export function registerRoutes(router: import('express').Router): void {
         if (transferOwed > 0) {
           const payableId = newId();
           const payableReceipt = {
-            reason: 'mixed_reversal_transfer',
+            reason: mixedShape === 'cash_transfer' ? 'mixed_reversal_transfer' : 'transfer_sale_reversal',
             transferAmount: transferOwed,
             originalOrderNumber: existing.order_number,
             originalSaleId: existing.id,
@@ -1125,6 +1138,72 @@ export function registerRoutes(router: import('express').Router): void {
       const r = db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
       if (r.changes === 0) throw new ApiError(404, 'Customer not found');
       res.status(204).send();
+    }),
+  );
+
+  // --- Expense categories ---
+  router.get(
+    '/expense-categories',
+    asyncHandler(async (_req, res) => {
+      res.json(listExpenseCategories(getDb()));
+    }),
+  );
+
+  router.post(
+    '/expense-categories',
+    asyncHandler(async (req, res) => {
+      const name = (req.body as { name?: string }).name ?? '';
+      res.status(201).json(createExpenseCategory(getDb(), name));
+    }),
+  );
+
+  router.patch(
+    '/expense-categories/:id',
+    asyncHandler(async (req, res) => {
+      const name = (req.body as { name?: string }).name ?? '';
+      res.json(renameExpenseCategory(getDb(), req.params.id, name));
+    }),
+  );
+
+  router.delete(
+    '/expense-categories/:id',
+    asyncHandler(async (req, res) => {
+      deleteExpenseCategory(getDb(), req.params.id);
+      res.status(204).send();
+    }),
+  );
+
+  router.post(
+    '/expenses/inventory-consumption',
+    asyncHandler(async (req, res) => {
+      requireWebClientForWarehouse(req);
+      const body = req.body as {
+        productId?: string;
+        quantity?: number;
+        source?: 'store' | 'warehouse';
+        title?: string;
+        date?: string;
+      };
+      if (!body.productId || !body.source) {
+        throw new ApiError(400, 'productId and source required');
+      }
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const operator = getDeviceOperatorName(db, deviceId);
+      const result = createInventoryConsumptionExpense(db, {
+        productId: body.productId,
+        quantity: Math.floor(Number(body.quantity)),
+        source: body.source,
+        title: body.title,
+        date: body.date,
+        createdBy: operator || null,
+      });
+      const expense = db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.expenseId);
+      res.status(201).json({
+        expense: rowToExpense(expense as Parameters<typeof rowToExpense>[0]),
+        movementType: result.movementType,
+        amount: result.amount,
+      });
     }),
   );
 

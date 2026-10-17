@@ -6,6 +6,7 @@ import type {
   ConnectedDevicesPage,
   Customer,
   Expense,
+  ExpenseCategory,
   LicenseInfo,
   LicensePlanId,
   LicenseRequestPayload,
@@ -242,12 +243,29 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ sectionId }),
     }),
-  getWarehouseMovements: (productId?: string) =>
-    request<WarehouseMovement[]>(
-      productId
-        ? `/api/warehouse/movements?productId=${encodeURIComponent(productId)}`
-        : '/api/warehouse/movements',
-    ),
+  getWarehouseMovements: (opts?: {
+    productId?: string;
+    scope?: 'warehouse' | 'store' | 'consumption';
+    types?: WarehouseMovement['type'][];
+    from?: number | string;
+    to?: number | string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (opts?.productId) q.set('productId', opts.productId);
+    if (opts?.scope) q.set('scope', opts.scope);
+    if (opts?.types?.length) q.set('types', opts.types.join(','));
+    if (opts?.from != null) q.set('from', String(opts.from));
+    if (opts?.to != null) q.set('to', String(opts.to));
+    if (opts?.limit != null) q.set('limit', String(opts.limit));
+    const qs = q.toString();
+    return request<WarehouseMovement[]>(`/api/warehouse/movements${qs ? `?${qs}` : ''}`);
+  },
+  reverseWarehouseEntry: (movementId: string, body: { quantity?: number; reason: string }) =>
+    request<WarehouseMovement>(`/api/warehouse/movements/${encodeURIComponent(movementId)}/reverse`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getWarehouseSummary: () => request<WarehouseSummaryReport>('/api/warehouse/reports/summary'),
 
   getTransactions: () => request<Transaction[]>('/api/transactions'),
@@ -279,6 +297,27 @@ export const api = {
     }),
 
   getExpenses: () => request<Expense[]>('/api/expenses'),
+  getExpenseCategories: () => request<ExpenseCategory[]>('/api/expense-categories'),
+  createExpenseCategory: (name: string) =>
+    request<ExpenseCategory>('/api/expense-categories', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameExpenseCategory: (id: string, name: string) =>
+    request<ExpenseCategory>(`/api/expense-categories/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteExpenseCategory: (id: string) =>
+    request<void>(`/api/expense-categories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  createInventoryConsumptionExpense: (body: {
+    productId: string;
+    quantity: number;
+    source: 'store' | 'warehouse';
+    title?: string;
+    date?: string;
+  }) =>
+    request<{ expense: Expense; movementType: string; amount: number }>('/api/expenses/inventory-consumption', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   createExpense: (row: Omit<Expense, 'id'>) =>
     request<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(row) }),
   updateExpense: (id: string, updates: Partial<Expense>) =>

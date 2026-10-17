@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { mapMutationError } from '../lib/mutationErrors';
 import { ImagePicker } from '../components/ImagePicker';
@@ -296,20 +297,23 @@ export function Products({
                     </span>
                   </td>
                   <td className="py-4 px-6 text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => { setEditingProduct(product); setIsModalOpen(true); }}>
-                        <Edit2 size={14} />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="text-error hover:bg-error/10"
+                    <TableActionGroup>
+                      <TableIconAction
+                        icon={Edit2}
+                        label={t('common.edit')}
+                        tone="brand"
+                        onClick={() => {
+                          setEditingProduct(product);
+                          setIsModalOpen(true);
+                        }}
+                      />
+                      <TableIconAction
+                        icon={Trash2}
+                        label={t('common.delete')}
+                        tone="danger"
                         onClick={() => setDeletingProduct(product)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
+                      />
+                    </TableActionGroup>
                   </td>
                 </tr>
               ))}
