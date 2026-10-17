@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Plus, Edit2, Trash2, MapPin } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import type { Product, ProductLocation } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
@@ -128,29 +129,24 @@ export function Locations({ locations, products, globalSearch = '', onAdd, onUpd
                   <td className="py-4 px-6 font-bold text-primary">{l.name}</td>
                   <td className="py-4 px-6 text-right text-sm text-secondary">{usageById.get(l.id) ?? 0}</td>
                   <td className="py-4 px-6 text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
+                    <TableActionGroup>
+                      <TableIconAction
+                        icon={Edit2}
+                        label={t('common.edit')}
+                        tone="brand"
                         onClick={() => {
                           setEditing(l);
                           setFormError(null);
                           setModalOpen(true);
                         }}
-                      >
-                        <Edit2 size={14} />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="text-error"
+                      />
+                      <TableIconAction
+                        icon={Trash2}
+                        label={t('common.delete')}
+                        tone="danger"
                         onClick={() => setDeleting(l)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
+                      />
+                    </TableActionGroup>
                   </td>
                 </tr>
               ))}

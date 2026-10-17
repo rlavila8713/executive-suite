@@ -9,6 +9,7 @@ import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
 import { persistDatabaseAtomic } from './persistDb.js';
 import { migrateLegacyProductPhotoLayout } from './legacyImageLayout.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
@@ -163,6 +164,7 @@ export async function initDb(): Promise<void> {
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
     migrateWarehouseSchema(sqliteStore);
+    migrateExpenseCategoriesSchema(sqliteStore);
     ensureSeeded(sqliteStore);
     ensureLicenseRow(sqliteStore);
     migrateLegacyProductPhotoLayout(sqliteStore);

@@ -9,6 +9,7 @@ import { cn } from '../lib/utils';
 import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import { mapMutationError } from '../lib/mutationErrors';
+import { formatAppDateTime } from '../lib/dateFormat';
 
 interface CashProps {
   cashSessions: CashSession[];
@@ -280,17 +281,11 @@ export function Cash({
                     className={cn('border-t border-black/5', hasAnomalies && 'bg-amber-50/60 dark:bg-amber-950/20')}
                   >
                     <td className="px-4 py-2 whitespace-nowrap">
-                      {new Date(s.openedAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
-                        dateStyle: 'short',
-                        timeStyle: 'short',
-                      })}
+                      {formatAppDateTime(s.openedAt, locale, 'short')}
                     </td>
                     <td className="px-4 py-2 whitespace-nowrap">
                       {s.closedAt
-                        ? new Date(s.closedAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
-                            dateStyle: 'short',
-                            timeStyle: 'short',
-                          })
+                        ? formatAppDateTime(s.closedAt, locale, 'short')
                         : '—'}
                     </td>
                     <td className="px-4 py-2 text-right">${s.openingCash.toFixed(2)}</td>

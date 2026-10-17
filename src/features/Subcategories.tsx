@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Plus, Edit2, Trash2, Layers } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import type { Product, ProductCategory, ProductSubcategory } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
@@ -182,30 +183,27 @@ export function Subcategories({
                     <td className="py-4 px-6 font-mono text-sm">{s.code}</td>
                     <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{n}</td>
                     <td className="py-4 px-6 text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                      <TableActionGroup>
+                        <TableIconAction
+                          icon={Edit2}
+                          label={t('common.edit')}
+                          tone="brand"
                           onClick={() => {
                             setEditing(s);
                             setFormError(null);
                             setModalOpen(true);
                           }}
-                        >
-                          <Edit2 size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-error hover:bg-error/10"
+                        />
+                        <TableIconAction
+                          icon={Trash2}
+                          label={t('common.delete')}
+                          tone="danger"
                           onClick={() => {
                             setFormError(null);
                             setDeleting(s);
                           }}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
+                        />
+                      </TableActionGroup>
                     </td>
                   </tr>
                 );

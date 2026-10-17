@@ -61,7 +61,21 @@ export function migrateWarehouseSchema(db: SqliteStore): void {
     CREATE INDEX IF NOT EXISTS idx_warehouse_movements_warehouse ON warehouse_movements(warehouse_id, created_at);
   `);
 
+  ensureWarehouseMovementReversalColumns(db);
   seedDefaultWarehouseAndStock(db);
+}
+
+function ensureWarehouseMovementReversalColumns(db: SqliteStore): void {
+  const cols = db.prepare('PRAGMA table_info(warehouse_movements)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'reversed_at')) {
+    db.exec(`ALTER TABLE warehouse_movements ADD COLUMN reversed_at INTEGER`);
+  }
+  if (!cols.some((c) => c.name === 'reverses_movement_id')) {
+    db.exec(`ALTER TABLE warehouse_movements ADD COLUMN reverses_movement_id TEXT`);
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_warehouse_movements_reverses ON warehouse_movements(reverses_movement_id)`,
+  );
 }
 
 function ensureWarehouseCostColumn(db: SqliteStore): void {

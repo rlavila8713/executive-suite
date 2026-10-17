@@ -63,6 +63,18 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code.startsWith('ERR_WAREHOUSE_SECTION_IN_USE')) return mapWarehouseSectionInUse(code, t);
   if (code === 'ERR_DUPLICATE_WAREHOUSE_SECTION') return t('errors.duplicateWarehouseSection');
   if (code === 'ERR_STORE_STOCK_DIRECT_EDIT') return t('errors.storeStockDirectEdit');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_REASON') return t('stockMovements.reversalReasonRequired');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_QTY') return t('stockMovements.reversalInvalidQty');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_NOT_ENTRY') return t('stockMovements.reversalNotEntry');
+  if (code === 'ERR_WAREHOUSE_ENTRY_ALREADY_REVERSED') return t('stockMovements.reversalAlreadyDone');
+  if (code === 'ERR_DUPLICATE_EXPENSE_CATEGORY') return t('errors.duplicateExpenseCategory');
+  if (code === 'ERR_EXPENSE_CATEGORY_SYSTEM') return t('errors.expenseCategorySystem');
+  if (code.startsWith('ERR_EXPENSE_CATEGORY_IN_USE')) return t('errors.expenseCategoryInUse');
+  if (code === 'ERR_INVALID_CONSUMPTION_QTY') return t('expenses.consumptionSelectProduct');
+  if (code.startsWith('ERR_WAREHOUSE_REVERSAL_EXCEEDS')) {
+    const max = code.split('|')[1] ?? '0';
+    return t('stockMovements.reversalExceeds', { max });
+  }
   return code;
 }
 

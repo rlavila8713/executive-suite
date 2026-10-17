@@ -13,6 +13,7 @@ export type Screen =
   | 'reconciliation'
   | 'pos'
   | 'inventory'
+  | 'stockMovements'
   | 'expenses'
   | 'receivables'
   | 'payables'
@@ -72,7 +73,14 @@ export interface WarehouseStock {
   updatedAt: number | null;
 }
 
-export type WarehouseMovementType = 'ENTRY' | 'TRANSFER_TO_STORE' | 'ADJUSTMENT' | 'SECTION_REASSIGN';
+export type WarehouseMovementType =
+  | 'ENTRY'
+  | 'TRANSFER_TO_STORE'
+  | 'ADJUSTMENT'
+  | 'SECTION_REASSIGN'
+  | 'REVERSAL'
+  | 'EXPENSE_STORE'
+  | 'EXPENSE_WAREHOUSE';
 
 export interface WarehouseMovement {
   id: string;
@@ -88,6 +96,12 @@ export interface WarehouseMovement {
   notes: string | null;
   createdAt: number;
   createdBy: string | null;
+  reversedAt?: number | null;
+  reversesMovementId?: string | null;
+  reversedQuantity?: number;
+  reversibleQuantity?: number;
+  productName?: string;
+  productSku?: string;
 }
 
 export interface WarehouseSummaryReport {
@@ -269,6 +283,14 @@ export interface Expense {
   date: string;
   /** System-generated expenses (e.g. license payments) cannot be edited or deleted. */
   locked?: boolean;
+}
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  code: string;
+  isSystem: boolean;
+  createdAt: number;
 }
 
 export type LicensePlanId = 'monthly' | 'quarterly' | 'annual';
