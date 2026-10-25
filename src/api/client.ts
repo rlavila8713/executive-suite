@@ -1,4 +1,9 @@
 import type {
+  AppPermission,
+  AppRole,
+  AppUser,
+  DeviceAccessContext,
+  OperatorOption,
   AppSettings,
   CashSession,
   CheckoutPayload,
@@ -24,6 +29,7 @@ import type {
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
 import { getDeviceId } from '../lib/deviceId';
+import { getAuthToken } from '../auth/token';
 
 export class ApiConnectionError extends Error {
   constructor(message = 'Cannot reach local API server') {
@@ -52,6 +58,7 @@ export type HealthResponse = {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  const token = getAuthToken();
   try {
     res = await fetch(getApiUrl(path), {
       ...init,
@@ -59,6 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         'Content-Type': 'application/json',
         'X-Device-Id': getDeviceId(),
         'X-Client-Kind': 'web',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init?.headers,
       },
     });
@@ -435,9 +443,63 @@ export const api = {
   },
   revokeConnectedDevice: (deviceId: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' }),
-  assignDeviceOperator: (deviceId: string, operatorName: string) =>
+  assignDeviceOperator: (deviceId: string, input: { operatorId?: string; operatorName?: string }) =>
     request<ConnectedDevice>(`/api/devices/${encodeURIComponent(deviceId)}/operator`, {
       method: 'PATCH',
-      body: JSON.stringify({ operatorName }),
+      body: JSON.stringify(input),
+    }),
+
+  getDeviceAccess: () => request<DeviceAccessContext>('/api/device/access'),
+
+  getAuthStatus: () =>
+    request<{ loginRequired: boolean; needsBootstrap: boolean; storeName: string }>('/api/auth/status'),
+  getAuthSession: () =>
+    request<{
+      authenticated: boolean;
+      loginRequired: boolean;
+      needsBootstrap?: boolean;
+      access?: DeviceAccessContext;
+    }>('/api/auth/session'),
+  login: (username: string, password: string) =>
+    request<{ token: string; expiresAt: number; access: DeviceAccessContext }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  bootstrapAuth: (username: string, password: string) =>
+    request<void>('/api/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  updateAuthProfile: (body: { displayName?: string; username?: string | null }) =>
+    request<AppUser>('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+  changePassword: (password: string, keepSession = true) =>
+    request<void>('/api/auth/password', {
+      method: 'PATCH',
+      body: JSON.stringify({ password, keepSession }),
+    }),
+  setUserPassword: (userId: string, password: string) =>
+    request<void>(`/api/users/${encodeURIComponent(userId)}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  listRoles: () => request<AppRole[]>('/api/roles'),
+  listPermissions: () => request<AppPermission[]>('/api/permissions'),
+  updateRolePermissions: (roleKey: string, permissionKeys: string[]) =>
+    request<AppRole>(`/api/roles/${encodeURIComponent(roleKey)}/permissions`, {
+      method: 'PATCH',
+      body: JSON.stringify({ permissionKeys }),
+    }),
+  listOperators: () => request<OperatorOption[]>('/api/operators'),
+  listUsers: () => request<AppUser[]>('/api/users'),
+  createUser: (body: { displayName: string; roleKey: string; username?: string | null }) =>
+    request<AppUser>('/api/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateUser: (
+    userId: string,
+    body: { displayName?: string; roleKey?: string; active?: boolean; username?: string | null },
+  ) =>
+    request<AppUser>(`/api/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }),
 };

@@ -19,6 +19,7 @@ export type Screen =
   | 'payables'
   | 'reports'
   | 'help'
+  | 'users'
   | 'settings';
 
 export type ProductStatus = 'active' | 'inactive' | 'pending';
@@ -232,6 +233,7 @@ export interface Transaction {
   paymentMethod?: PaymentMethod;
   /** Seller assigned to the terminal that created this sale (immutable snapshot). */
   operatorName?: string;
+  operatorId?: string;
   /** Device id that created this sale (audit). */
   sourceDeviceId?: string;
   /** Sale registered as customer debt (accounts receivable). */
@@ -336,6 +338,7 @@ export interface ConnectedDevice {
   revokedAt: number | null;
   /** Display name assigned by the store (not editable from the mobile app). */
   operatorName: string;
+  operatorId: string | null;
   online: boolean;
   isCurrent: boolean;
 }
@@ -345,6 +348,61 @@ export interface ConnectedDevicesPage {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export type AppRoleKey = 'manager' | 'seller';
+
+export interface AppUser {
+  id: string;
+  displayName: string;
+  username: string | null;
+  active: boolean;
+  roleKey: AppRoleKey;
+  roleName: string;
+  operatorId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AppRole {
+  id: string;
+  key: AppRoleKey;
+  name: string;
+  system: boolean;
+  permissionKeys: string[];
+}
+
+export type PermissionGroupId =
+  | 'sales'
+  | 'cash'
+  | 'inventory'
+  | 'warehouse'
+  | 'catalog'
+  | 'reports'
+  | 'administration';
+
+export interface AppPermission {
+  key: string;
+  description: string;
+  scope: 'web' | 'mobile' | 'both';
+  group: PermissionGroupId;
+}
+
+export interface OperatorOption {
+  id: string;
+  displayName: string;
+  userId: string;
+  roleKey: AppRoleKey;
+  active: boolean;
+}
+
+export interface DeviceAccessContext {
+  deviceId: string;
+  operator: { id: string; displayName: string } | null;
+  user: { id: string; displayName: string; username: string | null; roleKey: AppRoleKey } | null;
+  permissions: string[];
+  mobileModules: string[];
+  auth: { mode: 'device' | 'session'; loginRequired: boolean };
 }
 
 /** Single-row app configuration stored locally (IndexedDB). */
@@ -377,6 +435,7 @@ export interface AppSettings {
   managerTitle: string;
   /** UI language; persisted locally. */
   locale: AppLocale;
+  authLoginRequired?: boolean;
 }
 
 export type CheckoutPayload = {
