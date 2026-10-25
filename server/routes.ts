@@ -58,18 +58,24 @@ import { ApiError } from './apiError.js';
 import { assertWebAdminClient } from './adminGuard.js';
 import { migrateEmbeddedProductImagesToFiles } from './migrateProductImages.js';
 import {
-  getDeviceOperatorName,
   inferClientKind,
   getConnectedDevice,
   listConnectedDevices,
   revokeConnectedDevice,
-  setDeviceOperatorName,
 } from './connectedDevices.js';
+import { registerAuthRoutes } from './authRoutes.js';
+import { registerRbacRoutes } from './rbacRoutes.js';
+import { assertDevicePermission, getOperatorBindingForRequest, setLoginRequired } from './auth.js';
+import {
+  deviceOperatorDisplayName,
+  getOperatorForDevice,
+  setDeviceOperatorAssignment,
+} from './rbac.js';
 import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesCheckout.js';
 import { debtAmountFromReceipt, mixedSaleShape, transferAmountFromReceipt } from './mixedReversal.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status, operator_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export { ApiError } from './apiError.js';
 
@@ -353,7 +359,7 @@ export function registerRoutes(router: import('express').Router): void {
 
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const result = receiveProductToWarehouse(
         db,
         req.params.id,
@@ -547,6 +553,7 @@ export function registerRoutes(router: import('express').Router): void {
         typeof body.customerId === 'string' ? body.customerId : null,
         body.soldAsPayable ? 1 : 0,
         typeof body.payableStatus === 'string' ? body.payableStatus : null,
+        typeof body.operatorId === 'string' ? body.operatorId : null,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -713,6 +720,7 @@ export function registerRoutes(router: import('express').Router): void {
           (existing as { customer_id?: string | null }).customer_id ?? null,
           0,
           null,
+          (existing as { operator_id?: string | null }).operator_id ?? null,
         );
 
         if (pendingReceivable) {
@@ -764,6 +772,7 @@ export function registerRoutes(router: import('express').Router): void {
             (existing as { customer_id?: string | null }).customer_id ?? null,
             1,
             'pending',
+            (existing as { operator_id?: string | null }).operator_id ?? null,
           );
         }
       });
@@ -805,7 +814,14 @@ export function registerRoutes(router: import('express').Router): void {
         if (c) customerId = c.id;
       }
       const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
-      const operatorName = deviceId ? getDeviceOperatorName(db, deviceId) : '';
+      if (clientKind === 'mobile') {
+        assertDevicePermission(db, deviceId, 'sales.checkout', clientKind, req);
+      }
+      const operatorBinding = deviceId
+        ? getOperatorBindingForRequest(db, deviceId, req)
+        : { operatorId: null as string | null, operatorName: '' };
+      const operatorName = operatorBinding.operatorName;
+      const operatorId = operatorBinding.operatorId;
       if (clientKind === 'mobile' && !operatorName) {
         throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
       }
@@ -821,7 +837,7 @@ export function registerRoutes(router: import('express').Router): void {
         checkout = normalizeMixedSaleReceipt(body.receipt as import('./salesCheckout.js').SaleReceiptInput, taxRate, {
           isDebt: isDebtFull,
           isPartialDebt: body.isPartialDebt === true,
-          clientKind,
+          clientKind: clientKind === 'mobile' ? 'mobile' : 'web',
         });
       } catch (e) {
         if (e instanceof SaleCheckoutValidationError) {
@@ -856,6 +872,7 @@ export function registerRoutes(router: import('express').Router): void {
         receipt,
         paymentMethod,
         operatorName: operatorName || undefined,
+        operatorId: operatorId ?? undefined,
         sourceDeviceId: deviceId || undefined,
         soldAsDebt,
         debtStatus: soldAsDebt ? ('pending' as const) : undefined,
@@ -908,6 +925,7 @@ export function registerRoutes(router: import('express').Router): void {
           customerId,
           0,
           null,
+          operatorId,
         );
 
         for (const line of body.receipt!.lines) {
@@ -1189,7 +1207,7 @@ export function registerRoutes(router: import('express').Router): void {
       }
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const result = createInventoryConsumptionExpense(db, {
         productId: body.productId,
         quantity: Math.floor(Number(body.quantity)),
@@ -1379,6 +1397,9 @@ export function registerRoutes(router: import('express').Router): void {
           managerTitle: 'manager_title',
           locale: 'locale',
         };
+        if (body.authLoginRequired !== undefined) {
+          setLoginRequired(db, body.authLoginRequired === true);
+        }
         const fields: string[] = [];
         const values: unknown[] = [];
         for (const [key, col] of Object.entries(map)) {
@@ -1423,6 +1444,9 @@ export function registerRoutes(router: import('express').Router): void {
     asyncHandler(async (req, res) => {
       const body = requireBody<{ openingCash: number }>(req.body, ['openingCash']);
       const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
+      assertDevicePermission(db, deviceId, 'cash.session', clientKind, req);
       const openCount = db
         .prepare('SELECT COUNT(*) AS c FROM cash_sessions WHERE closed_at IS NULL')
         .get() as { c: number };
@@ -1449,6 +1473,9 @@ export function registerRoutes(router: import('express').Router): void {
     asyncHandler(async (req, res) => {
       const body = requireBody<{ closingCash: number }>(req.body, ['closingCash']);
       const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
+      assertDevicePermission(db, deviceId, 'cash.session', clientKind, req);
       const s = db.prepare('SELECT * FROM cash_sessions WHERE id = ?').get(req.params.id) as
         | Parameters<typeof rowToCashSession>[0]
         | undefined;
@@ -1617,10 +1644,11 @@ export function registerRoutes(router: import('express').Router): void {
       }
       const targetId = req.params.deviceId?.trim();
       if (!targetId) throw new ApiError(400, 'Device id required');
-      const body = req.body as { operatorName?: string };
-      const operatorName = typeof body.operatorName === 'string' ? body.operatorName : '';
-      const ok = setDeviceOperatorName(db, targetId, operatorName);
-      if (!ok) throw new ApiError(404, 'Device not found', 'ERR_DEVICE_NOT_FOUND');
+      const body = req.body as { operatorName?: string; operatorId?: string };
+      setDeviceOperatorAssignment(db, targetId, {
+        operatorId: typeof body.operatorId === 'string' ? body.operatorId : undefined,
+        operatorName: typeof body.operatorName === 'string' ? body.operatorName : undefined,
+      });
       const updated = getConnectedDevice(db, targetId, req.header('X-Device-Id')?.trim());
       if (!updated) throw new ApiError(404, 'Device not found', 'ERR_DEVICE_NOT_FOUND');
       res.json(updated);
@@ -1781,6 +1809,8 @@ export function registerRoutes(router: import('express').Router): void {
     }),
   );
 
+  registerAuthRoutes(router);
+  registerRbacRoutes(router);
   registerCatalogRoutes(router);
   registerWarehouseRoutes(router);
 }

@@ -10,8 +10,8 @@ import { normalizeProductImageForStore } from './normalizeProductImage.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
 import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status, operator_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // Re-export validation types - minimal server-side validation mirroring client parseBackupJson
 
@@ -171,6 +171,7 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
         row.customerId ?? null,
         row.soldAsPayable ? 1 : 0,
         row.payableStatus ?? null,
+        typeof row.operatorId === 'string' ? row.operatorId : null,
       );
     }
 
