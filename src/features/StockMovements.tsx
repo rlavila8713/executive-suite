@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { History, Undo2 } from 'lucide-react';
+import { History } from 'lucide-react';
 import { Card, Input, Button } from '../components/ui';
-import { TableIconAction } from '../components/TableIconAction';
+import { MovementQuantityCell } from '../components/MovementQuantityCell';
+import { MovementReversalActions } from '../components/MovementReversalActions';
+import { MovementReversalHistoryModal } from '../components/MovementReversalHistoryModal';
 import { ReverseWarehouseEntryModal } from '../components/ReverseWarehouseEntryModal';
 import type { Product, WarehouseMovement } from '../types';
 import { api } from '../api/client';
@@ -11,8 +13,10 @@ import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import {
   dateRangeForPreset,
-  movementDisplayQuantity,
-  movementTypeLabelKey,
+  movementCanBeReversed,
+  movementListTypeLabelKey,
+  movementReversibleQuantity,
+  reversalVisibleForPerspective,
   toInputDate,
   type StockMovementDatePreset,
 } from '../lib/stockMovements';
@@ -41,6 +45,7 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reversing, setReversing] = useState<WarehouseMovement | null>(null);
+  const [reversalHistoryFor, setReversalHistoryFor] = useState<WarehouseMovement | null>(null);
   const [reversalsOnly, setReversalsOnly] = useState(false);
   const [consumptionOnly, setConsumptionOnly] = useState(false);
 
@@ -55,9 +60,11 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
     setLoading(true);
     setLoadError(null);
     try {
-      const scope = consumptionOnly ? 'consumption' : tab === 'store' ? 'store' : 'warehouse';
+      const scope =
+        consumptionOnly && !reversalsOnly ? 'consumption' : tab === 'store' ? 'store' : 'warehouse';
       const data = await api.getWarehouseMovements({
         scope,
+        types: reversalsOnly ? ['REVERSAL'] : undefined,
         from: range.start,
         to: range.end,
         limit: 5000,
@@ -69,7 +76,7 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
     } finally {
       setLoading(false);
     }
-  }, [tab, range.start, range.end, consumptionOnly, t]);
+  }, [tab, range.start, range.end, consumptionOnly, reversalsOnly, t]);
 
   useEffect(() => {
     void fetchMovements();
@@ -79,8 +86,11 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
 
   const visible = useMemo(() => {
     return rows.filter((m) => {
+      if (!reversalVisibleForPerspective(m, perspective)) return false;
       if (reversalsOnly && m.type !== 'REVERSAL') return false;
-      if (consumptionOnly && m.type !== 'EXPENSE_STORE' && m.type !== 'EXPENSE_WAREHOUSE') return false;
+      if (consumptionOnly && !reversalsOnly && m.type !== 'EXPENSE_STORE' && m.type !== 'EXPENSE_WAREHOUSE') {
+        return false;
+      }
       const p = productById.get(m.productId);
       const name = m.productName ?? p?.name ?? '';
       const sku = m.productSku ?? p?.sku ?? '';
@@ -88,7 +98,7 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
       if (!rowMatchesSearch(search, [label]) || !rowMatchesSearch(globalSearch, [label])) return false;
       return true;
     });
-  }, [rows, search, globalSearch, productById, reversalsOnly, consumptionOnly]);
+  }, [rows, search, globalSearch, productById, reversalsOnly, consumptionOnly, perspective]);
 
   const { pageItems, page, setPage, totalPages, total, pageSize } = usePagination(visible);
 
@@ -182,7 +192,13 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setReversalsOnly((v) => !v)}
+              onClick={() => {
+                setReversalsOnly((v) => {
+                  const next = !v;
+                  if (next) setConsumptionOnly(false);
+                  return next;
+                });
+              }}
               className={
                 reversalsOnly
                   ? 'px-3 py-1.5 rounded-full text-xs font-bold bg-error/15 text-error ring-1 ring-error/30'
@@ -193,7 +209,13 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
             </button>
             <button
               type="button"
-              onClick={() => setConsumptionOnly((v) => !v)}
+              onClick={() => {
+                setConsumptionOnly((v) => {
+                  const next = !v;
+                  if (next) setReversalsOnly(false);
+                  return next;
+                });
+              }}
               className={
                 consumptionOnly
                   ? 'px-3 py-1.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-900 dark:text-amber-200 ring-1 ring-amber-500/30'
@@ -210,7 +232,9 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
         ) : loading ? (
           <p className="p-6 text-sm text-on-surface-variant text-center">{t('stockMovements.loading')}</p>
         ) : visible.length === 0 ? (
-          <p className="p-6 text-sm text-on-surface-variant text-center">{t('stockMovements.empty')}</p>
+          <p className="p-6 text-sm text-on-surface-variant text-center">
+            {reversalsOnly ? t('stockMovements.emptyReversals') : t('stockMovements.empty')}
+          </p>
         ) : (
           <>
             <div className="overflow-x-auto">
@@ -222,61 +246,51 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
                     <th className="py-3 px-4">{t('warehouse.colMovementProduct')}</th>
                     <th className="py-3 px-4 text-right">{t('warehouse.colMovementDelta')}</th>
                     <th className="py-3 px-4 text-right">{t('stockMovements.colCost')}</th>
-                    {tab === 'warehouse' ? (
+                    {/* {tab === 'warehouse' ? (
                       <th className="py-3 px-4 text-right">{t('warehouse.colMovementBalance')}</th>
-                    ) : null}
+                    ) : null} */}
                     <th className="py-3 px-4">{t('warehouse.colMovementOperator')}</th>
-                    {tab === 'warehouse' ? (
-                      <th className="py-3 px-4 text-right">{t('common.actions')}</th>
-                    ) : null}
+                    <th className="py-3 px-4 text-right">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pageItems.map((m) => {
                     const p = productById.get(m.productId);
-                    const qty = movementDisplayQuantity(m, perspective);
-                    const reversible = m.reversibleQuantity ?? (m.type === 'ENTRY' ? m.quantityDelta : 0);
-                    const canReverse =
-                      tab === 'warehouse' &&
-                      m.type === 'ENTRY' &&
-                      !m.reversedAt &&
-                      reversible > 0;
+                    const reversible = movementReversibleQuantity(m);
+                    const canReverse = movementCanBeReversed(m) && !m.reversedAt && reversible > 0;
                     return (
                       <tr key={m.id} className="border-b border-black/5">
                         <td className="py-3 px-4 text-xs whitespace-nowrap">
                           {formatAppDateTime(m.createdAt, locale, 'short')}
                         </td>
-                        <td className="py-3 px-4">{t(movementTypeLabelKey(m.type))}</td>
+                        <td className="py-3 px-4">
+                          <div>{t(movementListTypeLabelKey(m))}</div>
+                          {m.type === 'REVERSAL' && m.notes?.trim() ? (
+                            <div className="text-xs text-on-surface-variant mt-0.5 max-w-[14rem]">
+                              {m.notes.trim()}
+                            </div>
+                          ) : null}
+                        </td>
                         <td className="py-3 px-4">
                           <div className="font-medium">{m.productName ?? p?.name ?? m.productId}</div>
                           <div className="text-xs text-on-surface-variant">{m.productSku ?? p?.sku}</div>
                         </td>
-                        <td className="py-3 px-4 text-right font-mono">
-                          {qty > 0 ? `+${qty}` : qty}
+                        <td className="py-3 px-4 text-right">
+                          <MovementQuantityCell movement={m} perspective={perspective} />
                         </td>
                         <td className="py-3 px-4 text-right">{formatMoney(m.unitCost)}</td>
-                        {tab === 'warehouse' ? (
+                        {/* {tab === 'warehouse' ? (
                           <td className="py-3 px-4 text-right">{m.balanceAfter ?? '—'}</td>
-                        ) : null}
+                        ) : null} */}
                         <td className="py-3 px-4 text-xs text-on-surface-variant">{m.createdBy ?? '—'}</td>
-                        {tab === 'warehouse' ? (
-                          <td className="py-3 px-4 text-right">
-                            {canReverse ? (
-                              <TableIconAction
-                                icon={Undo2}
-                                label={t('stockMovements.reversalAction')}
-                                tone="danger"
-                                onClick={() => setReversing(m)}
-                              />
-                            ) : m.type === 'ENTRY' && m.reversedAt ? (
-                              <span className="text-[10px] text-on-surface-variant uppercase font-bold">
-                                {t('stockMovements.reversalDoneLabel')}
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                        ) : null}
+                        <td className="py-3 px-4 text-right">
+                          <MovementReversalActions
+                            movement={m}
+                            canReverse={canReverse}
+                            onReverse={() => setReversing(m)}
+                            onHistory={() => setReversalHistoryFor(m)}
+                          />
+                        </td>
                       </tr>
                     );
                   })}
@@ -295,6 +309,10 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
           void fetchMovements();
           onAfterMutation?.();
         }}
+      />
+      <MovementReversalHistoryModal
+        movement={reversalHistoryFor}
+        onClose={() => setReversalHistoryFor(null)}
       />
     </div>
   );

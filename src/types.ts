@@ -99,6 +99,7 @@ export interface WarehouseMovement {
   createdBy: string | null;
   reversedAt?: number | null;
   reversesMovementId?: string | null;
+  reversesMovementType?: WarehouseMovementType | null;
   reversedQuantity?: number;
   reversibleQuantity?: number;
   productName?: string;

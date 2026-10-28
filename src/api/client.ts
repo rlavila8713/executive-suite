@@ -274,6 +274,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  getWarehouseMovementReversals: (movementId: string) =>
+    request<WarehouseMovement[]>(
+      `/api/warehouse/movements/${encodeURIComponent(movementId)}/reversals`,
+    ),
   getWarehouseSummary: () => request<WarehouseSummaryReport>('/api/warehouse/reports/summary'),
 
   getTransactions: () => request<Transaction[]>('/api/transactions'),
