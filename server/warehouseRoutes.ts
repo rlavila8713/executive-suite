@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { getDb, newId, rowToProduct } from './db.js';
 import { ApiError } from './routes.js';
-import { getDeviceOperatorName } from './connectedDevices.js';
+import { deviceOperatorDisplayName } from './rbac.js';
 import {
   getDefaultWarehouse,
   reassignWarehouseSection,
@@ -245,7 +245,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       if (!sectionId) throw new ApiError(400, 'sectionId required');
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const stock = reassignWarehouseSection(db, req.params.productId, sectionId, operator || null);
       res.json(stock);
     }),
@@ -266,7 +266,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       }
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const result = transferWarehouseToStore(db, req.params.productId, quantity, price, operator || null);
       res.json({
         product: rowToProduct(result.product as Parameters<typeof rowToProduct>[0]),
@@ -338,7 +338,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       const quantity = body.quantity != null ? Math.floor(Number(body.quantity)) : 0;
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const reversal = reverseWarehouseMovement(db, req.params.id, quantity, reason, operator || null);
       res.status(201).json(reversal);
     }),

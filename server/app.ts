@@ -7,6 +7,12 @@ import { getLanAddresses } from './lan.js';
 import { getDb } from './db.js';
 import { isLicenseActive, registerDevice } from './license.js';
 import { isDeviceRevoked, touchConnectedDevice } from './connectedDevices.js';
+import {
+  bearerTokenFromRequest,
+  getAuthSettings,
+  isAuthPublicPath,
+  resolveSessionUserId,
+} from './auth.js';
 
 const LICENSE_EXEMPT_PATHS = new Set([
   '/license',
@@ -84,6 +90,16 @@ export function createApp(): Express {
           return;
         }
       }
+
+      const authSettings = getAuthSettings(db);
+      if (authSettings.loginRequired && !isAuthPublicPath(apiPath)) {
+        const sessionUser = resolveSessionUserId(db, bearerTokenFromRequest(req));
+        if (!sessionUser) {
+          res.status(401).json({ error: 'Login required', code: 'ERR_LOGIN_REQUIRED' });
+          return;
+        }
+      }
+
       next();
     } catch (err) {
       next(err);

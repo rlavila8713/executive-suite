@@ -13,6 +13,7 @@ export type ConnectedDevice = {
   lastSeenAt: number;
   revokedAt: number | null;
   operatorName: string;
+  operatorId: string | null;
   online: boolean;
   isCurrent: boolean;
 };
@@ -41,6 +42,7 @@ type ConnectedDeviceRow = {
   last_seen_at: number;
   revoked_at: number | null;
   operator_name?: string | null;
+  operator_id?: string | null;
 };
 
 export function ensureConnectedDevicesSchema(db: SqliteStore): void {
@@ -151,6 +153,7 @@ function mapConnectedDeviceRow(
     lastSeenAt: row.last_seen_at,
     revokedAt: row.revoked_at,
     operatorName: (row.operator_name ?? '').trim(),
+    operatorId: row.operator_id?.trim() ? row.operator_id.trim() : null,
     online: row.revoked_at == null && now - row.last_seen_at <= DEVICE_ONLINE_THRESHOLD_MS,
     isCurrent: currentDeviceId != null && row.device_id === currentDeviceId,
   };
@@ -165,7 +168,7 @@ export function getConnectedDevice(
   ensureConnectedDevicesSchema(db);
   const row = db
     .prepare(
-      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name
+      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name, operator_id
        FROM connected_devices
        WHERE device_id = ?`,
     )
@@ -205,7 +208,7 @@ export function listConnectedDevices(
 
   const rows = db
     .prepare(
-      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name
+      `SELECT device_id, client_kind, user_agent, first_seen_at, last_seen_at, revoked_at, operator_name, operator_id
        FROM connected_devices
        ${whereClause}
        ORDER BY revoked_at IS NOT NULL, last_seen_at DESC

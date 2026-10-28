@@ -32,6 +32,14 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_DEVICE_NOT_FOUND') return t('settings.serverDeviceDisconnectErr');
   if (code === 'ERR_OPERATOR_REQUIRED') return t('errors.operatorRequired');
   if (code === 'ERR_OPERATOR_ASSIGN_FORBIDDEN') return t('errors.operatorAssignForbidden');
+  if (code === 'ERR_PERMISSION_DENIED') return t('errors.permissionDenied');
+  if (code === 'ERR_LOGIN_REQUIRED') return t('errors.loginRequired');
+  if (code === 'ERR_AUTH_INVALID') return t('errors.authInvalid');
+  if (code === 'ERR_AUTH_LOCKED') return t('errors.authLocked');
+  if (code === 'ERR_AUTH_WEAK_PASSWORD') return t('errors.authWeakPassword');
+  if (code === 'ERR_DUPLICATE_USERNAME') return t('errors.duplicateUsername');
+  if (code === 'ERR_USER_NAME_REQUIRED') return t('errors.userNameRequired');
+  if (code === 'ERR_INVALID_OPERATOR') return t('settings.serverOperatorRequired');
   if (code.startsWith('ERR_INSUFFICIENT_STOCK')) return mapInsufficientStock(code, t);
   if (code === 'ERR_LICENSE_INVALID') return t('settings.billingActivateErr');
   if (code === 'ERR_LICENSE_ALREADY_USED') return t('settings.billingLicenseUsed');

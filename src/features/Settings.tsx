@@ -18,6 +18,7 @@ import {
   QrCode,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { useAuth } from '../auth/AuthContext';
 import { ImagePicker } from '../components/ImagePicker';
 import { PLACEHOLDER_PRODUCT_IMAGE } from '../constants';
 import { readStoreLogoFileAsDataUrl } from '../lib/images';
@@ -25,6 +26,7 @@ import {
   AppSettings,
   type AppLocale,
   type ConnectedDevice,
+  type OperatorOption,
   type LicenseInfo,
   type LicensePlanId,
   type LicenseRequestPayload,
@@ -78,6 +80,7 @@ export function Settings({
   initialSection,
 }: SettingsProps) {
   const { t, locale } = useI18n();
+  const { logout, access, refreshSession } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const deviceSearchPrevRef = useRef('');
   const [section, setSection] = useState<Section>(initialSection ?? 'general');
@@ -105,6 +108,7 @@ export function Settings({
   const [revokeBusyId, setRevokeBusyId] = useState<string | null>(null);
   const [storeLogoDraft, setStoreLogoDraft] = useState<string | null>(null);
   const [operatorDrafts, setOperatorDrafts] = useState<Record<string, string>>({});
+  const [operatorOptions, setOperatorOptions] = useState<OperatorOption[]>([]);
   const [operatorBusyId, setOperatorBusyId] = useState<string | null>(null);
   const [serverQrOpen, setServerQrOpen] = useState(false);
   const [serverQrUrl, setServerQrUrl] = useState('');
@@ -114,6 +118,12 @@ export function Settings({
     null,
   );
   const [imageMigrateBusy, setImageMigrateBusy] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ displayName: '', username: '' });
+  const [profilePassword, setProfilePassword] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null,
+  );
 
   const [draft, setDraft] = useState({
     storeName: settings.storeName,
@@ -209,6 +219,13 @@ export function Settings({
   useEffect(() => {
     if (initialSection) setSection(initialSection);
   }, [initialSection]);
+
+  useEffect(() => {
+    const u = access?.user;
+    if (!u) return;
+    setProfileDraft({ displayName: u.displayName, username: u.username ?? '' });
+    setProfilePassword('');
+  }, [access?.user?.id, access?.user?.displayName, access?.user?.username]);
 
   const handleRequestLicense = async (planId: LicensePlanId) => {
     setBillingMsg(null);
@@ -353,7 +370,9 @@ export function Settings({
       setOperatorDrafts((prev) => {
         const next = { ...prev };
         for (const device of result.items) {
-          if (!(device.deviceId in next)) next[device.deviceId] = device.operatorName;
+          if (!(device.deviceId in next)) {
+            next[device.deviceId] = device.operatorId ?? '';
+          }
         }
         return next;
       });
@@ -380,14 +399,31 @@ export function Settings({
     }
   };
 
+  const loadOperatorOptions = async () => {
+    if (!apiConnected) {
+      setOperatorOptions([]);
+      return;
+    }
+    try {
+      const rows = await api.listOperators();
+      setOperatorOptions(rows);
+    } catch {
+      setOperatorOptions([]);
+    }
+  };
+
   const handleSaveOperator = async (device: ConnectedDevice) => {
-    const name = (operatorDrafts[device.deviceId] ?? device.operatorName).trim();
+    const operatorId = (operatorDrafts[device.deviceId] ?? device.operatorId ?? '').trim();
+    if (!operatorId) {
+      setServerMessage({ type: 'err', text: t('settings.serverOperatorRequired') });
+      return;
+    }
     setOperatorBusyId(device.deviceId);
     setServerMessage(null);
     try {
-      const updated = await api.assignDeviceOperator(device.deviceId, name);
+      const updated = await api.assignDeviceOperator(device.deviceId, { operatorId });
       setConnectedDevices((prev) => prev.map((d) => (d.deviceId === updated.deviceId ? updated : d)));
-      setOperatorDrafts((prev) => ({ ...prev, [device.deviceId]: updated.operatorName }));
+      setOperatorDrafts((prev) => ({ ...prev, [device.deviceId]: updated.operatorId ?? '' }));
       setServerMessage({ type: 'ok', text: t('settings.serverOperatorSaved') });
     } catch (e) {
       setServerMessage({ type: 'err', text: mapMutationError(e, t) });
@@ -446,6 +482,7 @@ export function Settings({
 
   useEffect(() => {
     if (section === 'server') {
+      void loadOperatorOptions();
       void loadHealth();
       void loadConnectedDevices();
     }
@@ -500,10 +537,31 @@ export function Settings({
   };
 
   const saveProfile = async () => {
-    await onUpdate({
-      managerName: draft.managerName,
-      managerTitle: draft.managerTitle,
-    });
+    const u = access?.user;
+    if (!u) return;
+    const name = profileDraft.displayName.trim();
+    if (!name) {
+      setProfileMessage({ type: 'err', text: t('users.nameRequired') });
+      return;
+    }
+    setProfileBusy(true);
+    setProfileMessage(null);
+    try {
+      await api.updateAuthProfile({
+        displayName: name,
+        username: profileDraft.username.trim() || null,
+      });
+      if (profilePassword.trim()) {
+        await api.changePassword(profilePassword.trim());
+      }
+      await refreshSession();
+      setProfilePassword('');
+      setProfileMessage({ type: 'ok', text: t('settings.profileSaved') });
+    } catch (e) {
+      setProfileMessage({ type: 'err', text: mapMutationError(e, t) });
+    } finally {
+      setProfileBusy(false);
+    }
   };
 
   const handleExportBackup = async () => {
@@ -764,31 +822,79 @@ export function Settings({
 
           {section === 'profile' && (
             <Card title={t('settings.userProfile')}>
-              <div className="space-y-6 mt-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      {t('settings.displayName')}
-                    </label>
-                    <Input
-                      value={draft.managerName}
-                      onChange={(e) => setDraft((d) => ({ ...d, managerName: e.target.value }))}
-                    />
+              {access?.user ? (
+                <div className="space-y-6 mt-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.displayName')}
+                      </label>
+                      <Input
+                        value={profileDraft.displayName}
+                        onChange={(e) =>
+                          setProfileDraft((d) => ({ ...d, displayName: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('users.colRole')}
+                      </label>
+                      <p className="text-sm font-medium py-2">
+                        {access.user.roleKey === 'manager'
+                          ? t('users.roleManager')
+                          : t('users.roleSeller')}
+                      </p>
+                    </div>
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('users.colUsername')}
+                      </label>
+                      <Input
+                        value={profileDraft.username}
+                        onChange={(e) =>
+                          setProfileDraft((d) => ({ ...d, username: e.target.value }))
+                        }
+                        autoComplete="username"
+                      />
+                    </div>
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        {t('settings.newPassword')}
+                      </label>
+                      <Input
+                        type="password"
+                        value={profilePassword}
+                        onChange={(e) => setProfilePassword(e.target.value)}
+                        placeholder={t('settings.newPasswordOptional')}
+                        autoComplete="new-password"
+                      />
+                      <p className="text-[10px] text-on-surface-variant">
+                        {access.user.roleKey === 'seller'
+                          ? t('settings.profilePasswordSellerHint')
+                          : t('settings.profilePasswordManagerHint')}
+                      </p>
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                      {t('settings.roleTitle')}
-                    </label>
-                    <Input
-                      value={draft.managerTitle}
-                      onChange={(e) => setDraft((d) => ({ ...d, managerTitle: e.target.value }))}
-                    />
+                  {profileMessage ? (
+                    <p
+                      className={cn(
+                        'text-sm font-medium',
+                        profileMessage.type === 'ok' ? 'text-green-700' : 'text-error',
+                      )}
+                    >
+                      {profileMessage.text}
+                    </p>
+                  ) : null}
+                  <div className="pt-4 flex justify-end">
+                    <Button onClick={() => void saveProfile()} disabled={profileBusy}>
+                      {profileBusy ? t('users.saving') : t('settings.saveProfile')}
+                    </Button>
                   </div>
                 </div>
-                <div className="pt-4 flex justify-end">
-                  <Button onClick={saveProfile}>{t('settings.saveProfile')}</Button>
-                </div>
-              </div>
+              ) : (
+                <p className="text-sm text-on-surface-variant mt-4">{t('settings.profileLoginHint')}</p>
+              )}
             </Card>
           )}
 
@@ -821,7 +927,38 @@ export function Settings({
 
           {section === 'security' && (
             <Card title={t('settings.securityTitle')}>
-              <p className="text-sm text-on-surface-variant mt-2">{t('settings.securityBody')}</p>
+              <p className="text-sm text-on-surface-variant mt-2 mb-6">{t('settings.securityBody')}</p>
+              <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-xl">
+                <div>
+                  <p className="text-sm font-bold">{t('settings.loginRequiredTitle')}</p>
+                  <p className="text-xs text-on-surface-variant">{t('settings.loginRequiredSubtitle')}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdate({ authLoginRequired: !settings.authLoginRequired })
+                  }
+                  className={cn(
+                    'w-12 h-6 rounded-full relative transition-colors',
+                    settings.authLoginRequired ? 'bg-primary' : 'bg-surface-container-high',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all',
+                      settings.authLoginRequired ? 'right-1' : 'left-1',
+                    )}
+                  />
+                </button>
+              </div>
+              {access?.user ? (
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-4 p-4 bg-surface-container-low rounded-xl">
+                  <p className="text-sm font-medium">{access.user.displayName}</p>
+                  <Button variant="outline" onClick={() => void logout()}>
+                    {t('nav.userMenuLogout')}
+                  </Button>
+                </div>
+              ) : null}
             </Card>
           )}
 
@@ -1262,15 +1399,22 @@ export function Settings({
                                 {t('settings.serverOperatorName')}
                               </label>
                               <div className="flex flex-wrap gap-2">
-                                <Input
-                                  value={operatorDrafts[device.deviceId] ?? device.operatorName}
+                                <select
+                                  value={operatorDrafts[device.deviceId] ?? device.operatorId ?? ''}
                                   onChange={(e) =>
                                     setOperatorDrafts((prev) => ({ ...prev, [device.deviceId]: e.target.value }))
                                   }
-                                  placeholder={t('settings.serverOperatorPlaceholder')}
-                                  className="flex-1 min-w-[10rem]"
                                   disabled={device.revokedAt != null}
-                                />
+                                  className="flex-1 min-w-[10rem] bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
+                                >
+                                  <option value="">{t('settings.serverOperatorPlaceholder')}</option>
+                                  {operatorOptions.map((op) => (
+                                    <option key={op.id} value={op.id}>
+                                      {op.displayName}
+                                      {op.roleKey === 'manager' ? ` (${t('users.roleManager')})` : ''}
+                                    </option>
+                                  ))}
+                                </select>
                                 <Button
                                   type="button"
                                   variant="secondary"
