@@ -66,7 +66,11 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_WAREHOUSE_REVERSAL_REASON') return t('stockMovements.reversalReasonRequired');
   if (code === 'ERR_WAREHOUSE_REVERSAL_QTY') return t('stockMovements.reversalInvalidQty');
   if (code === 'ERR_WAREHOUSE_REVERSAL_NOT_ENTRY') return t('stockMovements.reversalNotEntry');
+  if (code === 'ERR_WAREHOUSE_TRANSFER_ALREADY_REVERSED') return t('stockMovements.reversalTransferAlreadyDone');
   if (code === 'ERR_WAREHOUSE_ENTRY_ALREADY_REVERSED') return t('stockMovements.reversalAlreadyDone');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_UNITS_NOT_IN_WAREHOUSE') {
+    return t('stockMovements.reversalEntryNotInWarehouse');
+  }
   if (code === 'ERR_DUPLICATE_EXPENSE_CATEGORY') return t('errors.duplicateExpenseCategory');
   if (code === 'ERR_EXPENSE_CATEGORY_SYSTEM') return t('errors.expenseCategorySystem');
   if (code.startsWith('ERR_EXPENSE_CATEGORY_IN_USE')) return t('errors.expenseCategoryInUse');

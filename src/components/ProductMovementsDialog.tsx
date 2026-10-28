@@ -1,12 +1,16 @@
-import { Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal } from './ui';
-import { TableIconAction } from './TableIconAction';
+import { MovementQuantityCell } from './MovementQuantityCell';
+import { MovementReversalActions } from './MovementReversalActions';
+import { MovementReversalHistoryModal } from './MovementReversalHistoryModal';
 import { ReverseWarehouseEntryModal } from './ReverseWarehouseEntryModal';
 import type { Product, WarehouseMovement } from '../types';
 import { api } from '../api/client';
 import { useI18n } from '../i18n/I18nContext';
-import { movementDisplayQuantity } from '../lib/stockMovements';
+import {
+  movementCanBeReversed,
+  movementReversibleQuantity,
+} from '../lib/stockMovements';
 import { formatAppDateTime } from '../lib/dateFormat';
 
 type MovementScope = 'warehouseEntry' | 'storeEntry';
@@ -24,6 +28,7 @@ export function ProductMovementsDialog({ product, scope, onClose, onAfterMutatio
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reversing, setReversing] = useState<WarehouseMovement | null>(null);
+  const [reversalHistoryFor, setReversalHistoryFor] = useState<WarehouseMovement | null>(null);
 
   const reload = useCallback(async () => {
     if (!product) return;
@@ -31,13 +36,19 @@ export function ProductMovementsDialog({ product, scope, onClose, onAfterMutatio
     setError(null);
     try {
       const types =
-        scope === 'warehouseEntry' ? (['ENTRY'] as const) : (['TRANSFER_TO_STORE'] as const);
+        scope === 'warehouseEntry'
+          ? (['ENTRY', 'REVERSAL'] as const)
+          : (['TRANSFER_TO_STORE', 'REVERSAL'] as const);
       const data = await api.getWarehouseMovements({
         productId: product.id,
         types: [...types],
         limit: 500,
       });
-      setRows(data);
+      const filtered =
+        scope === 'storeEntry'
+          ? data.filter((m) => m.type !== 'REVERSAL' || m.quantityDelta > 0)
+          : data.filter((m) => m.type !== 'REVERSAL' || m.quantityDelta < 0);
+      setRows(filtered);
     } catch {
       setError(t('stockMovements.loadError'));
     } finally {
@@ -84,52 +95,30 @@ export function ProductMovementsDialog({ product, scope, onClose, onAfterMutatio
                 <th className="py-2 px-2">{t('warehouse.colMovementDate')}</th>
                 <th className="py-2 px-2 text-right">{t('warehouse.colMovementDelta')}</th>
                 <th className="py-2 px-2 text-right">{t('stockMovements.colCost')}</th>
-                {scope === 'warehouseEntry' ? (
-                  <th className="py-2 px-2 text-right">{t('common.actions')}</th>
-                ) : null}
+                <th className="py-2 px-2 text-right">{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((m) => {
-                const qty = movementDisplayQuantity(m, perspective);
-                const reversible = m.reversibleQuantity ?? m.quantityDelta;
-                const canReverse =
-                  scope === 'warehouseEntry' &&
-                  m.type === 'ENTRY' &&
-                  !m.reversedAt &&
-                  reversible > 0;
+                const reversible = movementReversibleQuantity(m);
+                const canReverse = movementCanBeReversed(m) && !m.reversedAt && reversible > 0;
                 return (
                   <tr key={m.id} className="border-b border-black/5">
                     <td className="py-2 px-2 text-xs whitespace-nowrap">
                       {formatAppDateTime(m.createdAt, locale, 'short')}
                     </td>
-                    <td className="py-2 px-2 text-right font-mono font-bold">
-                      {qty > 0 ? `+${qty}` : qty}
-                      {m.reversedQuantity && m.reversedQuantity > 0 ? (
-                        <span className="block text-[10px] font-normal text-on-surface-variant">
-                          {t('stockMovements.partiallyReversed', { qty: m.reversedQuantity })}
-                        </span>
-                      ) : null}
+                    <td className="py-2 px-2 text-right">
+                      <MovementQuantityCell movement={m} perspective={perspective} />
                     </td>
                     <td className="py-2 px-2 text-right">{formatMoney(m.unitCost)}</td>
-                    {scope === 'warehouseEntry' ? (
-                      <td className="py-2 px-2 text-right">
-                        {canReverse ? (
-                          <TableIconAction
-                            icon={Undo2}
-                            label={t('stockMovements.reversalAction')}
-                            tone="danger"
-                            onClick={() => setReversing(m)}
-                          />
-                        ) : m.reversedAt ? (
-                          <span className="text-[10px] text-on-surface-variant uppercase font-bold">
-                            {t('stockMovements.reversalDoneLabel')}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                    ) : null}
+                    <td className="py-2 px-2 text-right">
+                      <MovementReversalActions
+                        movement={m}
+                        canReverse={canReverse}
+                        onReverse={() => setReversing(m)}
+                        onHistory={() => setReversalHistoryFor(m)}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -145,6 +134,10 @@ export function ProductMovementsDialog({ product, scope, onClose, onAfterMutatio
         void reload();
         onAfterMutation?.();
       }}
+    />
+    <MovementReversalHistoryModal
+      movement={reversalHistoryFor}
+      onClose={() => setReversalHistoryFor(null)}
     />
     </>
   );

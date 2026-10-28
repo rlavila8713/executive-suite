@@ -38,10 +38,66 @@ export function dateRangeForPreset(
 
 /** Positive quantity shown to users (store entries use transfer rows). */
 export function movementDisplayQuantity(m: WarehouseMovement, perspective: 'warehouse' | 'store'): number {
-  if (perspective === 'store' && m.type === 'TRANSFER_TO_STORE') {
-    return Math.abs(m.quantityDelta);
+  if (perspective === 'store') {
+    if (m.type === 'TRANSFER_TO_STORE') return Math.abs(m.quantityDelta);
+    if (m.type === 'REVERSAL' && m.quantityDelta > 0) return -m.quantityDelta;
   }
   return m.quantityDelta;
+}
+
+export function movementCanBeReversed(m: WarehouseMovement): boolean {
+  return (
+    (m.type === 'ENTRY' && m.quantityDelta > 0) ||
+    (m.type === 'TRANSFER_TO_STORE' && m.quantityDelta < 0)
+  );
+}
+
+export function movementReversibleQuantity(m: WarehouseMovement): number {
+  if (m.reversibleQuantity != null) return m.reversibleQuantity;
+  if (m.type === 'ENTRY' && m.quantityDelta > 0) return m.quantityDelta;
+  if (m.type === 'TRANSFER_TO_STORE' && m.quantityDelta < 0) return Math.abs(m.quantityDelta);
+  return 0;
+}
+
+export function movementOriginalAbsoluteQuantity(m: WarehouseMovement): number {
+  if (m.type === 'ENTRY' && m.quantityDelta > 0) return m.quantityDelta;
+  if (m.type === 'TRANSFER_TO_STORE' && m.quantityDelta < 0) return Math.abs(m.quantityDelta);
+  return Math.abs(movementDisplayQuantity(m, 'warehouse'));
+}
+
+/** Net effect after partial/full reversals (signed, same rules as movementDisplayQuantity). */
+export function movementNetDisplayQuantity(m: WarehouseMovement, perspective: 'warehouse' | 'store'): number {
+  const reversed = m.reversedQuantity ?? 0;
+  if (!movementCanBeReversed(m) || reversed <= 0) {
+    return movementDisplayQuantity(m, perspective);
+  }
+  const originalSigned = movementDisplayQuantity(m, perspective);
+  const sign = originalSigned === 0 ? 1 : Math.sign(originalSigned);
+  const netAbs = Math.max(0, movementOriginalAbsoluteQuantity(m) - reversed);
+  return sign * netAbs;
+}
+
+export function movementHasReversalHistory(m: WarehouseMovement): boolean {
+  return movementCanBeReversed(m) && (m.reversedQuantity ?? 0) > 0;
+}
+
+export function formatSignedMovementQty(qty: number): string {
+  return qty > 0 ? `+${qty}` : String(qty);
+}
+
+/** Quantity shown on a reversal row (always positive units reversed). */
+export function reversalRowUnits(m: WarehouseMovement): number {
+  return Math.abs(m.quantityDelta);
+}
+
+/** Reversal rows belong to warehouse tab (entry undo) or store tab (transfer undo). */
+export function reversalVisibleForPerspective(
+  m: WarehouseMovement,
+  perspective: 'warehouse' | 'store',
+): boolean {
+  if (m.type !== 'REVERSAL') return true;
+  if (perspective === 'store') return m.quantityDelta > 0;
+  return m.quantityDelta < 0;
 }
 
 export function movementTypeLabelKey(type: WarehouseMovementType): string {
@@ -63,4 +119,17 @@ export function movementTypeLabelKey(type: WarehouseMovementType): string {
     default:
       return 'warehouse.movementTypeEntry';
   }
+}
+
+export function movementListTypeLabelKey(m: WarehouseMovement): string {
+  if (m.type === 'REVERSAL') {
+    if (m.reversesMovementType === 'TRANSFER_TO_STORE') {
+      return 'stockMovements.movementTypeReversalTransfer';
+    }
+    if (m.reversesMovementType === 'ENTRY') {
+      return 'stockMovements.movementTypeReversalEntry';
+    }
+    return 'stockMovements.movementTypeReversal';
+  }
+  return movementTypeLabelKey(m.type);
 }

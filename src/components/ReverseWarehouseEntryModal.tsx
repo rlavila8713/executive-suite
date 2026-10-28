@@ -3,6 +3,7 @@ import { Button, Input, Modal } from './ui';
 import type { WarehouseMovement } from '../types';
 import { useI18n } from '../i18n/I18nContext';
 import { mapMutationError } from '../lib/mutationErrors';
+import { movementReversibleQuantity } from '../lib/stockMovements';
 import { api } from '../api/client';
 
 interface ReverseWarehouseEntryModalProps {
@@ -13,7 +14,8 @@ interface ReverseWarehouseEntryModalProps {
 
 export function ReverseWarehouseEntryModal({ movement, onClose, onReversed }: ReverseWarehouseEntryModalProps) {
   const { t } = useI18n();
-  const maxQty = movement?.reversibleQuantity ?? movement?.quantityDelta ?? 0;
+  const isTransfer = movement?.type === 'TRANSFER_TO_STORE';
+  const maxQty = movement ? movementReversibleQuantity(movement) : 0;
   const [quantity, setQuantity] = useState(String(maxQty));
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -21,7 +23,7 @@ export function ReverseWarehouseEntryModal({ movement, onClose, onReversed }: Re
 
   useEffect(() => {
     if (movement) {
-      setQuantity(String(movement.reversibleQuantity ?? movement.quantityDelta));
+      setQuantity(String(movementReversibleQuantity(movement)));
       setReason('');
       setError(null);
     }
@@ -60,11 +62,13 @@ export function ReverseWarehouseEntryModal({ movement, onClose, onReversed }: Re
     <Modal
       isOpen={movement !== null}
       onClose={onClose}
-      title={t('stockMovements.reversalTitle')}
+      title={isTransfer ? t('stockMovements.reversalTitleTransfer') : t('stockMovements.reversalTitle')}
     >
       {movement ? (
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
-          <p className="text-sm text-on-surface-variant">{t('stockMovements.reversalHelp')}</p>
+          <p className="text-sm text-on-surface-variant">
+            {isTransfer ? t('stockMovements.reversalHelpTransfer') : t('stockMovements.reversalHelp')}
+          </p>
           <div>
             <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">
               {t('stockMovements.reversalQtyLabel')}
@@ -79,7 +83,9 @@ export function ReverseWarehouseEntryModal({ movement, onClose, onReversed }: Re
               required
             />
             <p className="text-xs text-on-surface-variant mt-1">
-              {t('stockMovements.reversalQtyHint', { max: maxQty })}
+              {isTransfer
+                ? t('stockMovements.reversalQtyHintTransfer', { max: maxQty })
+                : t('stockMovements.reversalQtyHint', { max: maxQty })}
             </p>
           </div>
           <div>

@@ -102,7 +102,7 @@ export function rowToWarehouseStock(
 
 export function rowToWarehouseMovement(
   row: WarehouseMovementRow,
-  extras?: { productName?: string; productSku?: string },
+  extras?: { productName?: string; productSku?: string; reversesMovementType?: WarehouseMovementType | null },
 ) {
   return {
     id: row.id,
@@ -122,7 +122,31 @@ export function rowToWarehouseMovement(
     reversesMovementId: row.reverses_movement_id ?? null,
     productName: extras?.productName,
     productSku: extras?.productSku,
+    reversesMovementType: extras?.reversesMovementType ?? null,
   };
+}
+
+export function listReversalsForMovement(
+  db: SqliteStore,
+  movementId: string,
+): ReturnType<typeof rowToWarehouseMovement>[] {
+  const warehouse = getDefaultWarehouse(db);
+  const parent = db.prepare('SELECT warehouse_id FROM warehouse_movements WHERE id = ?').get(movementId) as
+    | { warehouse_id: string }
+    | undefined;
+  if (!parent || parent.warehouse_id !== warehouse.id) {
+    throw new ApiError(404, 'Movement not found');
+  }
+  const rows = db
+    .prepare(
+      `SELECT m.*, p.name AS product_name, p.sku AS product_sku
+       FROM warehouse_movements m
+       JOIN products p ON p.id = m.product_id
+       WHERE m.reverses_movement_id = ? AND m.type = 'REVERSAL'
+       ORDER BY m.created_at ASC`,
+    )
+    .all(movementId) as (WarehouseMovementRow & { product_name: string; product_sku: string })[];
+  return rows.map((r) => rowToWarehouseMovement(r, { productName: r.product_name, productSku: r.product_sku }));
 }
 
 export function reversedQuantityForEntry(db: SqliteStore, entryMovementId: string): number {
@@ -136,6 +160,40 @@ export function reversedQuantityForEntry(db: SqliteStore, entryMovementId: strin
   return row.q;
 }
 
+function originalQuantityForReversibleMovement(
+  movement: ReturnType<typeof rowToWarehouseMovement>,
+): number | null {
+  if (movement.type === 'ENTRY' && movement.quantityDelta > 0) return movement.quantityDelta;
+  if (movement.type === 'TRANSFER_TO_STORE' && movement.quantityDelta < 0) {
+    return Math.abs(movement.quantityDelta);
+  }
+  return null;
+}
+
+function warehouseStockQuantity(db: SqliteStore, warehouseId: string, productId: string): number {
+  const row = db
+    .prepare('SELECT quantity FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
+    .get(warehouseId, productId) as { quantity: number } | undefined;
+  return row?.quantity ?? 0;
+}
+
+function withReversalQuantities(
+  movement: ReturnType<typeof rowToWarehouseMovement>,
+  reversedQty: number,
+  options?: { warehouseStockQty?: number },
+): ReturnType<typeof rowToWarehouseMovement> & {
+  reversedQuantity?: number;
+  reversibleQuantity?: number;
+} {
+  const originalQty = originalQuantityForReversibleMovement(movement);
+  if (originalQty == null) return movement;
+  let reversibleQty = Math.max(0, originalQty - reversedQty);
+  if (movement.type === 'ENTRY' && options?.warehouseStockQty != null) {
+    reversibleQty = Math.min(reversibleQty, options.warehouseStockQty);
+  }
+  return { ...movement, reversedQuantity: reversedQty, reversibleQuantity: reversibleQty };
+}
+
 export function enrichMovementReversalState(
   db: SqliteStore,
   movement: ReturnType<typeof rowToWarehouseMovement>,
@@ -143,17 +201,14 @@ export function enrichMovementReversalState(
   reversedQuantity?: number;
   reversibleQuantity?: number;
 } {
-  if (movement.type !== 'ENTRY' || movement.quantityDelta <= 0) {
-    return movement;
-  }
+  const originalQty = originalQuantityForReversibleMovement(movement);
+  if (originalQty == null) return movement;
   const reversedQty = reversedQuantityForEntry(db, movement.id);
-  const entryQty = movement.quantityDelta;
-  const reversibleQty = Math.max(0, entryQty - reversedQty);
-  return {
-    ...movement,
-    reversedQuantity: reversedQty,
-    reversibleQuantity: reversibleQty,
-  };
+  const warehouseStockQty =
+    movement.type === 'ENTRY'
+      ? warehouseStockQuantity(db, movement.warehouseId, movement.productId)
+      : undefined;
+  return withReversalQuantities(movement, reversedQty, { warehouseStockQty });
 }
 
 export type WarehouseMovementListFilters = {
@@ -202,6 +257,31 @@ export function listWarehouseMovements(
   const mapped = rows.map((r) =>
     rowToWarehouseMovement(r, { productName: r.product_name, productSku: r.product_sku }),
   );
+  const parentIds = [
+    ...new Set(
+      mapped
+        .filter((m) => m.type === 'REVERSAL' && m.reversesMovementId)
+        .map((m) => m.reversesMovementId as string),
+    ),
+  ];
+  const parentTypeById = new Map<string, WarehouseMovementType>();
+  if (parentIds.length > 0) {
+    const parents = db
+      .prepare(
+        `SELECT id, type FROM warehouse_movements WHERE id IN (${parentIds.map(() => '?').join(', ')})`,
+      )
+      .all(...parentIds) as { id: string; type: string }[];
+    for (const p of parents) {
+      parentTypeById.set(p.id, p.type as WarehouseMovementType);
+    }
+  }
+  const withParentTypes = mapped.map((m) => {
+    if (m.type !== 'REVERSAL' || !m.reversesMovementId) return m;
+    return {
+      ...m,
+      reversesMovementType: parentTypeById.get(m.reversesMovementId) ?? null,
+    };
+  });
   const reversalTotals = db
     .prepare(
       `SELECT reverses_movement_id AS id, COALESCE(SUM(ABS(quantity_delta)), 0) AS q
@@ -211,11 +291,28 @@ export function listWarehouseMovements(
     )
     .all() as { id: string; q: number }[];
   const reversedByEntry = new Map(reversalTotals.map((r) => [r.id, r.q]));
-  return mapped.map((m) => {
-    if (m.type !== 'ENTRY' || m.quantityDelta <= 0) return m;
+  const entryProductIds = [
+    ...new Set(withParentTypes.filter((m) => m.type === 'ENTRY').map((m) => m.productId)),
+  ];
+  const stockByProduct = new Map<string, number>();
+  if (entryProductIds.length > 0) {
+    const stockRows = db
+      .prepare(
+        `SELECT product_id, quantity FROM warehouse_stock
+         WHERE warehouse_id = ? AND product_id IN (${entryProductIds.map(() => '?').join(', ')})`,
+      )
+      .all(filters.warehouseId, ...entryProductIds) as { product_id: string; quantity: number }[];
+    for (const s of stockRows) {
+      stockByProduct.set(s.product_id, s.quantity);
+    }
+  }
+  return withParentTypes.map((m) => {
+    const originalQty = originalQuantityForReversibleMovement(m);
+    if (originalQty == null) return m;
     const reversedQty = reversedByEntry.get(m.id) ?? 0;
-    const reversibleQty = Math.max(0, m.quantityDelta - reversedQty);
-    return { ...m, reversedQuantity: reversedQty, reversibleQuantity: reversibleQty };
+    const warehouseStockQty =
+      m.type === 'ENTRY' ? (stockByProduct.get(m.productId) ?? 0) : undefined;
+    return withReversalQuantities(m, reversedQty, { warehouseStockQty });
   });
 }
 
@@ -578,10 +675,28 @@ export function reverseWarehouseEntry(
     throw new ApiError(409, 'Entry already fully reversed', 'ERR_WAREHOUSE_ENTRY_ALREADY_REVERSED');
   }
 
+  const warehouse = getDefaultWarehouse(db);
+  if (entryRow.warehouse_id !== warehouse.id) {
+    throw new ApiError(404, 'Movement not found');
+  }
+
+  const stockRow = db
+    .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
+    .get(warehouse.id, entryRow.product_id) as WarehouseStockRow | undefined;
+  const warehouseQty = stockRow?.quantity ?? 0;
+
   const alreadyReversed = reversedQuantityForEntry(db, entryMovementId);
-  const reversible = entryRow.quantity_delta - alreadyReversed;
-  if (reversible <= 0) {
+  const remainingOnEntry = entryRow.quantity_delta - alreadyReversed;
+  if (remainingOnEntry <= 0) {
     throw new ApiError(409, 'Entry already fully reversed', 'ERR_WAREHOUSE_ENTRY_ALREADY_REVERSED');
+  }
+  const reversible = Math.min(remainingOnEntry, warehouseQty);
+  if (reversible <= 0) {
+    throw new ApiError(
+      409,
+      'No warehouse stock left to reverse for this entry; units may be in store',
+      'ERR_WAREHOUSE_REVERSAL_UNITS_NOT_IN_WAREHOUSE',
+    );
   }
   let qty = quantity;
   if (!Number.isFinite(qty) || qty <= 0) {
@@ -598,15 +713,7 @@ export function reverseWarehouseEntry(
     );
   }
 
-  const warehouse = getDefaultWarehouse(db);
-  if (entryRow.warehouse_id !== warehouse.id) {
-    throw new ApiError(404, 'Movement not found');
-  }
-
-  const stockRow = db
-    .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
-    .get(warehouse.id, entryRow.product_id) as WarehouseStockRow | undefined;
-  if (!stockRow || stockRow.quantity < qty) {
+  if (!stockRow) {
     throw new ApiError(409, 'Insufficient warehouse stock to reverse', 'ERR_INSUFFICIENT_WAREHOUSE_STOCK');
   }
 
@@ -647,6 +754,142 @@ export function reverseWarehouseEntry(
 
   const reversalRow = db.prepare('SELECT * FROM warehouse_movements WHERE id = ?').get(reversalId) as WarehouseMovementRow;
   return rowToWarehouseMovement(reversalRow);
+}
+
+export function reverseWarehouseTransferToStore(
+  db: SqliteStore,
+  transferMovementId: string,
+  quantity: number,
+  reason: string,
+  createdBy: string | null,
+): ReturnType<typeof rowToWarehouseMovement> {
+  const trimmedReason = reason.trim();
+  if (trimmedReason.length < 3) {
+    throw new ApiError(400, 'Reversal reason required', 'ERR_WAREHOUSE_REVERSAL_REASON');
+  }
+  const transferRow = db.prepare('SELECT * FROM warehouse_movements WHERE id = ?').get(transferMovementId) as
+    | WarehouseMovementRow
+    | undefined;
+  if (!transferRow) throw new ApiError(404, 'Movement not found');
+  if (transferRow.type !== 'TRANSFER_TO_STORE' || transferRow.quantity_delta >= 0) {
+    throw new ApiError(409, 'Only transfers to store can be reversed', 'ERR_WAREHOUSE_REVERSAL_NOT_ENTRY');
+  }
+  if (transferRow.reversed_at != null) {
+    throw new ApiError(409, 'Transfer already fully reversed', 'ERR_WAREHOUSE_TRANSFER_ALREADY_REVERSED');
+  }
+
+  const transferQty = Math.abs(transferRow.quantity_delta);
+  const alreadyReversed = reversedQuantityForEntry(db, transferMovementId);
+  const reversible = transferQty - alreadyReversed;
+  if (reversible <= 0) {
+    throw new ApiError(409, 'Transfer already fully reversed', 'ERR_WAREHOUSE_TRANSFER_ALREADY_REVERSED');
+  }
+  let qty = quantity;
+  if (!Number.isFinite(qty) || qty <= 0) {
+    qty = reversible;
+  }
+  if (!Number.isInteger(qty) || qty <= 0) {
+    throw new ApiError(400, 'Invalid reversal quantity', 'ERR_WAREHOUSE_REVERSAL_QTY');
+  }
+  if (qty > reversible) {
+    throw new ApiError(
+      409,
+      `Cannot reverse more than ${reversible} units`,
+      `ERR_WAREHOUSE_REVERSAL_EXCEEDS|${reversible}`,
+    );
+  }
+
+  const warehouse = getDefaultWarehouse(db);
+  if (transferRow.warehouse_id !== warehouse.id) {
+    throw new ApiError(404, 'Movement not found');
+  }
+
+  const product = db.prepare('SELECT stock, cost FROM products WHERE id = ?').get(transferRow.product_id) as
+    | { stock: number; cost: number }
+    | undefined;
+  if (!product) throw new ApiError(404, 'Product not found');
+  if (product.stock < qty) {
+    throw new ApiError(409, 'Insufficient store stock to reverse transfer', 'ERR_INSUFFICIENT_STOCK');
+  }
+
+  const stockRow = db
+    .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
+    .get(warehouse.id, transferRow.product_id) as WarehouseStockRow | undefined;
+  if (!stockRow) {
+    throw new ApiError(404, 'Product not in warehouse', 'ERR_WAREHOUSE_STOCK_NOT_FOUND');
+  }
+
+  const layerCost = transferRow.unit_cost ?? stockRow.unit_cost;
+  const storeStock = product.stock;
+  const storeCost = product.cost;
+  const newStoreStock = storeStock - qty;
+  const newStoreCost =
+    newStoreStock <= 0
+      ? storeCost
+      : computeCostAfterRemovingLayer(storeStock, storeCost, qty, layerCost);
+
+  const previousWarehouseQty = stockRow.quantity;
+  const newWarehouseQty = previousWarehouseQty + qty;
+  const newWarehouseUnitCost = computeWeightedAverageCost(
+    previousWarehouseQty,
+    stockRow.unit_cost,
+    qty,
+    layerCost,
+  );
+  const now = Date.now();
+
+  db.prepare('UPDATE products SET stock = ?, cost = ? WHERE id = ?').run(
+    newStoreStock,
+    newStoreCost,
+    transferRow.product_id,
+  );
+  db.prepare(
+    'UPDATE warehouse_stock SET quantity = ?, unit_cost = ?, updated_at = ? WHERE id = ?',
+  ).run(newWarehouseQty, newWarehouseUnitCost, now, stockRow.id);
+  db.prepare('UPDATE products SET warehouse_cost = ? WHERE id = ?').run(newWarehouseUnitCost, transferRow.product_id);
+
+  const reversalId = insertMovement(db, {
+    warehouseId: warehouse.id,
+    productId: transferRow.product_id,
+    sectionId: stockRow.section_id,
+    type: 'REVERSAL',
+    quantityDelta: qty,
+    unitCost: layerCost,
+    balanceAfter: newWarehouseQty,
+    referenceType: 'reversal',
+    referenceId: transferMovementId,
+    notes: trimmedReason,
+    createdBy,
+    reversesMovementId: transferMovementId,
+  });
+
+  const totalReversed = alreadyReversed + qty;
+  if (totalReversed >= transferQty) {
+    db.prepare('UPDATE warehouse_movements SET reversed_at = ? WHERE id = ?').run(now, transferMovementId);
+  }
+
+  const reversalRow = db.prepare('SELECT * FROM warehouse_movements WHERE id = ?').get(reversalId) as WarehouseMovementRow;
+  return rowToWarehouseMovement(reversalRow);
+}
+
+export function reverseWarehouseMovement(
+  db: SqliteStore,
+  movementId: string,
+  quantity: number,
+  reason: string,
+  createdBy: string | null,
+): ReturnType<typeof rowToWarehouseMovement> {
+  const row = db.prepare('SELECT type FROM warehouse_movements WHERE id = ?').get(movementId) as
+    | { type: string }
+    | undefined;
+  if (!row) throw new ApiError(404, 'Movement not found');
+  if (row.type === 'ENTRY') {
+    return reverseWarehouseEntry(db, movementId, quantity, reason, createdBy);
+  }
+  if (row.type === 'TRANSFER_TO_STORE') {
+    return reverseWarehouseTransferToStore(db, movementId, quantity, reason, createdBy);
+  }
+  throw new ApiError(409, 'Movement cannot be reversed', 'ERR_WAREHOUSE_REVERSAL_NOT_ENTRY');
 }
 
 export function requireWebClientForWarehouse(req: import('express').Request): void {

@@ -7,10 +7,11 @@ import {
   reassignWarehouseSection,
   requireWebClientForWarehouse,
   rowToWarehouse,
+  listReversalsForMovement,
   listWarehouseMovements,
   parseMovementTimeParam,
   parseMovementTypesParam,
-  reverseWarehouseEntry,
+  reverseWarehouseMovement,
   rowToWarehouseSection,
   rowToWarehouseStock,
   transferWarehouseToStore,
@@ -281,13 +282,16 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       const warehouse = getDefaultWarehouse(db);
       const productId = (req.query.productId as string | undefined)?.trim() || undefined;
       const scope = (req.query.scope as string | undefined)?.trim().toLowerCase();
-      let types = parseMovementTypesParam(req.query.types as string | undefined);
-      if (scope === 'store') {
-        types = ['TRANSFER_TO_STORE', 'EXPENSE_STORE'];
-      } else if (scope === 'warehouse') {
-        types = ['ENTRY', 'TRANSFER_TO_STORE', 'REVERSAL', 'EXPENSE_WAREHOUSE', 'EXPENSE_STORE'];
-      } else if (scope === 'consumption') {
-        types = ['EXPENSE_STORE', 'EXPENSE_WAREHOUSE'];
+      const explicitTypes = parseMovementTypesParam(req.query.types as string | undefined);
+      let types = explicitTypes;
+      if (!types || types.length === 0) {
+        if (scope === 'store') {
+          types = ['TRANSFER_TO_STORE', 'EXPENSE_STORE', 'REVERSAL'];
+        } else if (scope === 'warehouse') {
+          types = ['ENTRY', 'TRANSFER_TO_STORE', 'REVERSAL', 'EXPENSE_WAREHOUSE', 'EXPENSE_STORE'];
+        } else if (scope === 'consumption') {
+          types = ['EXPENSE_STORE', 'EXPENSE_WAREHOUSE'];
+        }
       }
       const fromRaw = parseMovementTimeParam(req.query.from as string | undefined);
       const toRaw = parseMovementTimeParam(req.query.to as string | undefined);
@@ -316,6 +320,15 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
     }),
   );
 
+  router.get(
+    '/warehouse/movements/:id/reversals',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const rows = listReversalsForMovement(db, req.params.id);
+      res.json(rows);
+    }),
+  );
+
   router.post(
     '/warehouse/movements/:id/reverse',
     asyncHandler(async (req, res) => {
@@ -326,7 +339,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
       const operator = getDeviceOperatorName(db, deviceId);
-      const reversal = reverseWarehouseEntry(db, req.params.id, quantity, reason, operator || null);
+      const reversal = reverseWarehouseMovement(db, req.params.id, quantity, reason, operator || null);
       res.status(201).json(reversal);
     }),
   );
