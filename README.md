@@ -36,7 +36,10 @@ Base URL: `http://<server-ip>:4000`
 | `GET /api/products/:id/image` | Product image (JPEG/PNG/WebP/SVG) |
 | `PATCH /api/products/:id/stock` | **Deprecated** — returns `409 ERR_STORE_STOCK_DIRECT_EDIT`. Use warehouse transfer instead. |
 | Warehouse (entries, transfer) | See [docs/WAREHOUSE.md](docs/WAREHOUSE.md) — `POST /api/products/:id/receive`, `POST /api/warehouse/stock/:id/transfer-to-store` (web client only). |
-| `POST /api/sales` | Checkout (creates transaction + deducts stock) |
+| `POST /api/sales` | Checkout (creates transaction + deducts stock). Optional `clientSaleId` (UUID) for idempotent/mobile offline replay. |
+| `GET /api/sync/offline-pack` | Mobile: snapshot for offline cache (products, customers, cash session, access). See [docs/MOBILE_OFFLINE.md](docs/MOBILE_OFFLINE.md). |
+| `POST /api/sync/sales` | Mobile: batch replay of queued offline sales (idempotent by `clientSaleId`). |
+| OpenAPI (draft) | [docs/openapi-mobile-sync.yaml](docs/openapi-mobile-sync.yaml) — sync routes + mobile `POST /api/sales`. |
 | `GET /api/categories` | Product categories |
 | `GET /api/transactions` | Sales history |
 | `GET /api/expenses` | Expenses |
@@ -81,6 +84,21 @@ npm run test:integration
 Tests spin up a temporary API + SQLite database and cover: health, device binding, settings, products, expenses, cash sessions (with anomalies), sales, license request/activation, backup export, and factory reset.
 
 License activation tests require `license-private.pem` in the project root (run `npm run license:keygen` once).
+
+### Lint (TypeScript + OpenAPI)
+
+```bash
+npm run lint          # tsc --noEmit
+npm run lint:openapi  # Redocly — docs/openapi-mobile-sync.yaml
+npm run lint:all      # both
+```
+
+Optional pre-commit hook (runs OpenAPI lint when the spec or [MOBILE_OFFLINE.md](docs/MOBILE_OFFLINE.md) is staged):
+
+```bash
+chmod +x .githooks/pre-commit
+git config core.hooksPath .githooks
+```
 
 ## License system (licencias)
 

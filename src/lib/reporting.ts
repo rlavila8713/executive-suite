@@ -1,4 +1,4 @@
-import type { Expense, PaymentMethod, Product, SaleReceiptLine, Transaction } from '../types';
+import type { Expense, PaymentMethod, Product, SaleReceiptLine, SalesIncentiveBase, Transaction } from '../types';
 import { transactionOperatorName } from './operators';
 import { applyPaymentPartsToBreakdown, receivableBalanceDue, sessionPaymentParts } from './paymentSplits';
 
@@ -453,6 +453,77 @@ export function netCogsInRange(transactions: Transaction[], products: Product[],
     }
   }
   return Math.round(sum * 100) / 100;
+}
+
+/** Profit base for incentive pool: gross profit or net (gross − expenses in range). */
+export function salesIncentiveBaseAmount(
+  base: SalesIncentiveBase,
+  grossProfit: number,
+  expensesInRange: number,
+): number {
+  if (base === 'gross') return grossProfit;
+  return Math.round((grossProfit - expensesInRange) * 100) / 100;
+}
+
+export function salesIncentivePoolAmount(baseAmount: number, percent: number): number {
+  if (!Number.isFinite(percent) || percent <= 0) return 0;
+  return Math.round(baseAmount * (percent / 100) * 100) / 100;
+}
+
+export type SalesIncentiveOperatorRow = {
+  operator: string;
+  netSales: number;
+  sharePercent: number;
+  amount: number;
+};
+
+/** Store-wide pool and per-operator shares prorated by net sales in range. */
+export function salesIncentiveDistribution(
+  transactions: Transaction[],
+  products: Product[],
+  expenses: Expense[],
+  range: DateRangeMs,
+  percent: number,
+  base: SalesIncentiveBase,
+): { pool: number; baseAmount: number; rows: SalesIncentiveOperatorRow[] } {
+  const profit = profitGrossInRange(transactions, products, range);
+  const expensesR = expensesTotalInRange(expenses, range);
+  const baseAmount = salesIncentiveBaseAmount(base, profit.grossProfit, expensesR);
+  const pool = salesIncentivePoolAmount(baseAmount, percent);
+  if (pool <= 0) {
+    return { pool: 0, baseAmount, rows: [] };
+  }
+
+  const salesByOp = new Map(operatorCompletedSalesTotals(transactions, range).map((r) => [r.operator, r.total]));
+  const revByOp = new Map(operatorReversalTotals(transactions, range).map((r) => [r.operator, r.total]));
+  const operators = new Set([...salesByOp.keys(), ...revByOp.keys()]);
+
+  const weights: { operator: string; netSales: number }[] = [];
+  for (const operator of operators) {
+    const netSales = Math.round(((salesByOp.get(operator) ?? 0) - (revByOp.get(operator) ?? 0)) * 100) / 100;
+    if (netSales <= 0) continue;
+    weights.push({ operator, netSales });
+  }
+  weights.sort((a, b) => b.netSales - a.netSales);
+
+  const totalNet = weights.reduce((s, w) => s + w.netSales, 0);
+  if (totalNet <= 0) {
+    return { pool, baseAmount, rows: [] };
+  }
+
+  const rows: SalesIncentiveOperatorRow[] = [];
+  let allocated = 0;
+  for (let i = 0; i < weights.length; i++) {
+    const { operator, netSales } = weights[i];
+    const sharePercent = Math.round((netSales / totalNet) * 10000) / 100;
+    const isLast = i === weights.length - 1;
+    const amount = isLast
+      ? Math.round((pool - allocated) * 100) / 100
+      : Math.round(pool * (netSales / totalNet) * 100) / 100;
+    allocated += amount;
+    rows.push({ operator, netSales, sharePercent, amount });
+  }
+  return { pool, baseAmount, rows };
 }
 
 export type TopSellerRow = {

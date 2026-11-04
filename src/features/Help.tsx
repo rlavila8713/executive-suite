@@ -30,6 +30,7 @@ const HELP_SECTIONS: HelpSection[] = [
   { id: 'receivables', screen: 'receivables', groupKey: 'help.groupFinance', titleKey: 'help.receivablesTitle', bodyKey: 'help.receivablesBody' },
   { id: 'payables', screen: 'payables', groupKey: 'help.groupFinance', titleKey: 'help.payablesTitle', bodyKey: 'help.payablesBody' },
   { id: 'reports', screen: 'reports', groupKey: 'help.groupFinance', titleKey: 'help.reportsTitle', bodyKey: 'help.reportsBody' },
+  { id: 'users', screen: 'users', groupKey: 'help.groupSystem', titleKey: 'help.usersTitle', bodyKey: 'help.usersBody' },
   { id: 'settings', screen: 'settings', groupKey: 'help.groupSystem', titleKey: 'help.settingsTitle', bodyKey: 'help.settingsBody' },
 ];
 
