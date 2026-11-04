@@ -802,12 +802,22 @@ describe('Executive Suite API integration', () => {
         headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
       });
 
-      const assigned = await api<{ operatorName: string }>(`/api/devices/${mobileId}/operator`, {
-        method: 'PATCH',
-        body: { operatorName: 'María' },
+      const seller = await api<{ operatorId: string; displayName: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'María', roleKey: 'seller' },
       });
+      assert.equal(seller.status, 201);
+
+      const assigned = await api<{ operatorName: string; operatorId: string | null }>(
+        `/api/devices/${mobileId}/operator`,
+        {
+          method: 'PATCH',
+          body: { operatorId: seller.body.operatorId },
+        },
+      );
       assert.equal(assigned.status, 200);
       assert.equal(assigned.body.operatorName, 'María');
+      assert.equal(assigned.body.operatorId, seller.body.operatorId);
 
       const product = await api<{ id: string; sku: string }>('/api/products', {
         method: 'POST',
@@ -882,6 +892,75 @@ describe('Executive Suite API integration', () => {
       assert.equal((blocked.body as { code: string }).code, 'ERR_OPERATOR_REQUIRED');
 
       await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 0 } });
+    });
+
+    it('updates seller role permissions and reflects them in device access', async () => {
+      const mobileId = 'mobile-rbac-perms';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const seller = await api<{ operatorId: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Rbac Seller', roleKey: 'seller' },
+      });
+      assert.equal(seller.status, 201);
+      await api(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorId: seller.body.operatorId },
+      });
+
+      const restricted = await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['catalog.view'] },
+      });
+      assert.equal(restricted.status, 200);
+      assert.deepEqual(restricted.body.permissionKeys, ['catalog.view']);
+
+      const access = await api<{ permissions: string[]; mobileModules: string[] }>('/api/device/access', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      assert.equal(access.status, 200);
+      assert.deepEqual(access.body.permissions, ['catalog.view']);
+      assert.deepEqual(access.body.mobileModules, ['customers']);
+
+      await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['sales.checkout', 'catalog.view', 'inventory.view', 'cash.session'] },
+      });
+    });
+
+    it('returns device access context with permissions for assigned operator', async () => {
+      const mobileId = 'mobile-access-ctx';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const seller = await api<{ operatorId: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Pedro', roleKey: 'seller' },
+      });
+      assert.equal(seller.status, 201);
+      await api(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorId: seller.body.operatorId },
+      });
+
+      const access = await api<{
+        operator: { displayName: string };
+        user: { roleKey: string };
+        permissions: string[];
+        mobileModules: string[];
+      }>('/api/device/access', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      assert.equal(access.status, 200);
+      assert.equal(access.body.operator.displayName, 'Pedro');
+      assert.equal(access.body.user.roleKey, 'seller');
+      assert.ok(access.body.permissions.includes('sales.checkout'));
+      assert.ok(access.body.mobileModules.includes('pos'));
     });
 
     it('rejects operator assignment from a mobile client', async () => {
@@ -1115,8 +1194,46 @@ describe('Executive Suite API integration', () => {
       assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
     });
 
+    it('bootstrap, login, and enforce login when required', async () => {
+      const status = await api<{ needsBootstrap: boolean }>('/api/auth/status');
+      assert.equal(status.status, 200);
+      if (status.body.needsBootstrap) {
+        const boot = await api('/api/auth/bootstrap', {
+          method: 'POST',
+          body: { username: 'admin', password: 'adminpass1' },
+        });
+        assert.equal(boot.status, 204);
+      }
+      const login = await api<{ token: string; access: { permissions: string[] } }>('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(login.status, 200);
+      assert.ok(login.body.token);
+      assert.ok(login.body.access.permissions.length > 0);
+
+      const patch = await api('/api/settings', {
+        method: 'PATCH',
+        body: { authLoginRequired: true },
+        authToken: login.body.token,
+      });
+      assert.equal(patch.status, 200);
+
+      const blocked = await api('/api/products?includeImages=false');
+      assert.equal(blocked.status, 401);
+
+      const ok = await api('/api/products?includeImages=false', { authToken: login.body.token });
+      assert.equal(ok.status, 200);
+    });
+
     it('factory reset clears operational data without restarting the trial', async () => {
       const db = getDb();
+      try {
+        db.prepare('UPDATE app_settings SET auth_login_required = 0 WHERE id = ?').run('main');
+        db.prepare('DELETE FROM auth_sessions').run();
+      } catch {
+        /* auth columns optional */
+      }
       const trialStartedAt = Date.now() - 3 * 24 * 60 * 60 * 1000;
       db.prepare('UPDATE license_state SET trial_started_at = ?, paid_until = NULL').run(trialStartedAt);
 

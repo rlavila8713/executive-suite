@@ -9,6 +9,9 @@ import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
 import { persistDatabaseAtomic } from './persistDb.js';
 import { migrateLegacyProductPhotoLayout } from './legacyImageLayout.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
+import { migrateAuthSchema } from './auth.js';
+import { migrateRbacSchema, clearRbacUsersOnFactoryReset } from './rbac.js';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
@@ -163,7 +166,10 @@ export async function initDb(): Promise<void> {
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
     migrateWarehouseSchema(sqliteStore);
+    migrateExpenseCategoriesSchema(sqliteStore);
     ensureSeeded(sqliteStore);
+    migrateRbacSchema(sqliteStore);
+    migrateAuthSchema(sqliteStore);
     ensureLicenseRow(sqliteStore);
     migrateLegacyProductPhotoLayout(sqliteStore);
     flushNow();
@@ -321,6 +327,12 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
+    try {
+      db.prepare('DELETE FROM auth_sessions').run();
+    } catch {
+      /* auth schema optional */
+    }
+    clearRbacUsersOnFactoryReset(db);
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
     migrateWarehouseSchema(db);
@@ -550,6 +562,7 @@ export function rowToAppSettings(row: {
   manager_title: string;
   locale: string;
   store_logo?: string;
+  auth_login_required?: number;
 }) {
   const storeLogo = row.store_logo ?? '';
   return {
@@ -570,5 +583,6 @@ export function rowToAppSettings(row: {
     managerName: row.manager_name,
     managerTitle: row.manager_title,
     locale: row.locale as 'es' | 'en',
+    authLoginRequired: (row.auth_login_required ?? 0) === 1,
   };
 }

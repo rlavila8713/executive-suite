@@ -47,10 +47,12 @@ function waitForHealth(port, attempts = 30) {
 }
 
 function startApiServer() {
-  const dataDir = app.getPath('userData');
+  const projectRoot = path.join(__dirname, '..');
+  // Dev: share ./data with `npm run dev` / `client:start`. Packaged app: per-user folder.
+  const dataDir =
+    process.env.DATA_DIR || (isDev ? path.join(projectRoot, 'data') : app.getPath('userData'));
   const port = process.env.PORT || '4000';
   const env = { ...process.env, DATA_DIR: dataDir, PORT: port };
-  const projectRoot = path.join(__dirname, '..');
 
   if (isDev) {
     const serverEntry = path.join(projectRoot, 'server', 'index.ts');

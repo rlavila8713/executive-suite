@@ -1,13 +1,17 @@
 import type { Request, Response, NextFunction } from 'express';
 import { getDb, newId, rowToProduct } from './db.js';
 import { ApiError } from './routes.js';
-import { getDeviceOperatorName } from './connectedDevices.js';
+import { deviceOperatorDisplayName } from './rbac.js';
 import {
   getDefaultWarehouse,
   reassignWarehouseSection,
   requireWebClientForWarehouse,
   rowToWarehouse,
-  rowToWarehouseMovement,
+  listReversalsForMovement,
+  listWarehouseMovements,
+  parseMovementTimeParam,
+  parseMovementTypesParam,
+  reverseWarehouseMovement,
   rowToWarehouseSection,
   rowToWarehouseStock,
   transferWarehouseToStore,
@@ -241,7 +245,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       if (!sectionId) throw new ApiError(400, 'sectionId required');
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const stock = reassignWarehouseSection(db, req.params.productId, sectionId, operator || null);
       res.json(stock);
     }),
@@ -262,7 +266,7 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
       }
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      const operator = getDeviceOperatorName(db, deviceId);
+      const operator = deviceOperatorDisplayName(db, deviceId);
       const result = transferWarehouseToStore(db, req.params.productId, quantity, price, operator || null);
       res.json({
         product: rowToProduct(result.product as Parameters<typeof rowToProduct>[0]),
@@ -276,21 +280,67 @@ export function registerWarehouseRoutes(router: import('express').Router): void 
     asyncHandler(async (req, res) => {
       const db = getDb();
       const warehouse = getDefaultWarehouse(db);
-      const productId = req.query.productId as string | undefined;
-      const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? '100'), 10) || 100));
-      const rows = productId
-        ? db
-            .prepare(
-              `SELECT * FROM warehouse_movements WHERE warehouse_id = ? AND product_id = ?
-               ORDER BY created_at DESC LIMIT ?`,
-            )
-            .all(warehouse.id, productId, limit)
-        : db
-            .prepare(
-              `SELECT * FROM warehouse_movements WHERE warehouse_id = ? ORDER BY created_at DESC LIMIT ?`,
-            )
-            .all(warehouse.id, limit);
-      res.json(rows.map((r) => rowToWarehouseMovement(r as Parameters<typeof rowToWarehouseMovement>[0])));
+      const productId = (req.query.productId as string | undefined)?.trim() || undefined;
+      const scope = (req.query.scope as string | undefined)?.trim().toLowerCase();
+      const explicitTypes = parseMovementTypesParam(req.query.types as string | undefined);
+      let types = explicitTypes;
+      if (!types || types.length === 0) {
+        if (scope === 'store') {
+          types = ['TRANSFER_TO_STORE', 'EXPENSE_STORE', 'REVERSAL'];
+        } else if (scope === 'warehouse') {
+          types = ['ENTRY', 'TRANSFER_TO_STORE', 'REVERSAL', 'EXPENSE_WAREHOUSE', 'EXPENSE_STORE'];
+        } else if (scope === 'consumption') {
+          types = ['EXPENSE_STORE', 'EXPENSE_WAREHOUSE'];
+        }
+      }
+      const fromRaw = parseMovementTimeParam(req.query.from as string | undefined);
+      const toRaw = parseMovementTimeParam(req.query.to as string | undefined);
+      const from =
+        fromRaw != null
+          ? /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from ?? '').trim())
+            ? new Date(`${String(req.query.from).trim()}T00:00:00`).getTime()
+            : fromRaw
+          : undefined;
+      const to =
+        toRaw != null
+          ? /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to ?? '').trim())
+            ? new Date(`${String(req.query.to).trim()}T23:59:59.999`).getTime()
+            : toRaw
+          : undefined;
+      const limit = Math.min(5000, Math.max(1, parseInt(String(req.query.limit ?? '500'), 10) || 500));
+      const rows = listWarehouseMovements(db, {
+        warehouseId: warehouse.id,
+        productId,
+        types,
+        from,
+        to,
+        limit,
+      });
+      res.json(rows);
+    }),
+  );
+
+  router.get(
+    '/warehouse/movements/:id/reversals',
+    asyncHandler(async (req, res) => {
+      const db = getDb();
+      const rows = listReversalsForMovement(db, req.params.id);
+      res.json(rows);
+    }),
+  );
+
+  router.post(
+    '/warehouse/movements/:id/reverse',
+    asyncHandler(async (req, res) => {
+      requireWebClientForWarehouse(req);
+      const body = req.body as { quantity?: number; reason?: string };
+      const reason = body.reason ?? '';
+      const quantity = body.quantity != null ? Math.floor(Number(body.quantity)) : 0;
+      const db = getDb();
+      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
+      const operator = deviceOperatorDisplayName(db, deviceId);
+      const reversal = reverseWarehouseMovement(db, req.params.id, quantity, reason, operator || null);
+      res.status(201).json(reversal);
     }),
   );
 

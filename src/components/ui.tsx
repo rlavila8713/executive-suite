@@ -85,14 +85,28 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  /** Wider layout for data-heavy dialogs (e.g. sales log). */
+  size?: 'default' | 'large';
+  /** Stack above another open modal (e.g. receipt over sales log). */
+  elevated?: boolean;
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, size = 'default', elevated = false }: ModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto overscroll-contain">
-      <div className="bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col my-auto sm:my-0">
+    <div
+      className={cn(
+        'fixed inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto overscroll-contain',
+        elevated ? 'z-[110]' : 'z-[100]',
+      )}
+    >
+      <div
+        className={cn(
+          'bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl w-full max-h-[92vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col my-auto sm:my-0',
+          size === 'large' ? 'max-w-5xl' : 'max-w-2xl',
+        )}
+      >
         <div className="p-4 sm:p-6 border-b border-black/5 dark:border-white/10 flex justify-between items-center gap-3 shrink-0">
           <h3 className="text-lg sm:text-xl font-bold font-headline text-primary pr-2">{title}</h3>
           <button

@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Search, Download, TrendingDown, Plus, Edit2, Trash2 } from 'lucide-react';
-import { Card, Button, Input, Modal } from '../components/ui';
+import { Search, Download, TrendingDown, Plus, Edit2, Trash2, Tags } from 'lucide-react';
+import { Card, Button, Input } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
-import { Expense } from '../types';
+import { ExpenseCategoryManager } from '../components/ExpenseCategoryManager';
+import { ExpenseFormModal } from '../components/ExpenseFormModal';
+import type { Expense, ExpenseCategory, Product, WarehouseStock } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 import { useI18n } from '../i18n/I18nContext';
@@ -31,16 +34,43 @@ function downloadExpensesCsv(rows: Expense[]) {
 
 interface ExpensesProps {
   expenses: Expense[];
+  expenseCategories: ExpenseCategory[];
+  products: Product[];
+  warehouseStock: WarehouseStock[];
   globalSearch?: string;
   onAdd: (row: Omit<Expense, 'id'>) => void | Promise<void>;
   onUpdate: (id: string, updates: Partial<Expense>) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
+  onAddCategory: (name: string) => void | Promise<void>;
+  onRenameCategory: (id: string, name: string) => void | Promise<void>;
+  onDeleteCategory: (id: string) => void | Promise<void>;
+  onInventoryConsumption: (payload: {
+    productId: string;
+    quantity: number;
+    source: 'store' | 'warehouse';
+    title?: string;
+    date: string;
+  }) => void | Promise<void>;
 }
 
-export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelete }: ExpensesProps) {
+export function Expenses({
+  expenses,
+  expenseCategories,
+  products,
+  warehouseStock,
+  globalSearch = '',
+  onAdd,
+  onUpdate,
+  onDelete,
+  onAddCategory,
+  onRenameCategory,
+  onDeleteCategory,
+  onInventoryConsumption,
+}: ExpensesProps) {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [deleting, setDeleting] = useState<Expense | null>(null);
 
@@ -71,24 +101,6 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
     return Math.min(100, Math.round((totalExpenses / (totalExpenses * 1.2)) * 100));
   }, [totalExpenses]);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const row = {
-      title: fd.get('title') as string,
-      category: fd.get('category') as string,
-      date: fd.get('date') as string,
-      amount: parseFloat(fd.get('amount') as string),
-    };
-    if (editing) {
-      await onUpdate(editing.id, row);
-    } else {
-      await onAdd(row);
-    }
-    setModalOpen(false);
-    setEditing(null);
-  };
-
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
@@ -96,7 +108,10 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
           <h2 className="text-2xl sm:text-3xl font-extrabold text-primary tracking-tight mb-2 font-headline">{t('expenses.pageTitle')}</h2>
           <p className="text-on-surface-variant text-sm font-medium">{t('expenses.subtitle')}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" className="gap-2" onClick={() => setCategoriesOpen(true)}>
+            <Tags size={16} /> {t('expenses.manageCategories')}
+          </Button>
           <Button
             onClick={() => {
               setEditing(null);
@@ -192,26 +207,23 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
                     {expense.locked ? (
                       <span className="text-[10px] font-bold uppercase text-on-surface-variant">{t('expenses.locked')}</span>
                     ) : (
-                      <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                      <TableActionGroup>
+                        <TableIconAction
+                          icon={Edit2}
+                          label={t('common.edit')}
+                          tone="brand"
                           onClick={() => {
                             setEditing(expense);
                             setModalOpen(true);
                           }}
-                        >
-                          <Edit2 size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-error hover:bg-error/10"
+                        />
+                        <TableIconAction
+                          icon={Trash2}
+                          label={t('common.delete')}
+                          tone="danger"
                           onClick={() => setDeleting(expense)}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
+                        />
+                      </TableActionGroup>
                     )}
                   </td>
                 </tr>
@@ -222,43 +234,31 @@ export function Expenses({ expenses, globalSearch = '', onAdd, onUpdate, onDelet
         </div>
       </Card>
 
-      <Modal
+      <ExpenseFormModal
         isOpen={modalOpen}
+        editing={editing}
+        categories={expenseCategories}
+        products={products}
+        warehouseStock={warehouseStock}
         onClose={() => {
           setModalOpen(false);
           setEditing(null);
         }}
-        title={editing ? t('expenses.editExpense') : t('expenses.addExpenseTitle')}
-      >
-        <form key={editing?.id ?? 'new'} onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.fieldTitle')}</label>
-            <Input name="title" defaultValue={editing?.title} required />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.colCategory')}</label>
-              <Input name="category" defaultValue={editing?.category} required />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.date')}</label>
-              <Input name="date" type="date" defaultValue={editing?.date} required />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.amount')}</label>
-            <Input name="amount" type="number" step="0.01" min="0" defaultValue={editing?.amount} required />
-          </div>
-          <div className="pt-4 flex gap-3">
-            <Button type="button" variant="secondary" className="flex-1" onClick={() => setModalOpen(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" className="flex-1">
-              {editing ? t('expenses.saveChanges') : t('expenses.createExpense')}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+        onSaveRegular={async (row) => {
+          if (editing) await onUpdate(editing.id, row);
+          else await onAdd(row);
+        }}
+        onSaveConsumption={onInventoryConsumption}
+      />
+
+      <ExpenseCategoryManager
+        isOpen={categoriesOpen}
+        categories={expenseCategories}
+        onClose={() => setCategoriesOpen(false)}
+        onAdd={onAddCategory}
+        onRename={onRenameCategory}
+        onDelete={onDeleteCategory}
+      />
 
       <ConfirmDeleteModal
         target={deleting}

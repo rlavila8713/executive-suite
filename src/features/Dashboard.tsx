@@ -8,7 +8,6 @@ import {
   ArrowRight,
   Plus,
   Package,
-  Edit2,
   Undo2,
   ListOrdered,
   FileText,
@@ -25,6 +24,7 @@ import {
   Cell,
 } from 'recharts';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { mapMutationError } from '../lib/mutationErrors';
 import { reverseMixedSaleHint } from '../lib/mixedSale';
@@ -42,8 +42,17 @@ import {
   netSalesRevenueInRange,
   expensesTotalInRange,
   isReturnRow,
+  operatorCompletedSalesTotals,
+  operatorReversalTotals,
 } from '../lib/reporting';
+import {
+  dateRangeForPreset,
+  toInputDate,
+  type StockMovementDatePreset,
+} from '../lib/stockMovements';
 import { usePagination } from '../lib/usePagination';
+import { salePaymentBadgeClass, salePaymentBadgeKind, salePaymentBadgeLabel } from '../lib/salePaymentDisplay';
+import { formatAppDate, formatAppDateTime } from '../lib/dateFormat';
 import { TablePagination } from '../components/TablePagination';
 
 type RecentSalesTab = 'completed' | 'reversed';
@@ -87,7 +96,6 @@ interface DashboardProps {
   headerSearch?: string;
   onNavigate: (screen: Screen) => void;
   onAddTransaction: (row: Omit<Transaction, 'id'>) => void | Promise<void>;
-  onUpdateTransaction: (id: string, patch: Partial<Transaction>) => void | Promise<void>;
   onReverseSale: (id: string) => void | Promise<void>;
 }
 
@@ -99,7 +107,6 @@ export function Dashboard({
   headerSearch = '',
   onNavigate,
   onAddTransaction,
-  onUpdateTransaction,
   onReverseSale,
 }: DashboardProps) {
   const { t, locale } = useI18n();
@@ -137,13 +144,29 @@ export function Dashboard({
   const debtCount = useMemo(() => transactions.filter((tx) => isPendingDebtSale(tx)).length, [transactions]);
 
   const [txModalOpen, setTxModalOpen] = useState(false);
-  const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [reversingTx, setReversingTx] = useState<Transaction | null>(null);
   const [receiptViewTx, setReceiptViewTx] = useState<Transaction | null>(null);
   const [operatorFilter, setOperatorFilter] = useState('');
   const [recentTab, setRecentTab] = useState<RecentSalesTab>('completed');
   const [logTab, setLogTab] = useState<RecentSalesTab>('completed');
+  const [logDatePreset, setLogDatePreset] = useState<StockMovementDatePreset | 'all'>('all');
+  const [logCustomStart, setLogCustomStart] = useState(() => toInputDate(new Date()));
+  const [logCustomEnd, setLogCustomEnd] = useState(() => toInputDate(new Date()));
+  const [logCashSessionId, setLogCashSessionId] = useState('');
+
+  const openFullLog = () => {
+    const open = cashSessions.find((s) => s.closedAt == null);
+    setLogCashSessionId(open?.id ?? '');
+    if (open) {
+      setLogDatePreset('custom');
+      setLogCustomStart(toInputDate(new Date(open.openedAt)));
+      setLogCustomEnd(toInputDate(new Date()));
+    } else {
+      setLogDatePreset('today');
+    }
+    setLogOpen(true);
+  };
 
   const handleTxSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -162,17 +185,11 @@ export function Dashboard({
       status,
       timestamp: fd.get('timestamp') as string,
       type,
-      createdAt: editingTx?.createdAt ?? Date.now(),
+      createdAt: Date.now(),
       paymentMethod,
-      ...(editingTx?.receipt ? { receipt: editingTx.receipt } : {}),
     };
-    if (editingTx) {
-      await onUpdateTransaction(editingTx.id, row);
-    } else {
-      await onAddTransaction(row);
-    }
+    await onAddTransaction(row);
     setTxModalOpen(false);
-    setEditingTx(null);
   };
 
   const operatorNames = useMemo(() => uniqueOperatorNames(transactions), [transactions]);
@@ -203,10 +220,62 @@ export function Dashboard({
     return base.filter(recentTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
   }, [transactionsFiltered, recentTab]);
 
+  const logRange = useMemo(() => {
+    if (logDatePreset === 'all') return null;
+    return dateRangeForPreset(logDatePreset, logCustomStart, logCustomEnd);
+  }, [logDatePreset, logCustomStart, logCustomEnd]);
+
+  const logBaseTransactions = useMemo(() => {
+    let list = transactions.filter((tx) => tx.type !== 'payable');
+    if (logCashSessionId) {
+      const session = cashSessions.find((s) => s.id === logCashSessionId);
+      if (session) {
+        const end = session.closedAt ?? Date.now();
+        list = list.filter((tx) => tx.createdAt >= session.openedAt && tx.createdAt <= end);
+      }
+    }
+    if (logRange) {
+      list = list.filter((tx) => tx.createdAt >= logRange.start && tx.createdAt <= logRange.end);
+    }
+    if (operatorFilter) {
+      list = list.filter((tx) => transactionOperatorName(tx) === operatorFilter);
+    }
+    if (headerSearch.trim()) {
+      list = list.filter((tx) =>
+        rowMatchesSearch(headerSearch, [
+          tx.orderNumber,
+          tx.customer,
+          tx.status,
+          tx.type,
+          tx.timestamp,
+          String(tx.amount),
+          transactionOperatorName(tx),
+          ...(tx.receipt?.lines.map((l) => l.name) ?? []),
+          ...(tx.receipt?.lines.map((l) => l.sku) ?? []),
+        ]),
+      );
+    }
+    return list;
+  }, [transactions, logCashSessionId, cashSessions, logRange, operatorFilter, headerSearch]);
+
   const logListForTab = useMemo(() => {
-    const base = transactionsFiltered.filter((tx) => tx.type !== 'payable');
-    return base.filter(logTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
-  }, [transactionsFiltered, logTab]);
+    return logBaseTransactions.filter(logTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
+  }, [logBaseTransactions, logTab]);
+
+  const logOperatorTotals = useMemo(() => {
+    if (logTab === 'completed') return operatorCompletedSalesTotals(logBaseTransactions);
+    return operatorReversalTotals(logBaseTransactions);
+  }, [logBaseTransactions, logTab]);
+
+  const logGrandTotal = useMemo(
+    () => Math.round(logListForTab.reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100) / 100,
+    [logListForTab],
+  );
+
+  const sortedCashSessions = useMemo(
+    () => [...cashSessions].sort((a, b) => b.openedAt - a.openedAt),
+    [cashSessions],
+  );
 
   const { pageItems: recentPageItems, page: recentPage, setPage: setRecentPage, totalPages: recentTotalPages, total: recentTotal, pageSize: recentPageSize } =
     usePagination(recentListForTab);
@@ -221,7 +290,7 @@ export function Dashboard({
           <p className="text-on-surface-variant font-medium">
             {t('dashboard.performanceSubtitle')}{' '}
             <span className="text-primary font-bold">
-              {new Date().toLocaleDateString(locale === 'es' ? 'es' : 'en-US', { dateStyle: 'long' })}
+              {formatAppDate(Date.now(), locale, 'long')}
             </span>
             .
           </p>
@@ -229,14 +298,11 @@ export function Dashboard({
         <div className="flex flex-wrap gap-2 shrink-0">
           <Button
             className="flex items-center gap-2"
-            onClick={() => {
-              setEditingTx(null);
-              setTxModalOpen(true);
-            }}
+            onClick={() => setTxModalOpen(true)}
           >
             <Plus size={16} /> {t('dashboard.registerTx')}
           </Button>
-          <Button variant="secondary" className="flex items-center gap-2" onClick={() => setLogOpen(true)}>
+          <Button variant="secondary" className="flex items-center gap-2" onClick={openFullLog}>
             <ListOrdered size={16} /> {t('dashboard.fullLog')}
           </Button>
         </div>
@@ -472,41 +538,24 @@ export function Dashboard({
                     {t(`dashboard.statusBadge.${statusBadgeKey(tx.status)}`)}
                   </span>
                 </div>
-                <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                <TableActionGroup>
                   {tx.receipt ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={t('dashboard.viewReceiptAria')}
-                      title={t('dashboard.viewReceipt')}
+                    <TableIconAction
+                      icon={FileText}
+                      label={t('dashboard.viewReceipt')}
+                      tone="neutral"
                       onClick={() => setReceiptViewTx(tx)}
-                    >
-                      <FileText size={14} />
-                    </Button>
+                    />
                   ) : null}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    title={t('dashboard.editTx')}
-                    onClick={() => {
-                      setEditingTx(tx);
-                      setTxModalOpen(true);
-                    }}
-                  >
-                    <Edit2 size={14} />
-                  </Button>
                   {canReverseSale(tx, reversedSourceIds) ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-error hover:bg-error/10"
-                      title={t('dashboard.reverseTxTitle')}
+                    <TableIconAction
+                      icon={Undo2}
+                      label={t('dashboard.reverseTxTitle')}
+                      tone="danger"
                       onClick={() => setReversingTx(tx)}
-                    >
-                      <Undo2 size={14} />
-                    </Button>
+                    />
                   ) : null}
-                </div>
+                </TableActionGroup>
               </div>
             </div>
           ))}
@@ -521,7 +570,7 @@ export function Dashboard({
         <div className="mt-6 text-center">
           <button
             type="button"
-            onClick={() => setLogOpen(true)}
+            onClick={openFullLog}
             className="text-xs font-bold text-primary underline underline-offset-4 flex items-center gap-2 mx-auto"
           >
             {t('dashboard.viewTxLog')} <ArrowRight size={14} />
@@ -529,40 +578,26 @@ export function Dashboard({
         </div>
       </Card>
 
-      <Modal
-        isOpen={txModalOpen}
-        onClose={() => {
-          setTxModalOpen(false);
-          setEditingTx(null);
-        }}
-        title={editingTx ? t('dashboard.editTx') : t('dashboard.registerTxTitle')}
-      >
-        <form key={editingTx?.id ?? 'new'} onSubmit={handleTxSubmit} className="space-y-4">
+      <Modal isOpen={txModalOpen} onClose={() => setTxModalOpen(false)} title={t('dashboard.registerTxTitle')}>
+        <form onSubmit={handleTxSubmit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.orderNumber')}</label>
-              <Input name="orderNumber" defaultValue={editingTx?.orderNumber ?? `#${Math.floor(Math.random() * 90000) + 10000}`} required />
+              <Input name="orderNumber" defaultValue={`#${Math.floor(Math.random() * 90000) + 10000}`} required />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.customer')}</label>
-              <Input name="customer" defaultValue={editingTx?.customer} required />
+              <Input name="customer" required />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.amountAbsolute')}</label>
-              <Input
-                name="amount"
-                type="number"
-                step="0.01"
-                min="0"
-                defaultValue={editingTx ? Math.abs(editingTx.amount) : undefined}
-                required
-              />
+              <Input name="amount" type="number" step="0.01" min="0" required />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.displayTime')}</label>
-              <Input name="timestamp" defaultValue={editingTx?.timestamp ?? 'Just now'} required />
+              <Input name="timestamp" defaultValue="Just now" required />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -570,7 +605,7 @@ export function Dashboard({
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.type')}</label>
               <select
                 name="type"
-                defaultValue={editingTx?.type ?? 'sale'}
+                defaultValue="sale"
                 className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
               >
                 <option value="sale">{t('dashboard.typeSale')}</option>
@@ -581,18 +616,12 @@ export function Dashboard({
               <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('dashboard.status')}</label>
               <select
                 name="status"
-                defaultValue={editingTx?.status ?? 'completed'}
+                defaultValue="completed"
                 className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
               >
-                {editingTx?.status === 'reversed' ? (
-                  <option value="reversed">{t('dashboard.statusReversed')}</option>
-                ) : (
-                  <>
-                    <option value="completed">{t('dashboard.statusCompleted')}</option>
-                    <option value="pending">{t('dashboard.statusPending')}</option>
-                    <option value="refunded">{t('dashboard.statusRefunded')}</option>
-                  </>
-                )}
+                <option value="completed">{t('dashboard.statusCompleted')}</option>
+                <option value="pending">{t('dashboard.statusPending')}</option>
+                <option value="refunded">{t('dashboard.statusRefunded')}</option>
               </select>
             </div>
           </div>
@@ -602,11 +631,7 @@ export function Dashboard({
             </label>
             <select
               name="paymentMethod"
-              defaultValue={
-                editingTx?.paymentMethod ??
-                editingTx?.receipt?.paymentMethod ??
-                'other'
-              }
+              defaultValue="cash"
               className="bg-surface-container-high border-none rounded-lg px-4 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
             >
               <option value="cash">{t('dashboard.pmCash')}</option>
@@ -620,14 +645,12 @@ export function Dashboard({
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setTxModalOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" className="flex-1">
-              {editingTx ? t('common.save') : t('dashboard.create')}
-            </Button>
+            <Button type="submit" className="flex-1">{t('dashboard.create')}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title={t('dashboard.txLogTitle')}>
+      <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title={t('dashboard.txLogTitle')} size="large">
         <div className="flex flex-wrap gap-2 p-1 bg-surface-container-low rounded-xl border border-black/5 mb-3">
           {(['completed', 'reversed'] as RecentSalesTab[]).map((tab) => (
             <button
@@ -645,24 +668,129 @@ export function Dashboard({
             </button>
           ))}
         </div>
-        <div className="mb-3">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-            {t('dashboard.operatorFilter')}
-          </label>
-          <select
-            value={operatorFilter}
-            onChange={(e) => setOperatorFilter(e.target.value)}
-            className="mt-1 bg-surface-container-high border-none rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
-          >
-            <option value="">{t('dashboard.operatorAll')}</option>
-            {operatorNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+              {t('dashboard.logCashSession')}
+            </label>
+            <select
+              value={logCashSessionId}
+              onChange={(e) => setLogCashSessionId(e.target.value)}
+              className="mt-1 bg-surface-container-high border-none rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
+            >
+              <option value="">{t('dashboard.logCashSessionAll')}</option>
+              {sortedCashSessions.map((s) => {
+                const open = s.closedAt == null;
+                const label = `${formatAppDateTime(s.openedAt, locale, 'short')} — ${open ? t('dashboard.logSessionOpen') : t('dashboard.logSessionClosed')}`;
+                return (
+                  <option key={s.id} value={s.id}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+              {t('dashboard.operatorFilter')}
+            </label>
+            <select
+              value={operatorFilter}
+              onChange={(e) => setOperatorFilter(e.target.value)}
+              className="mt-1 bg-surface-container-high border-none rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-primary/20 outline-none"
+            >
+              <option value="">{t('dashboard.operatorAll')}</option>
+              {operatorNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
+
+        <div className="mb-4 space-y-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+            {t('dashboard.logDateFilter')}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { id: 'all' as const, label: t('dashboard.logDateAll') },
+                { id: 'today' as const, label: t('stockMovements.presetToday') },
+                { id: 'week' as const, label: t('stockMovements.presetWeek') },
+                { id: 'month' as const, label: t('stockMovements.presetMonth') },
+                { id: 'custom' as const, label: t('stockMovements.presetCustom') },
+              ] as const
+            ).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setLogDatePreset(p.id)}
+                className={cn(
+                  'px-3 py-1.5 rounded-full text-xs font-bold transition-all',
+                  logDatePreset === p.id
+                    ? 'bg-primary/15 text-primary ring-1 ring-primary/30'
+                    : 'bg-surface-container-high text-on-surface-variant',
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {logDatePreset === 'custom' ? (
+            <div className="flex flex-wrap gap-3">
+              <div className="flex-1 min-w-[8rem]">
+                <Input type="date" value={logCustomStart} onChange={(e) => setLogCustomStart(e.target.value)} />
+              </div>
+              <div className="flex-1 min-w-[8rem]">
+                <Input type="date" value={logCustomEnd} onChange={(e) => setLogCustomEnd(e.target.value)} />
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mb-5 rounded-xl border border-primary/15 bg-primary/5 p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-bold uppercase tracking-widest text-primary">
+              {t('dashboard.logOperatorTotalsTitle')}
+            </p>
+            <p className="text-sm font-black text-primary">
+              {t('dashboard.logGrandTotal')}: ${logGrandTotal.toFixed(2)}
+            </p>
+          </div>
+          {logOperatorTotals.length === 0 ? (
+            <p className="text-xs text-on-surface-variant">{t('dashboard.logOperatorTotalsEmpty')}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-on-surface-variant border-b border-black/5">
+                    <th className="py-1.5 pr-2">{t('dashboard.logColOperator')}</th>
+                    <th className="py-1.5 pr-2 text-right">{t('dashboard.logColSalesCount')}</th>
+                    <th className="py-1.5 pr-2 text-right">{t('dashboard.logColCash')}</th>
+                    <th className="py-1.5 pr-2 text-right">{t('dashboard.logColTransfer')}</th>
+                    <th className="py-1.5 text-right">{t('dashboard.logColTotal')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logOperatorTotals.map((row) => (
+                    <tr key={row.operator} className="border-b border-black/5 last:border-0">
+                      <td className="py-1.5 pr-2 font-bold text-primary">{row.operator}</td>
+                      <td className="py-1.5 pr-2 text-right">{row.count}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${row.cash.toFixed(2)}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${row.transfer.toFixed(2)}</td>
+                      <td className="py-1.5 text-right font-mono font-bold">${row.total.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="max-h-[58vh] min-h-[12rem] overflow-y-auto space-y-2.5 pr-1">
           {logListForTab.length === 0 ? (
             <p className="text-sm text-on-surface-variant text-center py-6">
               {logTab === 'completed' ? t('dashboard.recentEmptyCompleted') : t('dashboard.recentEmptyReversed')}
@@ -671,55 +799,46 @@ export function Dashboard({
           {logListForTab.map((tx) => (
             <div
               key={tx.id}
-              className="flex items-center justify-between gap-2 p-3 rounded-lg bg-surface-container-low text-sm"
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-surface-container-low text-sm"
             >
-              <span className="font-bold text-primary truncate">
-                {tx.orderNumber} — {tx.customer}
-                {transactionOperatorName(tx) ? ` · ${transactionOperatorName(tx)}` : ''}
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={cn('font-bold', tx.amount < 0 ? 'text-error' : 'text-primary')}>
+              <div className="font-bold text-primary min-w-0 leading-snug">
+                <span className="block sm:inline">{tx.orderNumber} — {tx.customer}</span>
+                {transactionOperatorName(tx) ? (
+                  <span className="block sm:inline text-on-surface-variant font-medium sm:ml-1">
+                    · {transactionOperatorName(tx)}
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    'mt-1 sm:mt-0 sm:ml-2 inline-flex text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full ring-1',
+                    salePaymentBadgeClass(salePaymentBadgeKind(tx)),
+                  )}
+                >
+                  {salePaymentBadgeLabel(tx, t)}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                <span className={cn('font-bold tabular-nums text-base', tx.amount < 0 ? 'text-error' : 'text-primary')}>
                   ${tx.amount.toFixed(2)}
                 </span>
-                {tx.receipt ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="p-1 h-8 w-8"
-                    aria-label={t('dashboard.viewReceiptAria')}
-                    title={t('dashboard.viewReceipt')}
-                    onClick={() => {
-                      setLogOpen(false);
-                      setReceiptViewTx(tx);
-                    }}
-                  >
-                    <FileText size={14} />
-                  </Button>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="p-1 h-8 w-8"
-                  title={t('dashboard.editTx')}
-                  onClick={() => {
-                    setLogOpen(false);
-                    setEditingTx(tx);
-                    setTxModalOpen(true);
-                  }}
-                >
-                  <Edit2 size={14} />
-                </Button>
-                {canReverseSale(tx, reversedSourceIds) ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="p-1 h-8 w-8 text-error"
-                    title={t('dashboard.reverseTxTitle')}
-                    onClick={() => setReversingTx(tx)}
-                  >
-                    <Undo2 size={14} />
-                  </Button>
-                ) : null}
+                <TableActionGroup>
+                  {tx.receipt ? (
+                    <TableIconAction
+                      icon={FileText}
+                      label={t('dashboard.viewReceipt')}
+                      tone="neutral"
+                      onClick={() => setReceiptViewTx(tx)}
+                    />
+                  ) : null}
+                  {canReverseSale(tx, reversedSourceIds) ? (
+                    <TableIconAction
+                      icon={Undo2}
+                      label={t('dashboard.reverseTxTitle')}
+                      tone="danger"
+                      onClick={() => setReversingTx(tx)}
+                    />
+                  ) : null}
+                </TableActionGroup>
               </div>
             </div>
           ))}

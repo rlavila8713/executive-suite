@@ -16,6 +16,7 @@ import type { CashSession, Expense, Product, Transaction } from '../../types';
 import { cn } from '../../lib/utils';
 import { useI18n } from '../../i18n/I18nContext';
 import { mapMutationError } from '../../lib/mutationErrors';
+import { formatAppDateTime } from '../../lib/dateFormat';
 import { transactionOperatorName, uniqueOperatorNames } from '../../lib/operators';
 import {
   dateRangeFromInputs,
@@ -593,11 +594,11 @@ export function ReportsModule({
                   {cashSessions.map((s) => (
                     <tr key={s.id} className="border-t border-black/5">
                       <td className="px-4 py-2 whitespace-nowrap">
-                        {new Date(s.openedAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}
+                        {formatAppDateTime(s.openedAt, locale, 'short')}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap">
                         {s.closedAt
-                          ? new Date(s.closedAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })
+                          ? formatAppDateTime(s.closedAt, locale, 'short')
                           : '—'}
                       </td>
                       <td className="px-4 py-2 text-right">${s.openingCash.toFixed(2)}</td>

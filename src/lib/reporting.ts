@@ -1,5 +1,6 @@
 import type { Expense, PaymentMethod, Product, SaleReceiptLine, Transaction } from '../types';
-import { applyPaymentPartsToBreakdown, receivableBalanceDue } from './paymentSplits';
+import { transactionOperatorName } from './operators';
+import { applyPaymentPartsToBreakdown, receivableBalanceDue, sessionPaymentParts } from './paymentSplits';
 
 export type DateRangeMs = { start: number; end: number };
 
@@ -166,6 +167,63 @@ export function salesRevenue(transactions: Transaction[]): number {
 
 export function salesRevenueInRange(transactions: Transaction[], range: DateRangeMs): number {
   return completedSalesInRange(transactions, range).reduce((s, tx) => s + Math.abs(tx.amount), 0);
+}
+
+export type OperatorSalesRow = { operator: string; count: number; total: number; cash: number; transfer: number };
+
+/** Net completed sales grouped by operator (uses receipt / device operator name). */
+export function operatorCompletedSalesTotals(
+  transactions: Transaction[],
+  range?: DateRangeMs,
+): OperatorSalesRow[] {
+  const map = new Map<string, { count: number; total: number; cash: number; transfer: number }>();
+  for (const tx of transactions) {
+    if (!isCompletedSale(tx)) continue;
+    if (range && (tx.createdAt < range.start || tx.createdAt > range.end)) continue;
+    const operator = transactionOperatorName(tx) || '—';
+    const prev = map.get(operator) ?? { count: 0, total: 0, cash: 0, transfer: 0 };
+    prev.count += 1;
+    prev.total += Math.abs(tx.amount);
+    for (const part of sessionPaymentParts(tx)) {
+      if (part.method === 'cash') prev.cash += part.amount;
+      if (part.method === 'transfer') prev.transfer += part.amount;
+    }
+    map.set(operator, prev);
+  }
+  return [...map.entries()]
+    .map(([operator, v]) => ({
+      operator,
+      count: v.count,
+      total: Math.round(v.total * 100) / 100,
+      cash: Math.round(v.cash * 100) / 100,
+      transfer: Math.round(v.transfer * 100) / 100,
+    }))
+    .sort((a, b) => b.total - a.total);
+}
+
+export function operatorReversalTotals(transactions: Transaction[], range?: DateRangeMs): OperatorSalesRow[] {
+  const map = new Map<string, { count: number; total: number }>();
+  for (const tx of transactions) {
+    const inRange = !range || (tx.createdAt >= range.start && tx.createdAt <= range.end);
+    if (!inRange) continue;
+    if (!isReturnRow(tx) && !(tx.type === 'sale' && (tx.status === 'reversed' || tx.status === 'refunded'))) {
+      continue;
+    }
+    const operator = transactionOperatorName(tx) || '—';
+    const prev = map.get(operator) ?? { count: 0, total: 0 };
+    prev.count += 1;
+    prev.total += Math.abs(tx.amount);
+    map.set(operator, prev);
+  }
+  return [...map.entries()]
+    .map(([operator, v]) => ({
+      operator,
+      count: v.count,
+      total: Math.round(v.total * 100) / 100,
+      cash: 0,
+      transfer: 0,
+    }))
+    .sort((a, b) => b.total - a.total);
 }
 
 function pad2(n: number): string {

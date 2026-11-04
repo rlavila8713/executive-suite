@@ -32,6 +32,14 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_DEVICE_NOT_FOUND') return t('settings.serverDeviceDisconnectErr');
   if (code === 'ERR_OPERATOR_REQUIRED') return t('errors.operatorRequired');
   if (code === 'ERR_OPERATOR_ASSIGN_FORBIDDEN') return t('errors.operatorAssignForbidden');
+  if (code === 'ERR_PERMISSION_DENIED') return t('errors.permissionDenied');
+  if (code === 'ERR_LOGIN_REQUIRED') return t('errors.loginRequired');
+  if (code === 'ERR_AUTH_INVALID') return t('errors.authInvalid');
+  if (code === 'ERR_AUTH_LOCKED') return t('errors.authLocked');
+  if (code === 'ERR_AUTH_WEAK_PASSWORD') return t('errors.authWeakPassword');
+  if (code === 'ERR_DUPLICATE_USERNAME') return t('errors.duplicateUsername');
+  if (code === 'ERR_USER_NAME_REQUIRED') return t('errors.userNameRequired');
+  if (code === 'ERR_INVALID_OPERATOR') return t('settings.serverOperatorRequired');
   if (code.startsWith('ERR_INSUFFICIENT_STOCK')) return mapInsufficientStock(code, t);
   if (code === 'ERR_LICENSE_INVALID') return t('settings.billingActivateErr');
   if (code === 'ERR_LICENSE_ALREADY_USED') return t('settings.billingLicenseUsed');
@@ -63,6 +71,22 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code.startsWith('ERR_WAREHOUSE_SECTION_IN_USE')) return mapWarehouseSectionInUse(code, t);
   if (code === 'ERR_DUPLICATE_WAREHOUSE_SECTION') return t('errors.duplicateWarehouseSection');
   if (code === 'ERR_STORE_STOCK_DIRECT_EDIT') return t('errors.storeStockDirectEdit');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_REASON') return t('stockMovements.reversalReasonRequired');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_QTY') return t('stockMovements.reversalInvalidQty');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_NOT_ENTRY') return t('stockMovements.reversalNotEntry');
+  if (code === 'ERR_WAREHOUSE_TRANSFER_ALREADY_REVERSED') return t('stockMovements.reversalTransferAlreadyDone');
+  if (code === 'ERR_WAREHOUSE_ENTRY_ALREADY_REVERSED') return t('stockMovements.reversalAlreadyDone');
+  if (code === 'ERR_WAREHOUSE_REVERSAL_UNITS_NOT_IN_WAREHOUSE') {
+    return t('stockMovements.reversalEntryNotInWarehouse');
+  }
+  if (code === 'ERR_DUPLICATE_EXPENSE_CATEGORY') return t('errors.duplicateExpenseCategory');
+  if (code === 'ERR_EXPENSE_CATEGORY_SYSTEM') return t('errors.expenseCategorySystem');
+  if (code.startsWith('ERR_EXPENSE_CATEGORY_IN_USE')) return t('errors.expenseCategoryInUse');
+  if (code === 'ERR_INVALID_CONSUMPTION_QTY') return t('expenses.consumptionSelectProduct');
+  if (code.startsWith('ERR_WAREHOUSE_REVERSAL_EXCEEDS')) {
+    const max = code.split('|')[1] ?? '0';
+    return t('stockMovements.reversalExceeds', { max });
+  }
   return code;
 }
 

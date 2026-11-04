@@ -4,7 +4,13 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Sidebar, TopBar, MobileNavDrawer } from './components/Navigation';
+import {
+  Sidebar,
+  TopBar,
+  MobileNavDrawer,
+  readSidebarCollapsedPreference,
+  writeSidebarCollapsedPreference,
+} from './components/Navigation';
 import { Button } from './components/ui';
 import { Dashboard } from './features/Dashboard';
 import { Products } from './features/Products';
@@ -23,12 +29,16 @@ import { Payables } from './features/Payables';
 import { Help } from './features/Help';
 import { Inventory } from './features/Inventory';
 import { Warehouse } from './features/Warehouse';
+import { StockMovements } from './features/StockMovements';
 import { Settings } from './features/Settings';
+import { Users } from './features/Users';
 import { useAppState } from './hooks/useAppState';
 import { Screen } from './types';
-import { initialsFromName } from './lib/utils';
+import { cn, initialsFromName } from './lib/utils';
 import { I18nProvider, useI18n } from './i18n/I18nContext';
 import { ConnectionBanner } from './api/connection';
+import { AuthProvider, useAuth } from './auth/AuthContext';
+import { LoginGate } from './features/Login';
 
 function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): string {
   switch (screen) {
@@ -36,6 +46,7 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.transactions');
     case 'products':
     case 'inventory':
+    case 'stockMovements':
     case 'pos':
       return t('app.search.products');
     case 'categories':
@@ -57,6 +68,7 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
     case 'payables':
       return t('payables.searchPlaceholder');
     case 'reports':
+    case 'users':
     case 'settings':
       return t('app.search.unused');
     default:
@@ -98,8 +110,12 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.reports');
     case 'inventory':
       return t('app.titles.inventory');
+    case 'stockMovements':
+      return t('app.titles.stockMovements');
     case 'help':
       return t('app.titles.help');
+    case 'users':
+      return t('app.titles.users');
     case 'settings':
       return t('app.titles.settings');
     default:
@@ -111,9 +127,15 @@ type AppState = ReturnType<typeof useAppState>;
 
 function AppView(props: AppState) {
   const { t } = useI18n();
+  const { access, logout, authenticated } = useAuth();
   const [globalSearch, setGlobalSearch] = useState('');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsedPreference());
   const [subcategoriesFilterCategoryId, setSubcategoriesFilterCategoryId] = useState<string | undefined>();
+
+  useEffect(() => {
+    writeSidebarCollapsedPreference(sidebarCollapsed);
+  }, [sidebarCollapsed]);
 
   const {
     currentScreen,
@@ -144,14 +166,18 @@ function AppView(props: AppState) {
     warehouseSections,
     warehouseStock,
     warehouseSummary,
-    warehouseMovements,
     addWarehouseSection,
     updateWarehouseSection,
     deleteWarehouseSection,
     reassignWarehouseSection,
+    expenseCategories,
     addExpense,
     updateExpense,
     deleteExpense,
+    addExpenseCategory,
+    renameExpenseCategory,
+    deleteExpenseCategory,
+    createInventoryConsumptionExpense,
     addTransaction,
     updateTransaction,
     reverseSale,
@@ -188,7 +214,26 @@ function AppView(props: AppState) {
     refreshData,
   } = props;
 
-  const [settingsInitialSection, setSettingsInitialSection] = useState<'billing' | undefined>();
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'billing' | 'profile' | undefined>();
+
+  const sessionUser = access?.user ?? null;
+  const userDisplayName =
+    sessionUser?.displayName || appSettings.managerName.trim() || t('nav.guestUser');
+  const userRoleLabel = sessionUser
+    ? sessionUser.roleKey === 'manager'
+      ? t('users.roleManager')
+      : t('users.roleSeller')
+    : appSettings.managerTitle.trim() || '—';
+
+  const openUserProfile = () => {
+    setSettingsInitialSection('profile');
+    setCurrentScreen('settings');
+  };
+
+  const sessionMenuProps =
+    authenticated && sessionUser
+      ? { onLogout: () => logout(), onOpenProfile: openUserProfile }
+      : {};
 
   const licenseBlocked =
     licenseInfo != null &&
@@ -217,7 +262,6 @@ function AppView(props: AppState) {
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
-            onUpdateTransaction={updateTransaction}
             onReverseSale={reverseSale}
           />
         );
@@ -244,7 +288,6 @@ function AppView(props: AppState) {
             sections={warehouseSections}
             stock={warehouseStock}
             summary={warehouseSummary}
-            movements={warehouseMovements}
             globalSearch={globalSearch}
             onAddSection={addWarehouseSection}
             onUpdateSection={updateWarehouseSection}
@@ -252,6 +295,7 @@ function AppView(props: AppState) {
             onReassignSection={reassignWarehouseSection}
             onReceiveStock={receiveProductStock}
             onTransferToStore={transferWarehouseToStore}
+            onAfterStockMutation={refreshData}
           />
         );
       case 'categories':
@@ -352,10 +396,17 @@ function AppView(props: AppState) {
         return (
           <Expenses
             expenses={expenses}
+            expenseCategories={expenseCategories}
+            products={products}
+            warehouseStock={warehouseStock}
             globalSearch={globalSearch}
             onAdd={addExpense}
             onUpdate={updateExpense}
             onDelete={deleteExpense}
+            onAddCategory={addExpenseCategory}
+            onRenameCategory={renameExpenseCategory}
+            onDeleteCategory={deleteExpenseCategory}
+            onInventoryConsumption={createInventoryConsumptionExpense}
           />
         );
       case 'receivables':
@@ -412,6 +463,12 @@ function AppView(props: AppState) {
             syncBusy={apiChecking}
           />
         );
+      case 'stockMovements':
+        return (
+          <StockMovements products={products} globalSearch={globalSearch} onAfterMutation={refreshData} />
+        );
+      case 'users':
+        return <Users apiConnected={apiConnected} />;
       case 'help':
         return <Help onNavigate={setCurrentScreen} />;
       case 'settings':
@@ -440,7 +497,6 @@ function AppView(props: AppState) {
             headerSearch={globalSearch}
             onNavigate={setCurrentScreen}
             onAddTransaction={addTransaction}
-            onUpdateTransaction={updateTransaction}
             onReverseSale={reverseSale}
           />
         );
@@ -464,8 +520,11 @@ function AppView(props: AppState) {
         storeName={appSettings.storeName}
         branchLabel={appSettings.branch}
         storeLogoUrl={appSettings.storeLogoUrl}
-        managerName={appSettings.managerName}
-        managerTitle={appSettings.managerTitle}
+        userDisplayName={userDisplayName}
+        userRoleLabel={userRoleLabel}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={setSidebarCollapsed}
+        {...sessionMenuProps}
       />
 
       <MobileNavDrawer
@@ -476,11 +535,17 @@ function AppView(props: AppState) {
         storeName={appSettings.storeName}
         branchLabel={appSettings.branch}
         storeLogoUrl={appSettings.storeLogoUrl}
-        managerName={appSettings.managerName}
-        managerTitle={appSettings.managerTitle}
+        userDisplayName={userDisplayName}
+        userRoleLabel={userRoleLabel}
+        {...sessionMenuProps}
       />
 
-      <main className="reports-print-main flex-1 flex flex-col min-h-0 min-h-screen md:ml-[15.5rem] w-full max-w-full overflow-x-hidden">
+      <main
+        className={cn(
+          'reports-print-main flex-1 flex flex-col min-h-0 min-h-screen w-full max-w-full overflow-x-hidden transition-[margin] duration-200 ease-out',
+          sidebarCollapsed ? 'md:ml-[4.25rem]' : 'md:ml-[15.5rem]',
+        )}
+      >
         <ConnectionBanner
           connected={apiConnected}
           checking={apiChecking}
@@ -488,7 +553,7 @@ function AppView(props: AppState) {
         />
         <TopBar
           title={getTitle(currentScreen, appSettings.storeName, t)}
-          userInitials={initialsFromName(appSettings.managerName)}
+          userInitials={initialsFromName(userDisplayName)}
           onOpenMobileNav={() => setMobileNavOpen(true)}
           {...(searchDisabled
             ? {}
@@ -544,11 +609,36 @@ function AppView(props: AppState) {
   );
 }
 
-export default function App() {
+function AuthenticatedShell() {
+  const auth = useAuth();
+  if (auth.loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-on-surface-variant">
+        …
+      </div>
+    );
+  }
+  const mustLogin =
+    auth.status?.needsBootstrap || (auth.status?.loginRequired && !auth.authenticated);
+  if (mustLogin) {
+    return (
+      <I18nProvider locale="es">
+        <LoginGate />
+      </I18nProvider>
+    );
+  }
   const state = useAppState();
   return (
     <I18nProvider locale={state.appSettings.locale}>
       <AppView {...state} />
     </I18nProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthenticatedShell />
+    </AuthProvider>
   );
 }

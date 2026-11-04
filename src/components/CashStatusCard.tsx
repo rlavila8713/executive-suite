@@ -4,6 +4,7 @@ import type { CashSession, Screen, Transaction } from '../types';
 import { cn } from '../lib/utils';
 import { localDayRange, netSalesRevenueInRange, paymentMethodBreakdown } from '../lib/reporting';
 import { useI18n } from '../i18n/I18nContext';
+import { formatAppTime } from '../lib/dateFormat';
 
 function compactMoney(value: number, locale: string): string {
   const abs = Math.abs(value);
@@ -41,10 +42,7 @@ export function CashStatusCard({ cashSessions, transactions, onNavigate, classNa
 
   const openedLabel =
     openSession != null
-      ? new Date(openSession.openedAt).toLocaleTimeString(locale === 'es' ? 'es' : 'en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-        })
+      ? formatAppTime(openSession.openedAt, locale)
       : null;
 
   const paymentChips = [

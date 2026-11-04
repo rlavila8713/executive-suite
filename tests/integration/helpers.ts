@@ -120,6 +120,7 @@ export async function api<T = unknown>(
     body?: unknown;
     deviceId?: string;
     headers?: Record<string, string>;
+    authToken?: string;
   } = {},
 ): Promise<ApiResult<T>> {
   if (!baseUrl) throw new Error('Test server not started');
@@ -128,6 +129,7 @@ export async function api<T = unknown>(
     ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     'X-Device-Id': options.deviceId ?? TEST_DEVICE_ID,
     'X-Client-Kind': 'web',
+    ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
     ...options.headers,
   };
 

@@ -1,15 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Edit2, Layers, PackagePlus, Store } from 'lucide-react';
+import { Plus, Trash2, Edit2, Layers, PackagePlus, Store, History, ArrowLeftRight } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
-import type {
-  Product,
-  WarehouseMovement,
-  WarehouseMovementType,
-  WarehouseSection,
-  WarehouseStock,
-  WarehouseSummaryReport,
-} from '../types';
+import type { Product, WarehouseSection, WarehouseStock, WarehouseSummaryReport } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import { mapMutationError } from '../lib/mutationErrors';
@@ -17,13 +11,13 @@ import { usePagination } from '../lib/usePagination';
 import { TablePagination } from '../components/TablePagination';
 import { StatMetricCard } from '../components/StatMetricCard';
 import { WarehouseReceiveDialog, WarehouseTransferDialog } from '../components/WarehouseStockDialogs';
+import { ProductMovementsDialog } from '../components/ProductMovementsDialog';
 
 interface WarehouseProps {
   products: Product[];
   sections: WarehouseSection[];
   stock: WarehouseStock[];
   summary: WarehouseSummaryReport | null;
-  movements: WarehouseMovement[];
   globalSearch?: string;
   onAddSection: (name: string) => void | Promise<void>;
   onUpdateSection: (id: string, name: string) => void | Promise<void>;
@@ -34,6 +28,7 @@ interface WarehouseProps {
     payload: { quantity: number; unitCost: number; price?: number },
   ) => void | Promise<void>;
   onTransferToStore: (productId: string, quantity: number, price: number) => void | Promise<void>;
+  onAfterStockMutation?: () => void;
 }
 
 export function Warehouse({
@@ -41,7 +36,6 @@ export function Warehouse({
   sections,
   stock,
   summary,
-  movements,
   globalSearch = '',
   onAddSection,
   onUpdateSection,
@@ -49,6 +43,7 @@ export function Warehouse({
   onReassignSection,
   onReceiveStock,
   onTransferToStore,
+  onAfterStockMutation,
 }: WarehouseProps) {
   const { t } = useI18n();
   const [search, setSearch] = useState('');
@@ -59,47 +54,12 @@ export function Warehouse({
   const [targetSectionId, setTargetSectionId] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [movementType, setMovementType] = useState<'all' | WarehouseMovementType>('all');
-  const [movementSearch, setMovementSearch] = useState('');
   const [receiveProduct, setReceiveProduct] = useState<Product | null>(null);
   const [transferProduct, setTransferProduct] = useState<Product | null>(null);
+  const [movementsProduct, setMovementsProduct] = useState<Product | null>(null);
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const stockByProductId = useMemo(() => new Map(stock.map((row) => [row.productId, row])), [stock]);
-
-  const movementTypeLabel = (type: WarehouseMovementType) => {
-    switch (type) {
-      case 'ENTRY':
-        return t('warehouse.movementTypeEntry');
-      case 'TRANSFER_TO_STORE':
-        return t('warehouse.movementTypeTransfer');
-      case 'ADJUSTMENT':
-        return t('warehouse.movementTypeAdjustment');
-      case 'SECTION_REASSIGN':
-        return t('warehouse.movementTypeSection');
-      default:
-        return type;
-    }
-  };
-
-  const visibleMovements = useMemo(() => {
-    return movements.filter((m) => {
-      if (movementType !== 'all' && m.type !== movementType) return false;
-      const p = productById.get(m.productId);
-      const label = [p?.name, p?.sku, m.type, m.createdBy ?? ''].filter(Boolean).join(' ');
-      if (!rowMatchesSearch(movementSearch, [label]) || !rowMatchesSearch(globalSearch, [label])) return false;
-      return true;
-    });
-  }, [movements, movementType, movementSearch, globalSearch, productById]);
-
-  const {
-    pageItems: movementPageItems,
-    page: movementPage,
-    setPage: setMovementPage,
-    totalPages: movementTotalPages,
-    total: movementTotal,
-    pageSize: movementPageSize,
-  } = usePagination(visibleMovements);
 
   const visibleStock = useMemo(() => {
     return products
@@ -196,14 +156,20 @@ export function Warehouse({
                     <Layers size={16} className="text-primary shrink-0" />
                     <span className="font-bold text-sm truncate">{sec.name}</span>
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setSectionModal(sec)}>
-                      <Edit2 size={14} />
-                    </Button>
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setDeletingSection(sec)}>
-                      <Trash2 size={14} />
-                    </Button>
-                  </div>
+                  <TableActionGroup>
+                    <TableIconAction
+                      icon={Edit2}
+                      label={t('warehouse.editSection')}
+                      tone="brand"
+                      onClick={() => setSectionModal(sec)}
+                    />
+                    <TableIconAction
+                      icon={Trash2}
+                      label={t('common.delete')}
+                      tone="danger"
+                      onClick={() => setDeletingSection(sec)}
+                    />
+                  </TableActionGroup>
                 </div>
                 <p className="text-xs text-on-surface-variant">
                   {t('warehouse.sectionStats', {
@@ -265,41 +231,44 @@ export function Warehouse({
                         : t('products.costNotSet')}
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <div className="flex justify-end gap-1 flex-wrap">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="gap-1"
-                          onClick={() => p && setReceiveProduct(p)}
-                        >
-                          <PackagePlus size={14} />
-                          {t('warehouse.entryButton')}
-                        </Button>
+                      <TableActionGroup>
+                        {p ? (
+                          <TableIconAction
+                            icon={PackagePlus}
+                            label={t('warehouse.entryButton')}
+                            tone="success"
+                            onClick={() => setReceiveProduct(p)}
+                          />
+                        ) : null}
                         {entry.quantity > 0 && p ? (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="gap-1"
+                          <TableIconAction
+                            icon={Store}
+                            label={t('warehouse.sendToStoreButton')}
+                            tone="info"
                             onClick={() => setTransferProduct(p)}
-                          >
-                            <Store size={14} />
-                            {t('warehouse.sendToStoreButton')}
-                          </Button>
+                          />
+                        ) : null}
+                        {p ? (
+                          <TableIconAction
+                            icon={History}
+                            label={t('stockMovements.movementsButton')}
+                            tone="violet"
+                            onClick={() => setMovementsProduct(p)}
+                          />
                         ) : null}
                         {row ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          <TableIconAction
+                            icon={ArrowLeftRight}
+                            label={t('warehouse.moveSection')}
+                            tone="amber"
                             onClick={() => {
                               setMoveRow(row);
                               setTargetSectionId(row.sectionId);
                               setFormError(null);
                             }}
-                          >
-                            {t('warehouse.moveSection')}
-                          </Button>
+                          />
                         ) : null}
-                      </div>
+                      </TableActionGroup>
                     </td>
                   </tr>
                 );
@@ -310,76 +279,12 @@ export function Warehouse({
         <TablePagination page={page} totalPages={totalPages} total={total} pageSize={pageSize} onPageChange={setPage} />
       </Card>
 
-      <Card className="p-0 overflow-hidden" title={t('warehouse.movementsTitle')} subtitle={t('warehouse.movementsSubtitle')}>
-        <div className="p-4 border-b border-black/5 flex flex-col sm:flex-row gap-3">
-          <Input
-            placeholder={t('warehouse.searchStock')}
-            value={movementSearch}
-            onChange={(e) => setMovementSearch(e.target.value)}
-            className="max-w-md"
-          />
-          <select
-            className="rounded-lg border border-black/10 px-3 py-2 text-sm bg-surface-container-lowest"
-            value={movementType}
-            onChange={(e) => setMovementType(e.target.value as 'all' | WarehouseMovementType)}
-          >
-            <option value="all">{t('warehouse.movementFilterAll')}</option>
-            <option value="ENTRY">{t('warehouse.movementTypeEntry')}</option>
-            <option value="TRANSFER_TO_STORE">{t('warehouse.movementTypeTransfer')}</option>
-            <option value="ADJUSTMENT">{t('warehouse.movementTypeAdjustment')}</option>
-            <option value="SECTION_REASSIGN">{t('warehouse.movementTypeSection')}</option>
-          </select>
-        </div>
-        {visibleMovements.length === 0 ? (
-          <p className="p-6 text-sm text-on-surface-variant text-center">{t('warehouse.movementsEmpty')}</p>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-on-surface-variant border-b border-black/5">
-                    <th className="py-3 px-4">{t('warehouse.colMovementDate')}</th>
-                    <th className="py-3 px-4">{t('warehouse.colMovementType')}</th>
-                    <th className="py-3 px-4">{t('warehouse.colMovementProduct')}</th>
-                    <th className="py-3 px-4 text-right">{t('warehouse.colMovementDelta')}</th>
-                    <th className="py-3 px-4 text-right">{t('warehouse.colMovementBalance')}</th>
-                    <th className="py-3 px-4">{t('warehouse.colMovementOperator')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {movementPageItems.map((m) => {
-                    const p = productById.get(m.productId);
-                    return (
-                      <tr key={m.id} className="border-b border-black/5">
-                        <td className="py-3 px-4 text-xs whitespace-nowrap">
-                          {new Date(m.createdAt).toLocaleString()}
-                        </td>
-                        <td className="py-3 px-4">{movementTypeLabel(m.type)}</td>
-                        <td className="py-3 px-4">
-                          <div className="font-medium">{p?.name ?? m.productId}</div>
-                          <div className="text-xs text-on-surface-variant">{p?.sku}</div>
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono">
-                          {m.quantityDelta > 0 ? `+${m.quantityDelta}` : m.quantityDelta}
-                        </td>
-                        <td className="py-3 px-4 text-right">{m.balanceAfter ?? '—'}</td>
-                        <td className="py-3 px-4 text-xs text-on-surface-variant">{m.createdBy ?? '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <TablePagination
-              page={movementPage}
-              totalPages={movementTotalPages}
-              total={movementTotal}
-              pageSize={movementPageSize}
-              onPageChange={setMovementPage}
-            />
-          </>
-        )}
-      </Card>
+      <ProductMovementsDialog
+        product={movementsProduct}
+        scope="warehouseEntry"
+        onClose={() => setMovementsProduct(null)}
+        onAfterMutation={onAfterStockMutation}
+      />
 
       <Modal isOpen={sectionModal !== null} onClose={() => setSectionModal(null)} title={sectionModal === 'add' ? t('warehouse.newSection') : t('warehouse.editSection')}>
         <form onSubmit={handleSectionSubmit} className="space-y-4">

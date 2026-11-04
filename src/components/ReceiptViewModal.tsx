@@ -63,7 +63,7 @@ export function ReceiptViewModal({ isOpen, onClose, transaction, showSuccessBann
   if (!isOpen || !transaction || !receipt) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={t('receipt.title')}>
+    <Modal isOpen={isOpen} onClose={onClose} title={t('receipt.title')} elevated size="large">
       <div className="space-y-4">
         {showSuccessBanner ? (
           <div className="flex items-center gap-3 rounded-lg bg-tertiary-container/15 px-3 py-2 text-sm text-primary">

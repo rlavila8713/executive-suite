@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Plus, Edit2, Trash2, Users } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { TablePagination } from '../components/TablePagination';
 import type { Customer } from '../types';
@@ -162,23 +163,24 @@ export function Customers({
                     <td className="px-4 py-3 text-sm">{c.phone || '—'}</td>
                     <td className="px-4 py-3 text-sm max-w-xs truncate">{c.address || '—'}</td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
+                      <TableActionGroup>
+                        <TableIconAction
+                          icon={Edit2}
+                          label={t('common.edit')}
+                          tone="brand"
                           onClick={() => {
                             setEditing(c);
                             setFormError(null);
                             setModalOpen(true);
                           }}
-                        >
-                          <Edit2 size={14} />
-                        </Button>
-                        <Button type="button" variant="secondary" size="sm" onClick={() => setDeleting(c)}>
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
+                        />
+                        <TableIconAction
+                          icon={Trash2}
+                          label={t('common.delete')}
+                          tone="danger"
+                          onClick={() => setDeleting(c)}
+                        />
+                      </TableActionGroup>
                     </td>
                   </tr>
                 ))

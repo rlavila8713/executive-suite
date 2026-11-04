@@ -63,8 +63,8 @@ export function WarehouseReceiveDialog({ product, warehouseQty, warehouseUnitCos
       setMsg(t('inventory.receiveInvalidQty'));
       return;
     }
-    if (unitCost == null) {
-      setMsg(t('inventory.receiveInvalidCost'));
+    if (unitCost == null || unitCost <= 0) {
+      setMsg(t('inventory.receiveInvalidCostPositive'));
       return;
     }
     if (priceParsed == null) {

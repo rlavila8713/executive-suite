@@ -1,5 +1,6 @@
 import type { SaleReceipt } from '../types';
 import { useI18n } from '../i18n/I18nContext';
+import { formatAppDateTime } from '../lib/dateFormat';
 import { ApiImage } from './ApiImage';
 
 function money(n: number): string {
@@ -25,10 +26,7 @@ export function SaleReceiptPanel({
   className = '',
 }: SaleReceiptPanelProps) {
   const { t, locale } = useI18n();
-  const dateStr = new Date(createdAt).toLocaleString(locale === 'es' ? 'es' : 'en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const dateStr = formatAppDateTime(createdAt, locale, 'medium');
   const rateStr =
     receipt.taxRatePercent % 1 === 0 ? receipt.taxRatePercent.toFixed(0) : receipt.taxRatePercent.toFixed(2);
   const taxLabel =

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Plus, Edit2, Trash2, Tags, Layers } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
+import { TableActionGroup, TableIconAction } from '../components/TableIconAction';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import type { Product, ProductCategory } from '../types';
 import { rowMatchesSearch } from '../lib/utils';
@@ -161,35 +162,35 @@ export function Categories({
                     <td className="py-4 px-6 font-mono text-sm text-secondary">{c.code}</td>
                     <td className="py-4 px-6 text-right text-sm font-medium text-secondary">{n}</td>
                     <td className="py-4 px-6 text-right">
-                      <div className="flex justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                      <TableActionGroup>
                         {onManageSubcategories ? (
-                          <Button variant="ghost" size="sm" title={t('categories.manageSubcategories')} onClick={() => onManageSubcategories(c.id)}>
-                            <Layers size={14} />
-                          </Button>
+                          <TableIconAction
+                            icon={Layers}
+                            label={t('categories.manageSubcategories')}
+                            tone="violet"
+                            onClick={() => onManageSubcategories(c.id)}
+                          />
                         ) : null}
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                        <TableIconAction
+                          icon={Edit2}
+                          label={t('common.edit')}
+                          tone="brand"
                           onClick={() => {
                             setEditing(c);
                             setFormError(null);
                             setModalOpen(true);
                           }}
-                        >
-                          <Edit2 size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-error hover:bg-error/10"
+                        />
+                        <TableIconAction
+                          icon={Trash2}
+                          label={t('common.delete')}
+                          tone="danger"
                           onClick={() => {
                             setFormError(null);
                             setDeleting(c);
                           }}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
+                        />
+                      </TableActionGroup>
                     </td>
                   </tr>
                 );

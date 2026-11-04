@@ -6,8 +6,11 @@ import {
   PackageX,
   RefreshCw,
   ChevronDown,
+  History,
 } from 'lucide-react';
 import { Card, Button, Input } from '../components/ui';
+import { TableIconAction } from '../components/TableIconAction';
+import { ProductMovementsDialog } from '../components/ProductMovementsDialog';
 import { ProductThumb } from '../components/ProductThumb';
 import { Product, ProductCategory, ProductSubcategory } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
@@ -23,6 +26,7 @@ import {
 } from '../components/CatalogFilterModal';
 import { ViewModeToggle, type ViewMode } from '../components/ViewModeToggle';
 import { StatMetricCard } from '../components/StatMetricCard';
+import { formatAppDateTime } from '../lib/dateFormat';
 
 type StockChip = 'all' | 'available' | 'low' | 'out';
 
@@ -66,12 +70,13 @@ export function Inventory({
   onSyncStock,
   syncBusy,
 }: InventoryProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [localSearch, setLocalSearch] = useState('');
   const [stockChip, setStockChip] = useState<StockChip>('all');
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>({ kind: 'all' });
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [movementsProduct, setMovementsProduct] = useState<Product | null>(null);
 
   const inventoryValueAtCost = useMemo(
     () => products.reduce((sum, p) => sum + p.cost * p.stock, 0),
@@ -118,7 +123,7 @@ export function Inventory({
     ]);
     const ok = printTableDocument(
       t('inventory.stockReport'),
-      new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+      formatAppDateTime(Date.now(), locale, 'medium'),
       [
         t('inventory.colDetails'),
         t('common.sku'),
@@ -275,6 +280,14 @@ export function Inventory({
                       {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
                     </span>
                   </div>
+                  <div className="mt-auto flex justify-center">
+                    <TableIconAction
+                      icon={History}
+                      label={t('stockMovements.movementsButton')}
+                      tone="violet"
+                      onClick={() => setMovementsProduct(product)}
+                    />
+                  </div>
                 </div>
               </div>
             ))}
@@ -301,6 +314,7 @@ export function Inventory({
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colSalePrice')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colAvgCost')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-center">{t('inventory.colStatus')}</th>
+                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -332,6 +346,14 @@ export function Inventory({
                         {statusLabel(product)}
                       </span>
                     </td>
+                    <td className="py-3 px-4 text-right">
+                      <TableIconAction
+                        icon={History}
+                        label={t('stockMovements.movementsButton')}
+                        tone="violet"
+                        onClick={() => setMovementsProduct(product)}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -349,6 +371,12 @@ export function Inventory({
           </div>
         )}
       </Card>
+
+      <ProductMovementsDialog
+        product={movementsProduct}
+        scope="storeEntry"
+        onClose={() => setMovementsProduct(null)}
+      />
 
       <CatalogFilterModal
         isOpen={catalogModalOpen}
