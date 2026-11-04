@@ -52,6 +52,8 @@ import { normalizeStoreLogo } from './storeLogo.js';
 import { normalizeProductImageForStore } from './normalizeProductImage.js';
 import { buildServerDiagnostics, buildClientDiagnostics } from './diagnostics.js';
 import { importBackupWithSafety } from './backupImport.js';
+import { buildAccessControlBackupSnapshot } from './backupAccessControl.js';
+import { buildBackupExtrasSnapshot } from './backupExtras.js';
 import { createSqliteBackup } from './dbBackup.js';
 import { inlineProductImageForBackup } from './backupImageInline.js';
 import { ApiError } from './apiError.js';
@@ -65,17 +67,17 @@ import {
 } from './connectedDevices.js';
 import { registerAuthRoutes } from './authRoutes.js';
 import { registerRbacRoutes } from './rbacRoutes.js';
-import { assertDevicePermission, getOperatorBindingForRequest, setLoginRequired } from './auth.js';
+import { registerSyncRoutes } from './syncRoutes.js';
+import { requireCurrentDayCashSession } from './cashSessionRules.js';
+import { processMobileSale, TX_INSERT_SQL } from './mobileOffline.js';
+import type { MobileSaleInput } from './mobileOffline.js';
+import { assertDevicePermission, setLoginRequired } from './auth.js';
 import {
   deviceOperatorDisplayName,
   getOperatorForDevice,
   setDeviceOperatorAssignment,
 } from './rbac.js';
-import { normalizeMixedSaleReceipt, SaleCheckoutValidationError } from './salesCheckout.js';
 import { debtAmountFromReceipt, mixedSaleShape, transferAmountFromReceipt } from './mixedReversal.js';
-
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status, operator_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export { ApiError } from './apiError.js';
 
@@ -98,34 +100,6 @@ function nameClashes(db: SqliteStore, name: string, exceptId?: string): boolean 
   const lower = name.trim().toLowerCase();
   const rows = db.prepare('SELECT id, name FROM categories').all() as { id: string; name: string }[];
   return rows.some((c) => c.id !== exceptId && c.name.trim().toLowerCase() === lower);
-}
-
-type OpenCashSession = { id: string; opened_at: number };
-
-function localDayKey(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-
-/** A sale must belong to a session opened today, and the local clock may not move behind its opening. */
-function requireCurrentDayCashSession(db: SqliteStore, now: number = Date.now()): OpenCashSession {
-  const session = db.prepare('SELECT id, opened_at FROM cash_sessions WHERE closed_at IS NULL LIMIT 1').get() as
-    | OpenCashSession
-    | undefined;
-  if (!session) throw new ApiError(409, 'Cash session must be open before selling', 'ERR_CASH_SESSION_REQUIRED');
-  if (now < session.opened_at) {
-    throw new ApiError(409, 'System clock is earlier than the cash session opening', 'ERR_CASH_CLOCK_ROLLBACK');
-  }
-  const lastMovement = db
-    .prepare('SELECT MAX(created_at) AS timestamp FROM transactions WHERE created_at >= ?')
-    .get(session.opened_at) as { timestamp: number | null } | undefined;
-  if (lastMovement?.timestamp != null && now < lastMovement.timestamp) {
-    throw new ApiError(409, 'System clock is earlier than a recorded cash movement', 'ERR_CASH_CLOCK_ROLLBACK');
-  }
-  if (localDayKey(session.opened_at) !== localDayKey(now)) {
-    throw new ApiError(409, 'Close the previous daily cash session before selling', 'ERR_CASH_SESSION_DAILY_CLOSE_REQUIRED');
-  }
-  return session;
 }
 
 type ReceiptLineRef = { productId?: string; sku?: string; quantity?: number };
@@ -554,6 +528,9 @@ export function registerRoutes(router: import('express').Router): void {
         body.soldAsPayable ? 1 : 0,
         typeof body.payableStatus === 'string' ? body.payableStatus : null,
         typeof body.operatorId === 'string' ? body.operatorId : null,
+        null,
+        null,
+        0,
       );
       const row = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
       res.status(201).json(rowToTransaction(row as Parameters<typeof rowToTransaction>[0]));
@@ -721,6 +698,9 @@ export function registerRoutes(router: import('express').Router): void {
           0,
           null,
           (existing as { operator_id?: string | null }).operator_id ?? null,
+          null,
+          null,
+          0,
         );
 
         if (pendingReceivable) {
@@ -773,6 +753,9 @@ export function registerRoutes(router: import('express').Router): void {
             1,
             'pending',
             (existing as { operator_id?: string | null }).operator_id ?? null,
+            null,
+            null,
+            0,
           );
         }
       });
@@ -786,167 +769,9 @@ export function registerRoutes(router: import('express').Router): void {
   router.post(
     '/sales',
     asyncHandler(async (req, res) => {
-      const body = req.body as {
-        customerName?: string;
-        customerId?: string;
-        amount?: number;
-        isDebt?: boolean;
-        isPartialDebt?: boolean;
-        receipt?: {
-          lines: { productId?: string; sku: string; quantity: number; name?: string }[];
-          paymentMethod?: string;
-          total?: number;
-          subtotal?: number;
-          payments?: { method: string; amount: number }[];
-          [key: string]: unknown;
-        };
-      };
-      if (!body.receipt?.lines?.length) throw new ApiError(400, 'Receipt lines required');
-
       const db = getDb();
-      requireCurrentDayCashSession(db);
-      const deviceId = req.header('X-Device-Id')?.trim() ?? '';
-      let customerId: string | null = null;
-      if (body.customerId?.trim()) {
-        const c = db.prepare('SELECT id FROM customers WHERE id = ?').get(body.customerId.trim()) as
-          | { id: string }
-          | undefined;
-        if (c) customerId = c.id;
-      }
-      const clientKind = inferClientKind(req.header('User-Agent') ?? '', req.header('X-Client-Kind') ?? undefined);
-      if (clientKind === 'mobile') {
-        assertDevicePermission(db, deviceId, 'sales.checkout', clientKind, req);
-      }
-      const operatorBinding = deviceId
-        ? getOperatorBindingForRequest(db, deviceId, req)
-        : { operatorId: null as string | null, operatorName: '' };
-      const operatorName = operatorBinding.operatorName;
-      const operatorId = operatorBinding.operatorId;
-      if (clientKind === 'mobile' && !operatorName) {
-        throw new ApiError(409, 'Assign an operator to this device before selling', 'ERR_OPERATOR_REQUIRED');
-      }
-
-      const settingsRow = db.prepare('SELECT tax_rate FROM app_settings WHERE id = ?').get('main') as
-        | { tax_rate: number }
-        | undefined;
-      const taxRate = settingsRow?.tax_rate ?? 0;
-
-      const isDebtFull = body.isDebt === true && body.isPartialDebt !== true;
-      let checkout;
-      try {
-        checkout = normalizeMixedSaleReceipt(body.receipt as import('./salesCheckout.js').SaleReceiptInput, taxRate, {
-          isDebt: isDebtFull,
-          isPartialDebt: body.isPartialDebt === true,
-          clientKind: clientKind === 'mobile' ? 'mobile' : 'web',
-        });
-      } catch (e) {
-        if (e instanceof SaleCheckoutValidationError) {
-          throw new ApiError(e.status, e.message, e.code);
-        }
-        throw e;
-      }
-
-      const soldAsDebt = checkout.soldAsDebt || isDebtFull;
-      const customerTrim = (body.customerName ?? '').trim();
-      if (soldAsDebt && !customerTrim) {
-        throw new ApiError(400, 'Customer name is required for debt sales', 'ERR_DEBT_CUSTOMER_REQUIRED');
-      }
-
-      const amount = body.amount && body.amount > 0 ? body.amount : (checkout.receipt.total ?? 0);
-      const paymentMethod = soldAsDebt && !checkout.receipt.payments?.length
-        ? ('debt' as const)
-        : (checkout.paymentMethod as 'cash' | 'card' | 'transfer' | 'other' | 'mixed' | 'debt');
-      const receipt = {
-        ...checkout.receipt,
-        ...(operatorName ? { operatorName } : {}),
-      };
-      const newTransaction = {
-        id: newId(),
-        orderNumber: `#${Math.floor(Math.random() * 90000) + 10000}`,
-        customer: customerTrim || 'Walk-in Customer',
-        amount,
-        status: 'completed' as const,
-        timestamp: 'Just now',
-        type: 'sale' as const,
-        createdAt: Date.now(),
-        receipt,
-        paymentMethod,
-        operatorName: operatorName || undefined,
-        operatorId: operatorId ?? undefined,
-        sourceDeviceId: deviceId || undefined,
-        soldAsDebt,
-        debtStatus: soldAsDebt ? ('pending' as const) : undefined,
-        customerId: customerId ?? undefined,
-      };
-
-      db.runInTransaction(() => {
-        for (const line of body.receipt!.lines) {
-          const qty = Number(line.quantity);
-          if (!Number.isFinite(qty) || qty <= 0) {
-            throw new ApiError(400, 'Invalid line quantity', 'ERR_INVALID_QTY');
-          }
-          let product: { id: string; stock: number; name: string } | undefined;
-          if (line.productId) {
-            product = db.prepare('SELECT id, stock, name FROM products WHERE id = ?').get(line.productId) as
-              | { id: string; stock: number; name: string }
-              | undefined;
-          }
-          if (!product && line.sku) {
-            product = db.prepare('SELECT id, stock, name FROM products WHERE sku = ?').get(line.sku) as
-              | { id: string; stock: number; name: string }
-              | undefined;
-          }
-          if (product && product.stock < qty) {
-            throw new ApiError(
-              409,
-              'Insufficient stock',
-              `ERR_INSUFFICIENT_STOCK|${encodeURIComponent(line.sku ?? '')}|${encodeURIComponent(product.name)}`,
-            );
-          }
-        }
-
-        db.prepare(TX_INSERT_SQL).run(
-          newTransaction.id,
-          newTransaction.orderNumber,
-          newTransaction.customer,
-          newTransaction.amount,
-          newTransaction.status,
-          newTransaction.timestamp,
-          newTransaction.type,
-          newTransaction.createdAt,
-          newTransaction.paymentMethod,
-          JSON.stringify(newTransaction.receipt),
-          null,
-          operatorName || null,
-          deviceId || null,
-          soldAsDebt ? 'pending' : null,
-          null,
-          soldAsDebt ? 1 : 0,
-          customerId,
-          0,
-          null,
-          operatorId,
-        );
-
-        for (const line of body.receipt!.lines) {
-          let product: { id: string; stock: number } | undefined;
-          if (line.productId) {
-            product = db.prepare('SELECT id, stock FROM products WHERE id = ?').get(line.productId) as
-              | { id: string; stock: number }
-              | undefined;
-          }
-          if (!product && line.sku) {
-            product = db.prepare('SELECT id, stock FROM products WHERE sku = ?').get(line.sku) as
-              | { id: string; stock: number }
-              | undefined;
-          }
-          if (product) {
-            db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(product.stock - line.quantity, product.id);
-          }
-        }
-      });
-
-      res.status(201).json(newTransaction);
+      const outcome = processMobileSale(db, req, req.body as MobileSaleInput);
+      res.status(outcome.status === 'created' ? 201 : 200).json(outcome.transaction);
     }),
   );
 
@@ -1396,9 +1221,23 @@ export function registerRoutes(router: import('express').Router): void {
           managerName: 'manager_name',
           managerTitle: 'manager_title',
           locale: 'locale',
+          salesIncentivePercent: 'sales_incentive_percent',
+          salesIncentiveBase: 'sales_incentive_base',
         };
         if (body.authLoginRequired !== undefined) {
           setLoginRequired(db, body.authLoginRequired === true);
+        }
+        if (body.salesIncentivePercent !== undefined) {
+          const p = Number(body.salesIncentivePercent);
+          if (!Number.isFinite(p) || p < 0 || p > 100) {
+            throw new ApiError(400, 'salesIncentivePercent must be between 0 and 100');
+          }
+        }
+        if (body.salesIncentiveBase !== undefined) {
+          const b = String(body.salesIncentiveBase);
+          if (b !== 'net' && b !== 'gross') {
+            throw new ApiError(400, 'salesIncentiveBase must be net or gross');
+          }
         }
         const fields: string[] = [];
         const values: unknown[] = [];
@@ -1754,15 +1593,18 @@ export function registerRoutes(router: import('express').Router): void {
         )
         .all();
       const warehouseMovements = db
-        .prepare('SELECT * FROM warehouse_movements ORDER BY created_at DESC LIMIT 5000')
+        .prepare('SELECT * FROM warehouse_movements ORDER BY created_at ASC')
         .all();
       const customers = db
         .prepare('SELECT * FROM customers ORDER BY first_name, last_name')
         .all()
         .map((r) => rowToCustomer(r as Parameters<typeof rowToCustomer>[0]));
 
+      const accessControl = buildAccessControlBackupSnapshot(db);
+      const { expenseCategories, userAdminAudit, license } = buildBackupExtrasSnapshot(db);
+
       res.json({
-        schemaVersion: 6,
+        schemaVersion: 8,
         exportedAt: new Date().toISOString(),
         app: 'executive-suite',
         products,
@@ -1770,6 +1612,10 @@ export function registerRoutes(router: import('express').Router): void {
         expenses,
         customers,
         appSettings,
+        expenseCategories,
+        userAdminAudit,
+        license,
+        accessControl,
         productCategories,
         productSubcategories: subcategories.map((s) => ({
           id: s.id,
@@ -1811,6 +1657,7 @@ export function registerRoutes(router: import('express').Router): void {
 
   registerAuthRoutes(router);
   registerRbacRoutes(router);
+  registerSyncRoutes(router);
   registerCatalogRoutes(router);
   registerWarehouseRoutes(router);
 }

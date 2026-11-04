@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import { Card, Button, Input } from '../../components/ui';
-import type { CashSession, Expense, Product, Transaction } from '../../types';
+import type { AppSettings, CashSession, Expense, Product, Transaction } from '../../types';
 import { cn } from '../../lib/utils';
 import { useI18n } from '../../i18n/I18nContext';
 import { mapMutationError } from '../../lib/mutationErrors';
@@ -29,12 +29,14 @@ import {
   mixedReversalPayablesSummary,
   previousPeriodOfSameLength,
   profitGrossInRange,
+  salesIncentiveDistribution,
   slowMovingProducts,
   topSellingProducts,
   type SalesBucket,
 } from '../../lib/reporting';
 
 export type ReportsModuleProps = {
+  appSettings: Pick<AppSettings, 'salesIncentivePercent' | 'salesIncentiveBase'>;
   transactions: Transaction[];
   products: Product[];
   expenses: Expense[];
@@ -64,6 +66,7 @@ function defaultStart(): Date {
 }
 
 export function ReportsModule({
+  appSettings,
   transactions,
   products,
   expenses,
@@ -146,6 +149,134 @@ export function ReportsModule({
   );
 
   const netOp = useMemo(() => profit.grossProfit - expensesR, [profit.grossProfit, expensesR]);
+
+  const storeIncentive = useMemo(
+    () =>
+      salesIncentiveDistribution(
+        transactions,
+        products,
+        expenses,
+        range,
+        appSettings.salesIncentivePercent,
+        appSettings.salesIncentiveBase,
+      ),
+    [
+      transactions,
+      products,
+      expenses,
+      range,
+      appSettings.salesIncentivePercent,
+      appSettings.salesIncentiveBase,
+    ],
+  );
+  const incentivePool = storeIncentive.pool;
+  const incentiveBaseAmount = storeIncentive.baseAmount;
+  const incentiveRows = storeIncentive.rows;
+  const incentiveBaseLabel =
+    appSettings.salesIncentiveBase === 'gross' ? t('reports.grossProfit') : t('reports.netProfit');
+
+  const incentiveForOperator = operatorFilter
+    ? incentiveRows.find((r) => r.operator === operatorFilter)
+    : undefined;
+  const incentiveDisplayAmount = operatorFilter ? (incentiveForOperator?.amount ?? 0) : incentivePool;
+  const incentiveDisplayTitle = operatorFilter
+    ? t('reports.incentivePoolTitleOperator', { operator: operatorFilter })
+    : t('reports.incentivePoolTitle');
+
+  const renderIncentivePoolSummary = (compact: boolean) => (
+    <>
+      <p
+        className={cn(
+          'font-bold uppercase tracking-widest text-on-surface-variant',
+          compact ? 'text-[10px]' : 'text-[10px]',
+        )}
+      >
+        {incentiveDisplayTitle}
+      </p>
+      <p className={cn('font-black text-primary', compact ? 'text-lg mt-1' : 'text-2xl mt-2')}>
+        ${incentiveDisplayAmount.toLocaleString()}
+      </p>
+      {operatorFilter ? (
+        incentiveForOperator ? (
+          <p className={cn('text-on-surface-variant', compact ? 'text-xs mt-1' : 'text-sm mt-2')}>
+            {t('reports.incentivePoolOperatorDetail', {
+              share: incentiveForOperator.sharePercent.toFixed(1),
+              poolTotal: incentivePool.toLocaleString(),
+              netSales: incentiveForOperator.netSales.toLocaleString(),
+            })}
+          </p>
+        ) : (
+          <p className={cn('text-on-surface-variant', compact ? 'text-xs mt-1' : 'text-sm mt-2')}>
+            {t('reports.incentiveOperatorNoSales', { operator: operatorFilter })}
+          </p>
+        )
+      ) : (
+        <p className={cn('text-on-surface-variant', compact ? 'text-xs mt-1' : 'text-sm mt-2')}>
+          {t('reports.incentivePoolFormula', {
+            percent: appSettings.salesIncentivePercent,
+            base: incentiveBaseLabel,
+            baseAmount: incentiveBaseAmount.toLocaleString(),
+          })}
+        </p>
+      )}
+      {operatorFilter && appSettings.salesIncentiveBase === 'net' ? (
+        <p className="text-xs text-amber-800 dark:text-amber-200 mt-2">{t('reports.incentiveOperatorNetNote')}</p>
+      ) : null}
+      {!compact ? <p className="text-xs text-on-surface-variant mt-2">{t('reports.incentivePoolHint')}</p> : null}
+    </>
+  );
+
+  const renderIncentiveSplitTable = () => (
+    <Card title={t('reports.incentiveSplitTitle')} className="p-0 overflow-hidden">
+      <p className="px-4 pt-4 pb-2 text-xs text-on-surface-variant sm:px-6">{t('reports.incentiveSplitSubtitle')}</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-container-low text-left text-[10px] uppercase text-on-surface-variant">
+            <tr>
+              <th className="px-4 py-3">{t('reports.colSeller')}</th>
+              <th className="px-4 py-3 text-right">{t('reports.netSales')}</th>
+              <th className="px-4 py-3 text-right">{t('reports.colSharePct')}</th>
+              <th className="px-4 py-3 text-right">{t('reports.colIncentivePay')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {incentiveRows.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-on-surface-variant">
+                  —
+                </td>
+              </tr>
+            ) : (
+              incentiveRows.map((row) => (
+                <tr
+                  key={row.operator}
+                  className={cn(
+                    'border-t border-black/5',
+                    operatorFilter && row.operator === operatorFilter && 'bg-primary/10 font-medium',
+                  )}
+                >
+                  <td className="px-4 py-2">{row.operator}</td>
+                  <td className="px-4 py-2 text-right">${row.netSales.toLocaleString()}</td>
+                  <td className="px-4 py-2 text-right">{row.sharePercent.toFixed(1)}%</td>
+                  <td className="px-4 py-2 text-right font-bold text-primary">${row.amount.toLocaleString()}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          {incentiveRows.length > 0 ? (
+            <tfoot className="border-t border-black/10 bg-surface-container-low">
+              <tr>
+                <td className="px-4 py-3 text-xs font-bold uppercase text-on-surface-variant" colSpan={3}>
+                  {t('reports.incentiveSplitTotal')}
+                </td>
+                <td className="px-4 py-3 text-right font-black text-primary">${incentivePool.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+    </Card>
+  );
 
   const top = useMemo(() => topSellingProducts(scopedTransactions, range, 15), [scopedTransactions, range]);
   const slow = useMemo(() => slowMovingProducts(scopedTransactions, products, range, 15), [scopedTransactions, products, range]);
@@ -354,7 +485,18 @@ export function ReportsModule({
               <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.expensesInRange')}</p>
               <p className="text-lg font-bold text-primary mt-1">${expensesR.toLocaleString()}</p>
             </Card>
+            <Card className="p-4">
+              <p className="text-[10px] font-bold uppercase text-on-surface-variant">{t('reports.netProfit')}</p>
+              <p className={cn('text-lg font-black mt-1', netOp >= 0 ? 'text-on-tertiary-container' : 'text-error')}>
+                ${netOp.toLocaleString()}
+              </p>
+              <p className="text-[10px] text-on-surface-variant mt-1">{t('reports.netProfitHint')}</p>
+            </Card>
           </div>
+          {appSettings.salesIncentivePercent > 0 ? (
+            <Card className="p-4 sm:p-6 border-primary/20 bg-primary/5">{renderIncentivePoolSummary(false)}</Card>
+          ) : null}
+          {appSettings.salesIncentivePercent > 0 ? renderIncentiveSplitTable() : null}
           <Card title={t('reports.salesTrend')} subtitle={t('reports.salesTrendSubtitle')} className="p-4 sm:p-6">
             <div className="h-72 mt-4">
               <ResponsiveContainer width="100%" height="100%">
@@ -431,9 +573,13 @@ export function ReportsModule({
             <p className="text-lg font-bold">${expensesR.toLocaleString()}</p>
             <p className="text-xs text-on-surface-variant mt-2">{t('reports.netOperatingNote')}</p>
             <p className="text-xl font-black text-primary mt-2">
-              {t('reports.netOperating')}: ${netOp.toLocaleString()}
+              {t('reports.netProfit')}: ${netOp.toLocaleString()}
             </p>
+            {appSettings.salesIncentivePercent > 0 ? (
+              <div className="mt-4 pt-4 border-t border-black/10">{renderIncentivePoolSummary(true)}</div>
+            ) : null}
           </Card>
+          {appSettings.salesIncentivePercent > 0 ? renderIncentiveSplitTable() : null}
           <Card title={t('reports.topProducts')} className="p-0 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

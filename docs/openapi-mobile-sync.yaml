@@ -1,0 +1,1017 @@
+openapi: 3.0.3
+info:
+  title: Executive Suite — Mobile sync & checkout (draft)
+  description: |
+    Draft specification for mobile offline Phase 1 endpoints only.
+    Entity shapes align with `src/types.ts` (Product, Customer, SaleReceipt, DeviceAccessContext, CashSession, Transaction).
+
+    **Examples:** `components/examples/*` mirror payloads from `tests/integration/api.test.ts`
+    (offline pack + sync idempotency, device access, minimal checkout receipt lines).
+  version: 0.1.1-draft
+servers:
+  - url: http://{host}:4000
+    variables:
+      host:
+        default: localhost
+        description: LAN IP or hostname of the store server
+
+tags:
+  - name: sync
+    description: Mobile offline pack and sale replay
+  - name: sales
+    description: Live checkout (shared with web; mobile idempotency via clientSaleId)
+
+paths:
+  /api/sync/offline-pack:
+    get:
+      tags: [sync]
+      summary: Download offline cache snapshot
+      operationId: getOfflinePack
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Snapshot for local persistence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OfflinePack'
+              examples:
+                integrationOfflinePack:
+                  $ref: '#/components/examples/IntegrationOfflinePack'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          description: Not a mobile client
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorBody'
+              examples:
+                mobileOnly:
+                  $ref: '#/components/examples/ErrSyncMobileOnly'
+
+  /api/sync/sales:
+    post:
+      tags: [sync]
+      summary: Batch replay queued offline sales
+      operationId: syncOfflineSales
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncSalesRequest'
+            examples:
+              integrationOfflineSync:
+                $ref: '#/components/examples/IntegrationSyncSalesRequest'
+      responses:
+        '200':
+          description: Per-item results (partial success allowed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncSalesResponse'
+              examples:
+                integrationCreated:
+                  $ref: '#/components/examples/IntegrationSyncSalesResponseCreated'
+                integrationDuplicate:
+                  $ref: '#/components/examples/IntegrationSyncSalesResponseDuplicate'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+
+  /api/sync/sales/{clientSaleId}/replay:
+    post:
+      tags: [sync]
+      summary: Replay a single offline sale
+      operationId: replayOfflineSale
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+        - name: clientSaleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 22222222-2222-2222-2222-222222222222
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileSaleInput'
+            examples:
+              integrationOfflineSync:
+                $ref: '#/components/examples/IntegrationMobileSaleInput'
+      responses:
+        '201':
+          description: Sale created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileSaleOutcome'
+        '200':
+          description: Duplicate clientSaleId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileSaleOutcome'
+        '4XX':
+          $ref: '#/components/responses/ApiError'
+
+  /api/sales:
+    post:
+      tags: [sales]
+      summary: Live checkout (mobile or web)
+      description: |
+        Mobile clients should send X-Client-Kind mobile and X-Device-Id.
+        Optional clientSaleId enables idempotent checkout (200 on duplicate).
+        Does not set syncOffline; uses server time for createdAt.
+      operationId: postSale
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LiveSaleRequest'
+            examples:
+              integrationIdempotentLive:
+                $ref: '#/components/examples/IntegrationLiveSaleRequest'
+              integrationMinimalReceipt:
+                $ref: '#/components/examples/IntegrationLiveSaleRequestMinimal'
+      responses:
+        '201':
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+              examples:
+                integrationCreated:
+                  $ref: '#/components/examples/IntegrationTransactionAfterSync'
+        '200':
+          description: Duplicate clientSaleId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+              examples:
+                integrationDuplicate:
+                  $ref: '#/components/examples/IntegrationTransactionAfterSync'
+        '4XX':
+          $ref: '#/components/responses/ApiError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Required when store login is enabled
+
+  parameters:
+    XDeviceId:
+      name: X-Device-Id
+      in: header
+      required: true
+      schema:
+        type: string
+      examples:
+        integrationOfflineSync:
+          value: mobile-offline-sync
+        integrationDeviceAccess:
+          value: mobile-access-ctx
+    XClientKindMobile:
+      name: X-Client-Kind
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [mobile]
+
+  responses:
+    ApiError:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorBody'
+
+  examples:
+    ErrSyncMobileOnly:
+      summary: Non-mobile client rejected from sync routes
+      value:
+        error: Offline pack is intended for mobile clients
+        code: ERR_SYNC_MOBILE_ONLY
+
+    IntegrationMobileSaleInput:
+      summary: Single offline sale replay body
+      description: Same shape as one sync sales item in integration test clientSaleId idempotency.
+      value:
+        clientSaleId: 22222222-2222-2222-2222-222222222222
+        clientCreatedAt: 1730000000000
+        cashSessionId: cs-integration-open
+        syncOffline: true
+        operatorId: op-integration-seller
+        operatorName: Offline Op
+        amount: 10
+        receipt:
+          lines:
+            - sku: NO-STOCK
+              quantity: 1
+          paymentMethod: cash
+          subtotal: 10
+          total: 10
+
+    IntegrationSyncSalesRequest:
+      summary: Batch offline sync request
+      description: tests/integration/api.test.ts POST /api/sync/sales body.
+      value:
+        sales:
+          - clientSaleId: 22222222-2222-2222-2222-222222222222
+            clientCreatedAt: 1730000000000
+            cashSessionId: cs-integration-open
+            syncOffline: true
+            operatorId: op-integration-seller
+            operatorName: Offline Op
+            amount: 10
+            receipt:
+              lines:
+                - sku: NO-STOCK
+                  quantity: 1
+              paymentMethod: cash
+              subtotal: 10
+              total: 10
+
+    IntegrationSyncSalesResponseCreated:
+      summary: First successful batch item
+      value:
+        syncedAt: 1730000001000
+        results:
+          - clientSaleId: 22222222-2222-2222-2222-222222222222
+            status: created
+            transactionId: tx-integration-001
+
+    IntegrationSyncSalesResponseDuplicate:
+      summary: Idempotent replay of the same clientSaleId
+      value:
+        syncedAt: 1730000002000
+        results:
+          - clientSaleId: 22222222-2222-2222-2222-222222222222
+            status: duplicate
+            transactionId: tx-integration-001
+
+    IntegrationLiveSaleRequest:
+      summary: Live POST /api/sales with same clientSaleId as sync test
+      description: Integration expects HTTP 200 and same transaction id as prior sync.
+      value:
+        clientSaleId: 22222222-2222-2222-2222-222222222222
+        clientCreatedAt: 1730000000000
+        cashSessionId: cs-integration-open
+        syncOffline: true
+        operatorId: op-integration-seller
+        operatorName: Offline Op
+        amount: 10
+        receipt:
+          lines:
+            - sku: NO-STOCK
+              quantity: 1
+          paymentMethod: cash
+          subtotal: 10
+          total: 10
+
+    IntegrationLiveSaleRequestMinimal:
+      summary: Minimal live sale (cash sessions / clock tests)
+      description: From api.test.ts — customerName, amount, minimal receipt.
+      value:
+        customerName: Cliente
+        amount: 10
+        receipt:
+          lines:
+            - sku: NO-STOCK
+              quantity: 1
+          total: 10
+          paymentMethod: cash
+
+    IntegrationOfflinePack:
+      summary: Offline pack snapshot (illustrative)
+      description: Composite example; cashSession.id must match open session for offline checkout tests.
+      value:
+        generatedAt: 1730000000000
+        catalogRevision: '6'
+        cashSession:
+          id: cs-integration-open
+          openedAt: 1730000000000
+          closedAt: null
+          openingCash: 0
+          closingCash: null
+          totalCashSales: 0
+          totalCardSales: 0
+          totalTransferSales: 0
+          totalOtherSales: 0
+          totalDebtSales: 0
+        access:
+          deviceId: mobile-access-ctx
+          operator:
+            id: op-integration-pedro
+            displayName: Pedro
+          user:
+            id: user-integration-pedro
+            displayName: Pedro
+            username: null
+            roleKey: seller
+          permissions:
+            - sales.checkout
+            - catalog.view
+            - inventory.view
+            - cash.session
+          mobileModules:
+            - pos
+            - cash
+            - inventory
+            - customers
+          auth:
+            mode: device
+            loginRequired: false
+        settings:
+          storeName: Mi tienda
+          taxRate: 0
+          currency: CUP
+        products:
+          - id: '1'
+            name: Acoustic Pro Headset
+            sku: HEAD-PR-202
+            category: Electronics
+            price: 299
+            cost: 112.5
+            warehouseCost: 0
+            stock: 42
+            image: ''
+            imageUrl: /api/products/1/image?v=abc123
+            categoryId: cat-electronics
+            subcategoryId: ''
+            subcategory: ''
+            status: active
+            unitOfMeasure: unidad
+            locationId: null
+            barcode: null
+        customers:
+          - id: cust-001
+            firstName: Ana
+            lastName: López
+            address: Calle 10 #5
+            phone: '5551234'
+            notes: ''
+            createdAt: 1730000000000
+
+    IntegrationTransactionAfterSync:
+      summary: Transaction returned after sync or idempotent POST /api/sales
+      value:
+        id: tx-integration-001
+        orderNumber: '#10482'
+        customer: Walk-in Customer
+        amount: 10
+        status: completed
+        timestamp: Just now
+        type: sale
+        createdAt: 1730000000000
+        paymentMethod: cash
+        operatorName: Offline Op
+        operatorId: op-integration-seller
+        sourceDeviceId: mobile-offline-sync
+        clientSaleId: 22222222-2222-2222-2222-222222222222
+        clientCreatedAt: 1730000000000
+        offlineOrigin: true
+        soldAsDebt: false
+        receipt:
+          storeName: Mi tienda
+          branch: ''
+          currency: CUP
+          lines:
+            - name: ''
+              sku: NO-STOCK
+              quantity: 1
+              unitPrice: 10
+              lineTotal: 10
+          subtotal: 10
+          tax: 0
+          taxRatePercent: 0
+          total: 10
+          paymentMethod: cash
+          operatorName: Offline Op
+          offlineOrigin: true
+          clientCreatedAt: 1730000000000
+
+  schemas:
+    ApiErrorBody:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required: [error]
+
+    ProductStatus:
+      type: string
+      enum: [active, inactive, pending]
+
+    UnitOfMeasure:
+      type: string
+      enum: [unidad, par, caja, paquete, metro, kg, litro]
+
+    Product:
+      type: object
+      description: Same JSON as GET /api/products with includeImages=false (offline pack).
+      example:
+        id: '1'
+        name: Acoustic Pro Headset
+        sku: HEAD-PR-202
+        category: Electronics
+        price: 299
+        cost: 112.5
+        warehouseCost: 0
+        stock: 42
+        image: ''
+        imageUrl: /api/products/1/image?v=abc123
+        categoryId: cat-electronics
+        subcategoryId: ''
+        subcategory: ''
+        status: active
+        unitOfMeasure: unidad
+        locationId: null
+        barcode: null
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        sku:
+          type: string
+        category:
+          type: string
+        price:
+          type: number
+        cost:
+          type: number
+        warehouseCost:
+          type: number
+        stock:
+          type: integer
+        image:
+          type: string
+          description: Empty string in mobile pack when image data omitted.
+        imageUrl:
+          type: string
+          nullable: true
+        categoryId:
+          type: string
+        subcategoryId:
+          type: string
+        subcategory:
+          type: string
+        status:
+          $ref: '#/components/schemas/ProductStatus'
+        unitOfMeasure:
+          $ref: '#/components/schemas/UnitOfMeasure'
+        locationId:
+          type: string
+          nullable: true
+        barcode:
+          type: string
+          nullable: true
+      required:
+        - id
+        - name
+        - sku
+        - category
+        - price
+        - cost
+        - warehouseCost
+        - stock
+        - image
+        - categoryId
+        - subcategoryId
+        - subcategory
+        - status
+        - unitOfMeasure
+
+    Customer:
+      type: object
+      description: Matches Customer in src/types.ts.
+      example:
+        id: cust-001
+        firstName: Ana
+        lastName: López
+        address: Calle 10 #5
+        phone: '5551234'
+        notes: ''
+        createdAt: 1730000000000
+      properties:
+        id:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        notes:
+          type: string
+        createdAt:
+          type: integer
+          format: int64
+      required:
+        - id
+        - firstName
+        - lastName
+        - address
+        - phone
+        - notes
+        - createdAt
+
+    OfflinePackSettings:
+      type: object
+      description: Subset of store settings included in the offline pack.
+      properties:
+        storeName:
+          type: string
+        taxRate:
+          type: number
+        currency:
+          type: string
+      required: [storeName, taxRate, currency]
+
+    AppRoleKey:
+      type: string
+      enum: [manager, seller]
+
+    DeviceAccessAuth:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [device, session]
+        loginRequired:
+          type: boolean
+      required: [mode, loginRequired]
+
+    DeviceAccessOperator:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+      required: [id, displayName]
+
+    DeviceAccessUser:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        username:
+          type: string
+          nullable: true
+        roleKey:
+          $ref: '#/components/schemas/AppRoleKey'
+      required: [id, displayName, roleKey]
+
+    DeviceAccessContext:
+      type: object
+      description: Matches DeviceAccessContext in src/types.ts.
+      example:
+        deviceId: mobile-access-ctx
+        operator:
+          id: op-integration-pedro
+          displayName: Pedro
+        user:
+          id: user-integration-pedro
+          displayName: Pedro
+          username: null
+          roleKey: seller
+        permissions:
+          - sales.checkout
+          - catalog.view
+        mobileModules:
+          - pos
+        auth:
+          mode: device
+          loginRequired: false
+      properties:
+        deviceId:
+          type: string
+        operator:
+          $ref: '#/components/schemas/DeviceAccessOperator'
+        user:
+          $ref: '#/components/schemas/DeviceAccessUser'
+        permissions:
+          type: array
+          items:
+            type: string
+        mobileModules:
+          type: array
+          items:
+            type: string
+        auth:
+          $ref: '#/components/schemas/DeviceAccessAuth'
+      required: [deviceId, permissions, mobileModules, auth]
+
+    CashAnomaly:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [cash_shortfall, cash_surplus, drawer_variance, debt_sales]
+        expectedCash:
+          type: number
+        closingCash:
+          type: number
+        cashSales:
+          type: number
+        variance:
+          type: number
+        debtSales:
+          type: number
+
+    CashSession:
+      type: object
+      description: Matches `CashSession` in src/types.ts (open session in pack may omit closed-only fields).
+      properties:
+        id:
+          type: string
+        openedAt:
+          type: integer
+          format: int64
+        closedAt:
+          type: integer
+          format: int64
+          nullable: true
+        openingCash:
+          type: number
+        closingCash:
+          type: number
+          nullable: true
+        totalCashSales:
+          type: number
+        totalCardSales:
+          type: number
+        totalTransferSales:
+          type: number
+        totalOtherSales:
+          type: number
+        totalDebtSales:
+          type: number
+        expectedCash:
+          type: number
+          nullable: true
+        cashVariance:
+          type: number
+          nullable: true
+        anomalies:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashAnomaly'
+      required:
+        - id
+        - openedAt
+        - openingCash
+        - totalCashSales
+        - totalCardSales
+        - totalTransferSales
+        - totalOtherSales
+
+    OfflinePack:
+      type: object
+      properties:
+        generatedAt:
+          type: integer
+          format: int64
+        catalogRevision:
+          type: string
+        cashSession:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/CashSession'
+        access:
+          $ref: '#/components/schemas/DeviceAccessContext'
+        settings:
+          $ref: '#/components/schemas/OfflinePackSettings'
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+        customers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+      required:
+        - generatedAt
+        - catalogRevision
+        - access
+        - settings
+        - products
+        - customers
+
+    PaymentMethod:
+      type: string
+      enum: [cash, card, transfer, other, debt, mixed]
+
+    SalePaymentPart:
+      type: object
+      properties:
+        method:
+          type: string
+          enum: [cash, card, transfer, debt]
+        amount:
+          type: number
+      required: [method, amount]
+
+    SaleReceiptLine:
+      type: object
+      description: Matches `SaleReceiptLine` in src/types.ts. Checkout may send sku/qty only; server normalizes lines.
+      properties:
+        name:
+          type: string
+        sku:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        lineTotal:
+          type: number
+        productId:
+          type: string
+        unitCostSnapshot:
+          type: number
+      required: [quantity]
+
+    SaleReceipt:
+      type: object
+      description: Full stored receipt (`SaleReceipt` in src/types.ts). Request bodies may omit fields filled at checkout.
+      properties:
+        storeName:
+          type: string
+        branch:
+          type: string
+        storeLogoUrl:
+          type: string
+        currency:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleReceiptLine'
+        subtotal:
+          type: number
+        tax:
+          type: number
+        taxRatePercent:
+          type: number
+        total:
+          type: number
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SalePaymentPart'
+        balanceDue:
+          type: number
+        mixedTaxIncluded:
+          type: boolean
+        collectedPaymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        debtCollectedAmount:
+          type: number
+        amountPaid:
+          type: number
+        changeGiven:
+          type: number
+        operatorName:
+          type: string
+        offlineOrigin:
+          type: boolean
+          description: Set on server when replaying offline sales.
+        clientCreatedAt:
+          type: integer
+          format: int64
+          description: Set on server when replaying offline sales.
+      required: [lines]
+
+    SaleReceiptInput:
+      description: Receipt object accepted on POST /api/sales and sync (minimal or full).
+      allOf:
+        - $ref: '#/components/schemas/SaleReceipt'
+      example:
+        lines:
+          - sku: NO-STOCK
+            quantity: 1
+        paymentMethod: cash
+        subtotal: 10
+        total: 10
+
+    TransactionStatus:
+      type: string
+      enum: [completed, refunded, pending, reversed]
+
+    TransactionType:
+      type: string
+      enum: [sale, return, payable]
+
+    DebtStatus:
+      type: string
+      enum: [pending, collected, reversed]
+
+    PayableStatus:
+      type: string
+      enum: [pending, paid, void]
+
+    Transaction:
+      type: object
+      description: Matches `Transaction` in src/types.ts (API JSON).
+      properties:
+        id:
+          type: string
+        orderNumber:
+          type: string
+        customer:
+          type: string
+        amount:
+          type: number
+        status:
+          $ref: '#/components/schemas/TransactionStatus'
+        timestamp:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        createdAt:
+          type: integer
+          format: int64
+        sourceSaleId:
+          type: string
+        receipt:
+          $ref: '#/components/schemas/SaleReceipt'
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        operatorName:
+          type: string
+        operatorId:
+          type: string
+        sourceDeviceId:
+          type: string
+        clientSaleId:
+          type: string
+        clientCreatedAt:
+          type: integer
+          format: int64
+        offlineOrigin:
+          type: boolean
+        soldAsDebt:
+          type: boolean
+        debtStatus:
+          $ref: '#/components/schemas/DebtStatus'
+        collectedAt:
+          type: integer
+          format: int64
+        customerId:
+          type: string
+        soldAsPayable:
+          type: boolean
+        payableStatus:
+          $ref: '#/components/schemas/PayableStatus'
+      required:
+        - id
+        - orderNumber
+        - customer
+        - amount
+        - status
+        - timestamp
+        - type
+        - createdAt
+
+    MobileSaleInput:
+      type: object
+      properties:
+        clientSaleId:
+          type: string
+          format: uuid
+        clientCreatedAt:
+          type: integer
+          format: int64
+        cashSessionId:
+          type: string
+        syncOffline:
+          type: boolean
+        operatorId:
+          type: string
+        operatorName:
+          type: string
+        customerName:
+          type: string
+        customerId:
+          type: string
+        amount:
+          type: number
+        isDebt:
+          type: boolean
+        isPartialDebt:
+          type: boolean
+        receipt:
+          $ref: '#/components/schemas/SaleReceiptInput'
+      required: [receipt]
+
+    LiveSaleRequest:
+      type: object
+      properties:
+        clientSaleId:
+          type: string
+          format: uuid
+        customerName:
+          type: string
+        amount:
+          type: number
+        isDebt:
+          type: boolean
+        isPartialDebt:
+          type: boolean
+        receipt:
+          $ref: '#/components/schemas/SaleReceiptInput'
+      required: [receipt]
+
+    SyncSalesRequest:
+      type: object
+      properties:
+        sales:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/MobileSaleInput'
+      required: [sales]
+
+    SyncSaleResult:
+      type: object
+      properties:
+        clientSaleId:
+          type: string
+        status:
+          type: string
+          enum: [created, duplicate, rejected]
+        transactionId:
+          type: string
+        code:
+          type: string
+        error:
+          type: string
+      required: [clientSaleId, status]
+
+    SyncSalesResponse:
+      type: object
+      properties:
+        syncedAt:
+          type: integer
+          format: int64
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncSaleResult'
+      required: [syncedAt, results]
+
+    MobileSaleOutcome:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [created, duplicate]
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+      required: [status, transaction]

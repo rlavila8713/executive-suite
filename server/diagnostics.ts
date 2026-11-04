@@ -83,11 +83,13 @@ export type ClientDiagnostics = {
   persistence: { lastSuccessfulPersist: string | null; lastPersistDurationMs: number | null };
   warnings: string[];
   /** Guidance for mobile/Flutter clients consuming this API. */
-  mobileClientHints: {
-    maxImageDimensionPx: number;
-    preferSequentialUploads: boolean;
-    productListUseIncludeImagesFalse: boolean;
-  };
+    mobileClientHints: {
+      maxImageDimensionPx: number;
+      preferSequentialUploads: boolean;
+      productListUseIncludeImagesFalse: boolean;
+      offlinePackPath: string;
+      offlineSalesSyncPath: string;
+    };
 };
 
 function countProductImages(db: SqliteStore): { embedded: number; file: number } {
@@ -134,6 +136,8 @@ export function buildClientDiagnostics(db: SqliteStore, apiBaseUrl: string): Cli
       maxImageDimensionPx: 800,
       preferSequentialUploads: true,
       productListUseIncludeImagesFalse: true,
+      offlinePackPath: '/api/sync/offline-pack',
+      offlineSalesSyncPath: '/api/sync/sales',
     },
   };
 }

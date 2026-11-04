@@ -3,6 +3,7 @@ import { newId } from './db.js';
 import { ensureConnectedDevicesSchema } from './connectedDevices.js';
 import { ApiError } from './apiError.js';
 import type { ClientKind } from './connectedDevices.js';
+import { migrateUserAuditSchema } from './userAuditLog.js';
 
 export type PermissionScope = 'web' | 'mobile' | 'both';
 
@@ -149,6 +150,7 @@ function hasColumn(db: SqliteStore, table: string, column: string): boolean {
 
 export function migrateRbacSchema(db: SqliteStore): void {
   ensureConnectedDevicesSchema(db);
+  migrateUserAuditSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS roles (
@@ -618,6 +620,12 @@ function mapUserRow(db: SqliteStore, row: UserRow): AppUser {
 export function listUsers(db: SqliteStore): AppUser[] {
   const rows = db.prepare('SELECT * FROM users ORDER BY display_name COLLATE NOCASE').all() as UserRow[];
   return rows.map((r) => mapUserRow(db, r));
+}
+
+export function getAppUserById(db: SqliteStore, userId: string): AppUser | null {
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as UserRow | undefined;
+  if (!row) return null;
+  return mapUserRow(db, row);
 }
 
 export type OperatorOption = {

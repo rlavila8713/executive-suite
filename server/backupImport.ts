@@ -9,9 +9,14 @@ import { ApiError } from './apiError.js';
 import { normalizeProductImageForStore } from './normalizeProductImage.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
 import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
+import {
+  applyAccessControlBackupSnapshot,
+  type BackupAccessControlSnapshot,
+} from './backupAccessControl.js';
+import { applyBackupExtrasSnapshot, type BackupExtrasSnapshot } from './backupExtras.js';
 
-const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status, operator_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const TX_INSERT_SQL = `INSERT INTO transactions (id, order_number, customer, amount, status, timestamp, type, created_at, payment_method, receipt_json, source_sale_id, operator_name, source_device_id, debt_status, collected_at, sold_as_debt, customer_id, sold_as_payable, payable_status, operator_id, client_sale_id, client_created_at, offline_origin)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // Re-export validation types - minimal server-side validation mirroring client parseBackupJson
 
@@ -31,6 +36,12 @@ export type BackupImportBody = {
   warehouseSections?: unknown[];
   warehouseStock?: unknown[];
   warehouseMovements?: unknown[];
+  /** Users, role grants and device bindings (schema ≥ 7). */
+  accessControl?: BackupAccessControlSnapshot;
+  /** Expense categories, admin audit log and license (schema ≥ 8). */
+  expenseCategories?: BackupExtrasSnapshot['expenseCategories'];
+  userAdminAudit?: BackupExtrasSnapshot['userAdminAudit'];
+  license?: BackupExtrasSnapshot['license'];
 };
 
 export type ImportBackupOptions = {
@@ -78,7 +89,9 @@ export function validateBackupImportPayload(data: unknown, options: ImportBackup
     sv !== 3 &&
     sv !== 4 &&
     sv !== 5 &&
-    sv !== 6
+    sv !== 6 &&
+    sv !== 7 &&
+    sv !== 8
   ) {
     throw new ApiError(400, `Unsupported backup version: ${String(sv)}`);
   }
@@ -113,6 +126,8 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
     db.prepare('DELETE FROM transactions').run();
     db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM expenses').run();
+    migrateExpenseCategoriesSchema(db);
+    db.prepare('DELETE FROM expense_categories').run();
     db.prepare('DELETE FROM categories').run();
     db.prepare('DELETE FROM subcategories').run();
     db.prepare('DELETE FROM locations').run();
@@ -172,6 +187,9 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
         row.soldAsPayable ? 1 : 0,
         row.payableStatus ?? null,
         typeof row.operatorId === 'string' ? row.operatorId : null,
+        typeof row.clientSaleId === 'string' ? row.clientSaleId : null,
+        typeof row.clientCreatedAt === 'number' ? row.clientCreatedAt : null,
+        row.offlineOrigin ? 1 : 0,
       );
     }
 
@@ -265,6 +283,7 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
       );
     }
 
+    const settingsRaw = data.appSettings as Record<string, unknown>;
     const s = { ...DEFAULT_APP_SETTINGS, ...(data.appSettings as object), id: 'main' };
     let storeLogo = '';
     try {
@@ -272,9 +291,15 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
     } catch (err) {
       throw new ApiError(400, err instanceof Error ? err.message : 'Invalid store logo in backup');
     }
+    const incentiveBaseRaw = String(settingsRaw.salesIncentiveBase ?? 'net');
+    const salesIncentiveBase = incentiveBaseRaw === 'gross' ? 'gross' : 'net';
+    const salesIncentivePercentRaw = Number(settingsRaw.salesIncentivePercent ?? 0);
+    const salesIncentivePercent = Number.isFinite(salesIncentivePercentRaw) ? salesIncentivePercentRaw : 0;
+    const authLoginRequired =
+      settingsRaw.authLoginRequired === true || settingsRaw.authLoginRequired === 1 ? 1 : 0;
     db.prepare(
-      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO app_settings (id, store_name, branch, currency, tax_rate, card_qr_payload, transfer_bank, transfer_account_holder, transfer_account_number, transfer_phone_number, transfer_qr_extra, dark_mode, low_stock_notifications, manager_name, manager_title, locale, store_logo, auth_login_required, sales_incentive_percent, sales_incentive_base)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       'main',
       s.storeName,
@@ -293,6 +318,9 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
       s.managerTitle,
       s.locale,
       storeLogo,
+      authLoginRequired,
+      salesIncentivePercent,
+      salesIncentiveBase,
     );
 
     const insertWarehouse = db.prepare(
@@ -393,6 +421,13 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
       migrateWarehouseSchema(db);
       migrateExpenseCategoriesSchema(db);
     }
+
+    applyAccessControlBackupSnapshot(db, data.accessControl);
+    applyBackupExtrasSnapshot(db, {
+      expenseCategories: data.expenseCategories,
+      userAdminAudit: data.userAdminAudit,
+      license: data.license,
+    });
   });
 }
 

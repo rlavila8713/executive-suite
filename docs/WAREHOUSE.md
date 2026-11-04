@@ -65,7 +65,7 @@ En el menú lateral:
 
 ## Respaldo
 
-Los backups (`schemaVersion: 6`) incluyen `warehouseCost` en productos, tablas de almacén (`warehouses`, `warehouse_sections`, `warehouse_stock`, `warehouse_movements`) y el directorio de **clientes** (`customers`).
+Los backups (`schemaVersion: 8`) incluyen el estado operativo completo: productos (con `warehouseCost` e imágenes), almacén (`warehouses`, secciones, stock y **todos** los movimientos), clientes, gastos y **categorías de gasto**, caja, ajustes (incl. login obligatorio e incentivos), **licencia** (trial/plan y redenciones), **control de acceso** (`accessControl`) y **auditoría administrativa** (`userAdminAudit`). Copias anteriores a v8 pueden omitir bloques; al importarlas se rellenan valores por defecto donde falte información.
 
 ## Móvil / POS
 

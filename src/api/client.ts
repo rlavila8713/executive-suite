@@ -25,6 +25,7 @@ import type {
   WarehouseSection,
   WarehouseStock,
   WarehouseSummaryReport,
+  UserAdminAuditEntry,
 } from '../types';
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
@@ -506,4 +507,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  listUserAdminAuditLog: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set('limit', String(params.limit));
+    if (params?.offset != null) q.set('offset', String(params.offset));
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return request<UserAdminAuditEntry[]>(`/api/users/audit-log${suffix}`);
+  },
 };

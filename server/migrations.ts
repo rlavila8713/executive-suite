@@ -184,6 +184,12 @@ export function migrateCatalogSchema(db: SqliteStore): void {
       db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${def}`);
     }
   }
+  if (!hasColumn(db, 'app_settings', 'sales_incentive_percent')) {
+    db.exec(`ALTER TABLE app_settings ADD COLUMN sales_incentive_percent REAL NOT NULL DEFAULT 0`);
+  }
+  if (!hasColumn(db, 'app_settings', 'sales_incentive_base')) {
+    db.exec(`ALTER TABLE app_settings ADD COLUMN sales_incentive_base TEXT NOT NULL DEFAULT 'net'`);
+  }
 
   // Backfill category codes
   const cats = db.prepare('SELECT id, name, code FROM categories').all() as {
