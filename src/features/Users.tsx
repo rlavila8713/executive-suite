@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Edit2, UserCog, Shield } from 'lucide-react';
+import { Plus, Edit2, UserCog, Shield, ScrollText } from 'lucide-react';
 import { RolePermissionsEditor } from './users/RolePermissionsEditor';
+import { UserAdminAuditLogModal } from './users/UserAdminAuditLogModal';
 import { Card, Button, Input, Modal } from '../components/ui';
 import { TableIconAction, TableActionGroup } from '../components/TableIconAction';
 import { api } from '../api/client';
@@ -24,6 +25,7 @@ export function Users({ apiConnected }: { apiConnected: boolean }) {
   const [active, setActive] = useState(true);
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
 
   const roleOptions = useMemo(
     () => roles.filter((r) => r.key === 'manager' || r.key === 'seller'),
@@ -136,10 +138,21 @@ export function Users({ apiConnected }: { apiConnected: boolean }) {
           </h2>
           <p className="text-on-surface-variant text-sm font-medium max-w-2xl">{t('users.pageSubtitle')}</p>
         </div>
-        <Button onClick={openCreate} disabled={!apiConnected || loading}>
-          <Plus size={16} className="mr-2" />
-          {t('users.addUser')}
-        </Button>
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <Button
+            variant="secondary"
+            className="flex items-center gap-2"
+            onClick={() => setAuditLogOpen(true)}
+            disabled={!apiConnected || loading}
+          >
+            <ScrollText size={16} />
+            {t('users.viewAuditLog')}
+          </Button>
+          <Button onClick={openCreate} disabled={!apiConnected || loading}>
+            <Plus size={16} className="mr-2" />
+            {t('users.addUser')}
+          </Button>
+        </div>
       </div>
 
       {message ? (
@@ -298,6 +311,12 @@ export function Users({ apiConnected }: { apiConnected: boolean }) {
           </div>
         </div>
       </Modal>
+
+      <UserAdminAuditLogModal
+        open={auditLogOpen}
+        onClose={() => setAuditLogOpen(false)}
+        apiConnected={apiConnected}
+      />
     </div>
   );
 }

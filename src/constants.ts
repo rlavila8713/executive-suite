@@ -47,6 +47,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   managerName: '',
   managerTitle: '',
   locale: 'es',
+  salesIncentivePercent: 0,
+  salesIncentiveBase: 'net',
 };
 
 export const MOCK_PRODUCTS: Product[] = [

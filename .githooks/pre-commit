@@ -1,0 +1,16 @@
+#!/bin/sh
+# Optional client hook: git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+# OpenAPI spec (mobile offline contract)
+if git diff --cached --name-only | grep -q '^docs/openapi-mobile-sync\.yaml$'; then
+  npm run lint:openapi
+fi
+
+# Related doc edits: quick sanity (same spec file must still lint if only MOBILE_OFFLINE changed with yaml)
+if git diff --cached --name-only | grep -q '^docs/MOBILE_OFFLINE\.md$'; then
+  if [ -f docs/openapi-mobile-sync.yaml ]; then
+    npm run lint:openapi
+  fi
+fi

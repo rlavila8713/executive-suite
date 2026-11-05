@@ -444,6 +444,7 @@ function AppView(props: AppState) {
       case 'reports':
         return (
           <Reports
+            appSettings={appSettings}
             transactions={transactions}
             expenses={expenses}
             products={products}

@@ -237,6 +237,12 @@ export interface Transaction {
   operatorId?: string;
   /** Device id that created this sale (audit). */
   sourceDeviceId?: string;
+  /** Client-generated UUID for idempotent mobile/offline checkout. */
+  clientSaleId?: string;
+  /** Timestamp on device when sale was taken (ms). */
+  clientCreatedAt?: number;
+  /** Sale was replayed from mobile offline queue. */
+  offlineOrigin?: boolean;
   /** Sale registered as customer debt (accounts receivable). */
   soldAsDebt?: boolean;
   debtStatus?: DebtStatus;
@@ -397,6 +403,23 @@ export interface OperatorOption {
   active: boolean;
 }
 
+export type UserAdminAuditAction =
+  | 'user.created'
+  | 'user.updated'
+  | 'user.password_set'
+  | 'role.permissions_updated';
+
+export interface UserAdminAuditEntry {
+  id: string;
+  action: UserAdminAuditAction;
+  createdAt: number;
+  actorUserId: string | null;
+  actorDisplayName: string;
+  actorUsername: string | null;
+  deviceId: string | null;
+  details: Record<string, unknown>;
+}
+
 export interface DeviceAccessContext {
   deviceId: string;
   operator: { id: string; displayName: string } | null;
@@ -405,6 +428,9 @@ export interface DeviceAccessContext {
   mobileModules: string[];
   auth: { mode: 'device' | 'session'; loginRequired: boolean };
 }
+
+/** Base amount for salesperson incentive pool (% applied to this figure in reports). */
+export type SalesIncentiveBase = 'net' | 'gross';
 
 /** Single-row app configuration stored locally (IndexedDB). */
 export interface AppSettings {
@@ -437,6 +463,10 @@ export interface AppSettings {
   /** UI language; persisted locally. */
   locale: AppLocale;
   authLoginRequired?: boolean;
+  /** Share of profit (0–100) reserved for salesperson incentives; 0 disables pool in reports. */
+  salesIncentivePercent: number;
+  /** Whether incentives apply to net profit (gross − expenses) or gross profit only. */
+  salesIncentiveBase: SalesIncentiveBase;
 }
 
 export type CheckoutPayload = {

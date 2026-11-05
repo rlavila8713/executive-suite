@@ -184,6 +184,14 @@ describe('Executive Suite API integration', () => {
       assert.equal(patched.transferBank, 'BANDEC');
       assert.equal(patched.transferAccountNumber, '123');
       assert.equal(patched.transferPhoneNumber, '51234567');
+
+      const incentive = await api<{ salesIncentivePercent: number; salesIncentiveBase: string }>('/api/settings', {
+        method: 'PATCH',
+        body: { salesIncentivePercent: 12.5, salesIncentiveBase: 'gross' },
+      });
+      assert.equal(incentive.status, 200);
+      assert.equal(incentive.body.salesIncentivePercent, 12.5);
+      assert.equal(incentive.body.salesIncentiveBase, 'gross');
     });
 
     it('saves store logo and serves it via /settings/logo', async () => {
@@ -931,6 +939,112 @@ describe('Executive Suite API integration', () => {
       });
     });
 
+    it('records user admin audit log entries for user create and role permission changes', async () => {
+      const created = await api<{ id: string; displayName: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Audit Trail User', roleKey: 'seller', username: 'audittrail' },
+      });
+      assert.equal(created.status, 201);
+
+      await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['catalog.view', 'sales.checkout'] },
+      });
+
+      const log = await api<
+        { action: string; details: Record<string, unknown> }[]
+      >('/api/users/audit-log?limit=20');
+      assert.equal(log.status, 200);
+      assert.ok(Array.isArray(log.body));
+      assert.ok(log.body.some((e) => e.action === 'user.created' && e.details.displayName === 'Audit Trail User'));
+      assert.ok(log.body.some((e) => e.action === 'role.permissions_updated' && e.details.roleKey === 'seller'));
+
+      await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['sales.checkout', 'catalog.view', 'inventory.view', 'cash.session'] },
+      });
+    });
+
+    it('serves mobile offline pack and syncs sales with clientSaleId idempotency', async () => {
+      const mobileId = 'mobile-offline-sync';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const seller = await api<{ operatorId: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Offline Op', roleKey: 'seller' },
+      });
+      assert.equal(seller.status, 201);
+      await api(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorId: seller.body.operatorId },
+      });
+
+      const pack = await api<{ cashSession: { id: string } | null; products: unknown[] }>('/api/sync/offline-pack', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      assert.equal(pack.status, 200);
+      assert.equal(pack.body.cashSession?.id, session.body.id);
+      assert.ok(pack.body.products.length > 0);
+
+      const clientSaleId = '22222222-2222-2222-2222-222222222222';
+      const salePayload = {
+        clientSaleId,
+        clientCreatedAt: Date.now(),
+        cashSessionId: session.body.id,
+        syncOffline: true,
+        operatorId: seller.body.operatorId,
+        operatorName: 'Offline Op',
+        amount: 10,
+        receipt: {
+          lines: [{ sku: 'NO-STOCK', quantity: 1 }],
+          paymentMethod: 'cash',
+          subtotal: 10,
+          total: 10,
+        },
+      };
+      const mobileHeaders = { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' };
+
+      const sync = await api<{ results: { status: string; transactionId?: string }[] }>('/api/sync/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: { sales: [salePayload] },
+      });
+      assert.equal(sync.status, 200);
+      assert.equal(sync.body.results[0]?.status, 'created');
+      const txId = sync.body.results[0]?.transactionId;
+      assert.ok(txId);
+
+      const syncDup = await api<{ results: { status: string; transactionId?: string }[] }>('/api/sync/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: { sales: [salePayload] },
+      });
+      assert.equal(syncDup.body.results[0]?.status, 'duplicate');
+      assert.equal(syncDup.body.results[0]?.transactionId, txId);
+
+      const liveDup = await api<{ id: string }>('/api/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: salePayload,
+      });
+      assert.equal(liveDup.status, 200);
+      assert.equal(liveDup.body.id, txId);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 10 } });
+    });
+
     it('returns device access context with permissions for assigned operator', async () => {
       const mobileId = 'mobile-access-ctx';
       await api('/api/settings', {
@@ -1086,6 +1200,20 @@ describe('Executive Suite API integration', () => {
       assert.equal(resetBlocked.status, 403);
       assert.equal((resetBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
 
+      const bootstrapBlocked = await api('/api/auth/bootstrap', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(bootstrapBlocked.status, 403);
+      assert.equal((bootstrapBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
+      const loginBlocked = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(loginBlocked.status, 403);
+      assert.equal((loginBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
       // License activate still allowed when expired
       const privateKey = readPrivateKey();
       if (privateKey) {
@@ -1153,13 +1281,26 @@ describe('Executive Suite API integration', () => {
 
       const backup = await api<{
         schemaVersion: number;
+        accessControl?: { users: { id: string }[] };
+        expenseCategories?: unknown[];
+        userAdminAudit?: unknown[];
+        license?: { trialStartedAt: number };
         products: { id: string; warehouseCost: number; stock: number; cost: number }[];
         warehouseStock: { productId: string; quantity: number }[];
         warehouses: unknown[];
         customers: { id: string; firstName: string }[];
       }>('/api/backup');
       assert.equal(backup.status, 200);
-      assert.equal(backup.body.schemaVersion, 6);
+      assert.equal(backup.body.schemaVersion, 8);
+      const usersBeforeReset = await api<{ id: string; displayName: string }[]>('/api/users');
+      assert.equal(usersBeforeReset.status, 200);
+      const userCountBefore = usersBeforeReset.body.length;
+      assert.ok(userCountBefore >= 1);
+      assert.ok(backup.body.accessControl);
+      assert.equal(backup.body.accessControl!.users.length, userCountBefore);
+      assert.ok(Array.isArray(backup.body.expenseCategories));
+      assert.ok(Array.isArray(backup.body.userAdminAudit));
+      assert.ok(backup.body.license);
       const snap = backup.body.products.find((p) => p.id === productId);
       assert.ok(snap);
       assert.equal(snap!.warehouseCost, 3.5);
@@ -1192,6 +1333,10 @@ describe('Executive Suite API integration', () => {
 
       const customers = await api<{ id: string; firstName: string }[]>('/api/customers');
       assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
+
+      const usersAfter = await api<{ id: string; displayName: string }[]>('/api/users');
+      assert.equal(usersAfter.status, 200);
+      assert.equal(usersAfter.body.length, userCountBefore);
     });
 
     it('bootstrap, login, and enforce login when required', async () => {
