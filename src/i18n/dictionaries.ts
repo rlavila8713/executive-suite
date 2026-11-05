@@ -30,6 +30,13 @@ export const dictionaries: Record<AppLocale, DictNode> = {
       passwordOrPin: 'Contraseña o PIN',
       loginAction: 'Entrar',
       bootstrapAction: 'Crear administrador',
+      wizardProgress: 'Paso {step} de {total}',
+      wizardLicenseStep: 'Activar licencia',
+      wizardAdminStep: 'Administrador',
+      wizardLoginStep: 'Iniciar sesión',
+      licenseGateSubtitle:
+        'El periodo de prueba o la licencia ha vencido. Genera un código de solicitud, confirma el pago con el proveedor y activa la clave antes de crear el administrador o iniciar sesión.',
+      retryLoadLicense: 'Reintentar',
     },
     nav: {
       dashboard: 'Panel',
@@ -1477,6 +1484,13 @@ export const dictionaries: Record<AppLocale, DictNode> = {
       passwordOrPin: 'Password or PIN',
       loginAction: 'Sign in',
       bootstrapAction: 'Create administrator',
+      wizardProgress: 'Step {step} of {total}',
+      wizardLicenseStep: 'Activate license',
+      wizardAdminStep: 'Administrator',
+      wizardLoginStep: 'Sign in',
+      licenseGateSubtitle:
+        'The trial or paid license has expired. Generate a request code, confirm payment with the vendor, then activate the key before creating the administrator or signing in.',
+      retryLoadLicense: 'Retry',
     },
     nav: {
       dashboard: 'Dashboard',

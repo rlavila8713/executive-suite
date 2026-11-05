@@ -1200,6 +1200,20 @@ describe('Executive Suite API integration', () => {
       assert.equal(resetBlocked.status, 403);
       assert.equal((resetBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
 
+      const bootstrapBlocked = await api('/api/auth/bootstrap', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(bootstrapBlocked.status, 403);
+      assert.equal((bootstrapBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
+      const loginBlocked = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(loginBlocked.status, 403);
+      assert.equal((loginBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
       // License activate still allowed when expired
       const privateKey = readPrivateKey();
       if (privateKey) {
