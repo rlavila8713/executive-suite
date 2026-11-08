@@ -1369,6 +1369,10 @@ describe('Executive Suite API integration', () => {
 
       const ok = await api('/api/products?includeImages=false', { authToken: login.body.token });
       assert.equal(ok.status, 200);
+
+      const licenseNoAuth = await api<{ status: string }>('/api/license');
+      assert.equal(licenseNoAuth.status, 200);
+      assert.ok(typeof licenseNoAuth.body.status === 'string');
     });
 
     it('factory reset clears operational data without restarting the trial', async () => {
