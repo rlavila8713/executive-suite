@@ -28,7 +28,7 @@ export function LoginGate() {
     try {
       setLicenseInfo(await api.getLicense());
     } catch (e) {
-      setLicenseLoadError(e instanceof Error ? e.message : t('settings.billingLoading'));
+      setLicenseLoadError(mapMutationError(e, t));
     } finally {
       setLicenseLoading(false);
     }

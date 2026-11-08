@@ -416,6 +416,10 @@ export const AUTH_PUBLIC_PATHS = new Set([
   '/auth/bootstrap',
   '/auth/status',
   '/auth/session',
+  /** Pre-login gate: license wizard must load/activate before sign-in when trial is expired. */
+  '/license',
+  '/license/request',
+  '/license/activate',
 ]);
 
 export function isAuthPublicPath(apiPath: string): boolean {
