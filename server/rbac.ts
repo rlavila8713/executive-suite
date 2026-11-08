@@ -33,7 +33,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'warehouse.transfer', description: 'Transfer warehouse stock to store', scope: 'both', group: 'warehouse' },
   { key: 'catalog.view', description: 'View products and customers', scope: 'both', group: 'catalog' },
   { key: 'catalog.edit', description: 'Edit catalog', scope: 'web', group: 'catalog' },
-  { key: 'reports.view', description: 'View reports', scope: 'web', group: 'reports' },
+  { key: 'reports.view', description: 'View reports', scope: 'both', group: 'reports' },
   { key: 'users.manage', description: 'Manage users and roles', scope: 'web', group: 'administration' },
   { key: 'devices.manage', description: 'Assign devices and operators', scope: 'web', group: 'administration' },
   { key: 'settings.manage', description: 'Store settings and license', scope: 'web', group: 'administration' },
