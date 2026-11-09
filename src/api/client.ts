@@ -457,7 +457,9 @@ export const api = {
   getDeviceAccess: () => request<DeviceAccessContext>('/api/device/access'),
 
   getAuthStatus: () =>
-    request<{ loginRequired: boolean; needsBootstrap: boolean; storeName: string }>('/api/auth/status'),
+    request<{ loginRequired: boolean; needsBootstrap: boolean; hasRecoveryCode: boolean; storeName: string }>(
+      '/api/auth/status',
+    ),
   getAuthSession: () =>
     request<{
       authenticated: boolean;
@@ -471,10 +473,17 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   bootstrapAuth: (username: string, password: string) =>
-    request<void>('/api/auth/bootstrap', {
+    request<{ recoveryCode: string }>('/api/auth/bootstrap', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  recoverPassword: (username: string, recoveryCode: string, newPassword: string) =>
+    request<void>('/api/auth/recover', {
+      method: 'POST',
+      body: JSON.stringify({ username, recoveryCode, newPassword }),
+    }),
+  regenerateRecoveryCode: () =>
+    request<{ recoveryCode: string }>('/api/auth/recovery-code', { method: 'POST' }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   updateAuthProfile: (body: { displayName?: string; username?: string | null }) =>
     request<AppUser>('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(body) }),

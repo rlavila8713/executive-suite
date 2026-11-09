@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Input } from '../components/ui';
+import { Button, Card, Input, Modal } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
 import { mapMutationError } from '../lib/mutationErrors';
@@ -9,18 +9,25 @@ import type { LicenseInfo } from '../types';
 import { LicenseActivationStep } from './onboarding/LicenseActivationStep';
 
 type WizardPhase = 'license' | 'account';
+type AccountView = 'login' | 'recover';
 
 export function LoginGate() {
   const { t } = useI18n();
   const { status, login, bootstrap, loading: authLoading } = useAuth();
   const needsBootstrapFlow = status?.needsBootstrap ?? false;
+  const hasRecoveryCode = status?.hasRecoveryCode ?? false;
+  const [accountView, setAccountView] = useState<AccountView>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoverOk, setRecoverOk] = useState(false);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [licenseLoading, setLicenseLoading] = useState(true);
   const [licenseLoadError, setLicenseLoadError] = useState<string | null>(null);
+  const [bootstrapRecoveryCode, setBootstrapRecoveryCode] = useState<string | null>(null);
 
   const loadLicense = useCallback(async () => {
     setLicenseLoading(true);
@@ -60,7 +67,8 @@ export function LoginGate() {
     setError(null);
     try {
       if (needsBootstrapFlow) {
-        await bootstrap(username, password);
+        const code = await bootstrap(username, password);
+        setBootstrapRecoveryCode(code);
       } else {
         await login(username, password);
       }
@@ -71,7 +79,33 @@ export function LoginGate() {
     }
   }
 
+  async function submitRecover(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setRecoverOk(false);
+    try {
+      await api.recoverPassword(username.trim(), recoveryCodeInput.trim(), newPassword);
+      setRecoverOk(true);
+      setAccountView('login');
+      setPassword('');
+      setNewPassword('');
+      setRecoveryCodeInput('');
+    } catch (err) {
+      setError(mapMutationError(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const loading = authLoading || licenseLoading;
+
+  const accountSubtitle =
+    accountView === 'recover'
+      ? t('auth.recoverSubtitle')
+      : needsBootstrapFlow
+        ? t('auth.bootstrapSubtitle')
+        : t('auth.loginSubtitle');
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-950 p-4">
@@ -82,15 +116,17 @@ export function LoginGate() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-primary mt-2">
               {t('auth.wizardProgress', { step: stepNumber, total: stepTotal })}
               {' · '}
-              {phase === 'license' ? t('auth.wizardLicenseStep') : needsBootstrapFlow ? t('auth.wizardAdminStep') : t('auth.wizardLoginStep')}
+              {phase === 'license'
+                ? t('auth.wizardLicenseStep')
+                : accountView === 'recover'
+                  ? t('auth.recoverTitle')
+                  : needsBootstrapFlow
+                    ? t('auth.wizardAdminStep')
+                    : t('auth.wizardLoginStep')}
             </p>
           ) : null}
           <p className="text-sm text-on-surface-variant mt-1">
-            {phase === 'license'
-              ? t('auth.licenseGateSubtitle')
-              : needsBootstrapFlow
-                ? t('auth.bootstrapSubtitle')
-                : t('auth.loginSubtitle')}
+            {phase === 'license' ? t('auth.licenseGateSubtitle') : accountSubtitle}
           </p>
         </div>
 
@@ -105,6 +141,51 @@ export function LoginGate() {
           </div>
         ) : phase === 'license' && licenseInfo ? (
           <LicenseActivationStep licenseInfo={licenseInfo} onActivated={loadLicense} />
+        ) : accountView === 'recover' ? (
+          <form className="space-y-3" onSubmit={submitRecover}>
+            {!hasRecoveryCode ? (
+              <p className="text-sm text-on-surface-variant">{t('auth.recoverNotConfigured')}</p>
+            ) : null}
+            <label className="block space-y-1">
+              <span className="text-sm font-medium text-on-surface">{t('auth.username')}</span>
+              <Input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                required
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm font-medium text-on-surface">{t('auth.recoveryCode')}</span>
+              <Input
+                value={recoveryCodeInput}
+                onChange={(e) => setRecoveryCodeInput(e.target.value)}
+                autoComplete="off"
+                placeholder="XXXX-XXXX-XXXX"
+                required
+                disabled={!hasRecoveryCode}
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm font-medium text-on-surface">{t('auth.newPassword')}</span>
+              <Input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                required
+                disabled={!hasRecoveryCode}
+              />
+            </label>
+            {error ? <p className="text-sm text-error">{error}</p> : null}
+            {recoverOk ? <p className="text-sm text-green-700">{t('auth.recoverOk')}</p> : null}
+            <Button type="submit" className="w-full" disabled={busy || !hasRecoveryCode}>
+              {t('auth.recoverAction')}
+            </Button>
+            <Button type="button" variant="ghost" className="w-full" onClick={() => setAccountView('login')}>
+              {t('auth.backToLogin')}
+            </Button>
+          </form>
         ) : (
           <form className="space-y-3" onSubmit={submitAccount}>
             <label className="block space-y-1">
@@ -132,9 +213,36 @@ export function LoginGate() {
             <Button type="submit" className="w-full" disabled={busy}>
               {needsBootstrapFlow ? t('auth.bootstrapAction') : t('auth.loginAction')}
             </Button>
+            {!needsBootstrapFlow ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setError(null);
+                  setAccountView('recover');
+                }}
+              >
+                {t('auth.forgotPassword')}
+              </Button>
+            ) : null}
           </form>
         )}
       </Card>
+
+      <Modal
+        isOpen={bootstrapRecoveryCode != null}
+        onClose={() => setBootstrapRecoveryCode(null)}
+        title={t('auth.recoveryCodeTitle')}
+      >
+        <p className="text-sm text-on-surface-variant mb-4">{t('auth.recoveryCodeBootstrapBody')}</p>
+        <p className="text-lg font-mono font-bold tracking-widest text-center py-4 bg-surface-container-low rounded-xl">
+          {bootstrapRecoveryCode}
+        </p>
+        <Button className="w-full mt-4" onClick={() => setBootstrapRecoveryCode(null)}>
+          {t('auth.recoveryCodeSaved')}
+        </Button>
+      </Modal>
     </div>
   );
 }

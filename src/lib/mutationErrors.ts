@@ -34,6 +34,8 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_OPERATOR_ASSIGN_FORBIDDEN') return t('errors.operatorAssignForbidden');
   if (code === 'ERR_PERMISSION_DENIED') return t('errors.permissionDenied');
   if (code === 'ERR_LOGIN_REQUIRED') return t('errors.loginRequired');
+  if (code === 'ERR_AUTH_RECOVERY_INVALID') return t('errors.authRecoveryInvalid');
+  if (code === 'ERR_AUTH_RECOVERY_NOT_CONFIGURED') return t('errors.authRecoveryNotConfigured');
   if (code === 'ERR_AUTH_INVALID') return t('errors.authInvalid');
   if (code === 'ERR_AUTH_LOCKED') return t('errors.authLocked');
   if (code === 'ERR_AUTH_WEAK_PASSWORD') return t('errors.authWeakPassword');

@@ -35,6 +35,7 @@ import { Screen } from '../types';
 import { cn, initialsFromName } from '../lib/utils';
 import { ApiImage } from './ApiImage';
 import { useI18n } from '../i18n/I18nContext';
+import { AppVersionBadge } from './AppVersionBadge';
 
 export const SIDEBAR_WIDTH_EXPANDED = '15.5rem';
 export const SIDEBAR_WIDTH_COLLAPSED = '4.25rem';
@@ -605,6 +606,7 @@ export function TopBar({
         )}
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <AppVersionBadge className="max-w-[min(14rem,38vw)] truncate" />
           <button
             type="button"
             className="rounded-full p-2 transition-all hover:bg-slate-200/50 dark:hover:bg-slate-800/50"
