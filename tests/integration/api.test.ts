@@ -1347,7 +1347,9 @@ describe('Executive Suite API integration', () => {
           method: 'POST',
           body: { username: 'admin', password: 'adminpass1' },
         });
-        assert.equal(boot.status, 204);
+        assert.equal(boot.status, 201);
+        const bootBody = boot.body as { recoveryCode?: string };
+        assert.ok(bootBody.recoveryCode?.includes('-'));
       }
       const login = await api<{ token: string; access: { permissions: string[] } }>('/api/auth/login', {
         method: 'POST',
@@ -1373,6 +1375,45 @@ describe('Executive Suite API integration', () => {
       const licenseNoAuth = await api<{ status: string }>('/api/license');
       assert.equal(licenseNoAuth.status, 200);
       assert.ok(typeof licenseNoAuth.body.status === 'string');
+    });
+
+    it('recovers manager password with recovery code', async () => {
+      const login = await api<{ token: string }>('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(login.status, 200);
+
+      const regen = await api<{ recoveryCode: string }>('/api/auth/recovery-code', {
+        method: 'POST',
+        authToken: login.body.token,
+      });
+      assert.equal(regen.status, 201);
+      const code = regen.body.recoveryCode;
+
+      const recover = await api('/api/auth/recover', {
+        method: 'POST',
+        body: { username: 'admin', recoveryCode: code, newPassword: 'adminpass2' },
+      });
+      assert.equal(recover.status, 204);
+
+      const badLogin = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(badLogin.status, 401);
+
+      const okLogin = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass2' },
+      });
+      assert.equal(okLogin.status, 200);
+
+      await api('/api/auth/password', {
+        method: 'PATCH',
+        body: { password: 'adminpass1', keepSession: true },
+        authToken: okLogin.body.token,
+      });
     });
 
     it('factory reset clears operational data without restarting the trial', async () => {

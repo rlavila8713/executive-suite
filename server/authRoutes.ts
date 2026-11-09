@@ -8,11 +8,13 @@ import {
   getAuthSettings,
   loginWithCredentials,
   needsPasswordBootstrap,
+  recoverPasswordWithRecoveryCode,
   resolveEffectiveAccess,
   resolveSessionUserId,
   revokeSessionByToken,
   setUserPassword,
 } from './auth.js';
+import { hasRecoveryCodeConfigured, issueNewRecoveryCode } from './authRecovery.js';
 import { updateAppUser } from './rbac.js';
 
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
@@ -33,6 +35,7 @@ export function registerAuthRoutes(router: import('express').Router): void {
       res.json({
         loginRequired: settings.loginRequired,
         needsBootstrap: needsPasswordBootstrap(db),
+        hasRecoveryCode: hasRecoveryCodeConfigured(db),
         storeName: store?.store_name ?? '',
       });
     }),
@@ -48,8 +51,42 @@ export function registerAuthRoutes(router: import('express').Router): void {
         throw new ApiError(400, 'Username and password required', 'ERR_AUTH_INVALID');
       }
       const db = getDb();
-      bootstrapManagerPassword(db, { username, password });
+      const recoveryCode = bootstrapManagerPassword(db, { username, password });
+      res.status(201).json({ recoveryCode });
+    }),
+  );
+
+  router.post(
+    '/auth/recover',
+    asyncHandler(async (req, res) => {
+      const body = req.body as { username?: string; recoveryCode?: string; newPassword?: string };
+      const username = body.username?.trim() ?? '';
+      const recoveryCode = body.recoveryCode ?? '';
+      const newPassword = body.newPassword ?? '';
+      if (!username || !recoveryCode || !newPassword) {
+        throw new ApiError(400, 'Username, recovery code and new password required', 'ERR_AUTH_INVALID');
+      }
+      const db = getDb();
+      recoverPasswordWithRecoveryCode(db, { username, recoveryCode, newPassword });
       res.status(204).send();
+    }),
+  );
+
+  router.post(
+    '/auth/recovery-code',
+    asyncHandler(async (req, res) => {
+      const deviceId = req.header('X-Device-Id')?.trim();
+      if (!deviceId) throw new ApiError(400, 'Device id required');
+      const db = getDb();
+      const token = bearerTokenFromRequest(req);
+      const userId = resolveSessionUserId(db, token);
+      if (!userId) throw new ApiError(401, 'Login required', 'ERR_LOGIN_REQUIRED');
+      const access = resolveEffectiveAccess(db, deviceId, req);
+      if (!access.permissions.includes('settings.manage')) {
+        throw new ApiError(403, 'Permission denied', 'ERR_PERMISSION_DENIED');
+      }
+      const recoveryCode = issueNewRecoveryCode(db);
+      res.status(201).json({ recoveryCode });
     }),
   );
 

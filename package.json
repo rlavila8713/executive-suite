@@ -1,7 +1,7 @@
 {
   "name": "executive-suite",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -30,6 +30,7 @@
     "lint:all": "npm run lint && npm run lint:openapi",
     "license:keygen": "tsx scripts/license-keygen.ts",
     "license:generate": "tsx scripts/generate-license.ts",
+    "auth:reset-password": "tsx scripts/reset-auth-password.ts",
     "electron:start": "electron .",
     "electron:build": "npm run build && npm run build:server && electron-builder",
     "electron:build:win": "npm run build && npm run build:server && electron-builder --win"

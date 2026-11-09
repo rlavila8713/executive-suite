@@ -126,6 +126,10 @@ export function Settings({
   const [profileMessage, setProfileMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null,
   );
+  const [recoveryCodeBusy, setRecoveryCodeBusy] = useState(false);
+  const [recoveryCodeMsg, setRecoveryCodeMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [recoveryCodeModal, setRecoveryCodeModal] = useState<string | null>(null);
+  const [hasRecoveryCode, setHasRecoveryCode] = useState(false);
   const [incentivePercentDraft, setIncentivePercentDraft] = useState(String(settings.salesIncentivePercent));
   const [incentiveBaseDraft, setIncentiveBaseDraft] = useState<SalesIncentiveBase>(settings.salesIncentiveBase);
 
@@ -235,6 +239,26 @@ export function Settings({
     setProfileDraft({ displayName: u.displayName, username: u.username ?? '' });
     setProfilePassword('');
   }, [access?.user?.id, access?.user?.displayName, access?.user?.username]);
+
+  useEffect(() => {
+    if (section !== 'security') return;
+    void api.getAuthStatus().then((s) => setHasRecoveryCode(s.hasRecoveryCode)).catch(() => {});
+  }, [section]);
+
+  const generateRecoveryCode = async () => {
+    setRecoveryCodeBusy(true);
+    setRecoveryCodeMsg(null);
+    try {
+      const res = await api.regenerateRecoveryCode();
+      setHasRecoveryCode(true);
+      setRecoveryCodeModal(res.recoveryCode);
+      setRecoveryCodeMsg({ type: 'ok', text: t('settings.recoveryCodeGenerateOk') });
+    } catch (e) {
+      setRecoveryCodeMsg({ type: 'err', text: mapMutationError(e, t) });
+    } finally {
+      setRecoveryCodeBusy(false);
+    }
+  };
 
   const handleRequestLicense = async (planId: LicensePlanId) => {
     setBillingMsg(null);
@@ -970,6 +994,34 @@ export function Settings({
                   />
                 </button>
               </div>
+              {access?.permissions.includes('settings.manage') ? (
+                <div className="mt-6 p-4 bg-surface-container-low rounded-xl space-y-3">
+                  <div>
+                    <p className="text-sm font-bold">{t('settings.recoveryCodeTitle')}</p>
+                    <p className="text-xs text-on-surface-variant mt-1">{t('settings.recoveryCodeBody')}</p>
+                    <p className="text-xs text-on-surface-variant mt-2">
+                      {hasRecoveryCode ? t('settings.recoveryCodeActive') : t('settings.recoveryCodeNone')}
+                    </p>
+                  </div>
+                  {recoveryCodeMsg ? (
+                    <p
+                      className={cn(
+                        'text-sm',
+                        recoveryCodeMsg.type === 'ok' ? 'text-green-700' : 'text-error',
+                      )}
+                    >
+                      {recoveryCodeMsg.text}
+                    </p>
+                  ) : null}
+                  <Button
+                    variant="secondary"
+                    disabled={recoveryCodeBusy}
+                    onClick={() => void generateRecoveryCode()}
+                  >
+                    {recoveryCodeBusy ? t('users.saving') : t('settings.recoveryCodeGenerate')}
+                  </Button>
+                </div>
+              ) : null}
               {access?.user ? (
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-4 p-4 bg-surface-container-low rounded-xl">
                   <p className="text-sm font-medium">{access.user.displayName}</p>
@@ -1654,6 +1706,20 @@ export function Settings({
             {backupBusy ? t('settings.restoring') : t('settings.yesRestore')}
           </Button>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={recoveryCodeModal != null}
+        onClose={() => setRecoveryCodeModal(null)}
+        title={t('settings.recoveryCodeTitle')}
+      >
+        <p className="text-sm text-on-surface-variant mb-4">{t('settings.recoveryCodeBody')}</p>
+        <p className="text-lg font-mono font-bold tracking-widest text-center py-4 bg-surface-container-low rounded-xl">
+          {recoveryCodeModal}
+        </p>
+        <Button className="w-full mt-4" onClick={() => setRecoveryCodeModal(null)}>
+          {t('auth.recoveryCodeSaved')}
+        </Button>
       </Modal>
 
       <CardQrModal

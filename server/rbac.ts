@@ -368,15 +368,28 @@ function backfillOperatorsFromLegacyNames(db: SqliteStore): void {
   }
 }
 
-function bootstrapDefaultManagerUser(db: SqliteStore): void {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number };
-  if (count.c > 0) return;
+/** Placeholder encargado without password — required for first-time bootstrap after RBAC migration. */
+export function ensureManagerUserForBootstrap(db: SqliteStore): void {
+  const existing = db
+    .prepare(
+      `SELECT u.id FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE r.key = ?
+       LIMIT 1`,
+    )
+    .get(ROLE_MANAGER) as { id: string } | undefined;
+  if (existing) return;
 
   const settings = db.prepare('SELECT manager_name FROM app_settings WHERE id = ?').get('main') as
     | { manager_name: string }
     | undefined;
   const name = (settings?.manager_name ?? 'Encargado').trim() || 'Encargado';
   createUserWithOperator(db, name, ROLE_MANAGER, true);
+}
+
+function bootstrapDefaultManagerUser(db: SqliteStore): void {
+  ensureManagerUserForBootstrap(db);
 }
 
 function linkDevicesToOperatorsByName(db: SqliteStore): void {

@@ -6,6 +6,7 @@ import { ApiError } from './apiError.js';
 import { inferClientKind, type ClientKind } from './connectedDevices.js';
 import {
   ROLE_MANAGER,
+  ensureManagerUserForBootstrap,
   mobileModulesForPermissions,
   permissionKeysForUser,
   resolveDeviceAccessContext,
@@ -13,6 +14,12 @@ import {
   type DeviceAccessContext,
 } from './rbac.js';
 import { hashPassword, verifyPassword, validatePasswordForRole } from './password.js';
+import {
+  hasRecoveryCodeConfigured,
+  issueNewRecoveryCode,
+  migrateAuthRecoverySchema,
+  verifyRecoveryCode,
+} from './authRecovery.js';
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -62,6 +69,7 @@ export function migrateAuthSchema(db: SqliteStore): void {
   if (!userNames.has('locked_until')) {
     db.exec(`ALTER TABLE users ADD COLUMN locked_until INTEGER`);
   }
+  migrateAuthRecoverySchema(db);
 }
 
 export function getAuthSettings(db: SqliteStore): AuthSettings {
@@ -244,10 +252,11 @@ export function loginWithCredentials(
 export function bootstrapManagerPassword(
   db: SqliteStore,
   input: { username: string; password: string },
-): void {
+): string {
   if (!needsPasswordBootstrap(db)) {
     throw new ApiError(409, 'Bootstrap already completed', 'ERR_AUTH_BOOTSTRAP_DONE');
   }
+  ensureManagerUserForBootstrap(db);
   const manager = db
     .prepare(
       `SELECT u.id FROM users u
@@ -278,6 +287,31 @@ export function bootstrapManagerPassword(
     Date.now(),
     manager.id,
   );
+  return issueNewRecoveryCode(db);
+}
+
+export function recoverPasswordWithRecoveryCode(
+  db: SqliteStore,
+  input: { username: string; recoveryCode: string; newPassword: string },
+): void {
+  migrateAuthSchema(db);
+  if (!hasRecoveryCodeConfigured(db)) {
+    throw new ApiError(409, 'Password recovery is not configured', 'ERR_AUTH_RECOVERY_NOT_CONFIGURED');
+  }
+  if (!verifyRecoveryCode(db, input.recoveryCode)) {
+    throw new ApiError(401, 'Invalid recovery code', 'ERR_AUTH_RECOVERY_INVALID');
+  }
+  const username = input.username.trim();
+  if (!username) throw new ApiError(400, 'Username required', 'ERR_AUTH_USERNAME_REQUIRED');
+  const user = db
+    .prepare(
+      `SELECT id FROM users WHERE LOWER(TRIM(username)) = LOWER(?) AND active = 1 LIMIT 1`,
+    )
+    .get(username) as { id: string } | undefined;
+  if (!user) {
+    throw new ApiError(401, 'Invalid credentials', 'ERR_AUTH_INVALID');
+  }
+  setUserPassword(db, user.id, input.newPassword, true);
 }
 
 export function setUserPassword(
@@ -416,6 +450,7 @@ export const AUTH_PUBLIC_PATHS = new Set([
   '/auth/bootstrap',
   '/auth/status',
   '/auth/session',
+  '/auth/recover',
   /** Pre-login gate: license wizard must load/activate before sign-in when trial is expired. */
   '/license',
   '/license/request',
