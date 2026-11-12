@@ -15,6 +15,7 @@ export type Screen =
   | 'inventory'
   | 'stockMovements'
   | 'expenses'
+  | 'purchases'
   | 'receivables'
   | 'payables'
   | 'reports'
@@ -128,6 +129,69 @@ export interface Customer {
   createdAt: number;
 }
 
+export interface Supplier {
+  id: string;
+  name: string;
+  address: string;
+  phone: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PurchaseStatus = 'draft' | 'pending_review' | 'posted' | 'cancelled';
+
+export interface PurchaseLine {
+  id: string;
+  purchaseId: string;
+  productId: string | null;
+  name: string;
+  barcode: string;
+  unitCost: number;
+  quantity: number;
+  unitOfMeasure: UnitOfMeasure;
+  warehouseReceivedQty: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  purchasedAt: number;
+  supplierId: string | null;
+  supplierName: string;
+  invoiceNumber: string;
+  notes: string;
+  lines: PurchaseLine[];
+  status: PurchaseStatus;
+  totalCost: number;
+  warehousePostedAt: number | null;
+  submittedForReviewAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PurchaseLineReviewKind = 'linked_product' | 'barcode_match' | 'new_product' | 'missing_product';
+
+export type PurchaseLineReviewReason = 'cost_ponderation' | 'new_product' | 'unlinked' | 'none';
+
+export interface PurchaseLineReview {
+  lineId: string;
+  lineName: string;
+  barcode: string;
+  quantity: number;
+  unitOfMeasure: UnitOfMeasure;
+  unitCost: number;
+  resolvedProductId: string | null;
+  kind: PurchaseLineReviewKind;
+  needsReview: boolean;
+  reviewReason: PurchaseLineReviewReason;
+  productName: string | null;
+  productSku: string | null;
+  currentWarehouseQty: number;
+  currentWarehouseUnitCost: number;
+  projectedWarehouseUnitCost: number;
+  receiveQuantity: number;
+  quantityTruncated: boolean;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -237,6 +301,12 @@ export interface Transaction {
   operatorId?: string;
   /** Device id that created this sale (audit). */
   sourceDeviceId?: string;
+  /** Client-generated UUID for idempotent mobile/offline checkout. */
+  clientSaleId?: string;
+  /** Timestamp on device when sale was taken (ms). */
+  clientCreatedAt?: number;
+  /** Sale was replayed from mobile offline queue. */
+  offlineOrigin?: boolean;
   /** Sale registered as customer debt (accounts receivable). */
   soldAsDebt?: boolean;
   debtStatus?: DebtStatus;
@@ -397,6 +467,23 @@ export interface OperatorOption {
   active: boolean;
 }
 
+export type UserAdminAuditAction =
+  | 'user.created'
+  | 'user.updated'
+  | 'user.password_set'
+  | 'role.permissions_updated';
+
+export interface UserAdminAuditEntry {
+  id: string;
+  action: UserAdminAuditAction;
+  createdAt: number;
+  actorUserId: string | null;
+  actorDisplayName: string;
+  actorUsername: string | null;
+  deviceId: string | null;
+  details: Record<string, unknown>;
+}
+
 export interface DeviceAccessContext {
   deviceId: string;
   operator: { id: string; displayName: string } | null;
@@ -405,6 +492,9 @@ export interface DeviceAccessContext {
   mobileModules: string[];
   auth: { mode: 'device' | 'session'; loginRequired: boolean };
 }
+
+/** Base amount for salesperson incentive pool (% applied to this figure in reports). */
+export type SalesIncentiveBase = 'net' | 'gross';
 
 /** Single-row app configuration stored locally (IndexedDB). */
 export interface AppSettings {
@@ -437,6 +527,10 @@ export interface AppSettings {
   /** UI language; persisted locally. */
   locale: AppLocale;
   authLoginRequired?: boolean;
+  /** Share of profit (0–100) reserved for salesperson incentives; 0 disables pool in reports. */
+  salesIncentivePercent: number;
+  /** Whether incentives apply to net profit (gross − expenses) or gross profit only. */
+  salesIncentiveBase: SalesIncentiveBase;
 }
 
 export type CheckoutPayload = {

@@ -9,9 +9,12 @@ import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
 import { persistDatabaseAtomic } from './persistDb.js';
 import { migrateLegacyProductPhotoLayout } from './legacyImageLayout.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migratePurchasesSchema } from './purchaseMigrations.js';
 import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 import { migrateAuthSchema } from './auth.js';
 import { migrateRbacSchema, clearRbacUsersOnFactoryReset } from './rbac.js';
+import { clearUserAdminAuditLog } from './userAuditLog.js';
+import { migrateMobileOfflineSchema } from './mobileOffline.js';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
@@ -166,10 +169,12 @@ export async function initDb(): Promise<void> {
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
     migrateWarehouseSchema(sqliteStore);
+    migratePurchasesSchema(sqliteStore);
     migrateExpenseCategoriesSchema(sqliteStore);
     ensureSeeded(sqliteStore);
     migrateRbacSchema(sqliteStore);
     migrateAuthSchema(sqliteStore);
+    migrateMobileOfflineSchema(sqliteStore);
     ensureLicenseRow(sqliteStore);
     migrateLegacyProductPhotoLayout(sqliteStore);
     flushNow();
@@ -325,6 +330,14 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM warehouse_sections').run();
     db.prepare('DELETE FROM warehouses').run();
     db.prepare('DELETE FROM customers').run();
+    try {
+      db.prepare('DELETE FROM purchase_invoice_images').run();
+      db.prepare('DELETE FROM purchase_lines').run();
+      db.prepare('DELETE FROM purchase_orders').run();
+      db.prepare('DELETE FROM suppliers').run();
+    } catch {
+      /* purchases schema optional */
+    }
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
     try {
@@ -333,6 +346,7 @@ export function factoryResetDb(db: SqliteStore): void {
       /* auth schema optional */
     }
     clearRbacUsersOnFactoryReset(db);
+    clearUserAdminAuditLog(db);
     db.prepare('DELETE FROM app_settings').run();
     ensureSeeded(db);
     migrateWarehouseSchema(db);
@@ -453,6 +467,9 @@ export function rowToTransaction(row: {
   customer_id?: string | null;
   sold_as_payable?: number | null;
   payable_status?: string | null;
+  client_sale_id?: string | null;
+  client_created_at?: number | null;
+  offline_origin?: number | null;
 }) {
   const debtStatus =
     row.debt_status === 'pending' || row.debt_status === 'collected' || row.debt_status === 'reversed'
@@ -482,6 +499,9 @@ export function rowToTransaction(row: {
     customerId: row.customer_id ?? undefined,
     soldAsPayable: row.sold_as_payable === 1,
     payableStatus,
+    clientSaleId: row.client_sale_id ?? undefined,
+    clientCreatedAt: row.client_created_at ?? undefined,
+    offlineOrigin: row.offline_origin === 1,
   };
 }
 
@@ -563,8 +583,12 @@ export function rowToAppSettings(row: {
   locale: string;
   store_logo?: string;
   auth_login_required?: number;
+  sales_incentive_percent?: number;
+  sales_incentive_base?: string;
 }) {
   const storeLogo = row.store_logo ?? '';
+  const incentiveBaseRaw = row.sales_incentive_base ?? 'net';
+  const salesIncentiveBase = incentiveBaseRaw === 'gross' ? 'gross' : 'net';
   return {
     id: 'main' as const,
     storeName: row.store_name,
@@ -584,5 +608,7 @@ export function rowToAppSettings(row: {
     managerTitle: row.manager_title,
     locale: row.locale as 'es' | 'en',
     authLoginRequired: (row.auth_login_required ?? 0) === 1,
+    salesIncentivePercent: row.sales_incentive_percent ?? 0,
+    salesIncentiveBase,
   };
 }

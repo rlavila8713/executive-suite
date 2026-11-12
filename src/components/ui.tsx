@@ -86,7 +86,7 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   /** Wider layout for data-heavy dialogs (e.g. sales log). */
-  size?: 'default' | 'large';
+  size?: 'default' | 'large' | 'xlarge';
   /** Stack above another open modal (e.g. receipt over sales log). */
   elevated?: boolean;
 }
@@ -104,7 +104,7 @@ export function Modal({ isOpen, onClose, title, children, size = 'default', elev
       <div
         className={cn(
           'bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl w-full max-h-[92vh] overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col my-auto sm:my-0',
-          size === 'large' ? 'max-w-5xl' : 'max-w-2xl',
+          size === 'xlarge' ? 'max-w-6xl' : size === 'large' ? 'max-w-5xl' : 'max-w-2xl',
         )}
       >
         <div className="p-4 sm:p-6 border-b border-black/5 dark:border-white/10 flex justify-between items-center gap-3 shrink-0">

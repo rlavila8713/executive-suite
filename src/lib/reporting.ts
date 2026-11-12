@@ -1,6 +1,12 @@
-import type { Expense, PaymentMethod, Product, SaleReceiptLine, Transaction } from '../types';
+import type { Expense, PaymentMethod, Product, SaleReceiptLine, SalesIncentiveBase, Transaction } from '../types';
 import { transactionOperatorName } from './operators';
-import { applyPaymentPartsToBreakdown, receivableBalanceDue, sessionPaymentParts } from './paymentSplits';
+import {
+  applyPaymentPartsToBreakdown,
+  collectedDebtPaymentPart,
+  receivableBalanceDue,
+  receivableDisplayAmount,
+  sessionPaymentParts,
+} from './paymentSplits';
 
 export type DateRangeMs = { start: number; end: number };
 
@@ -169,24 +175,36 @@ export function salesRevenueInRange(transactions: Transaction[], range: DateRang
   return completedSalesInRange(transactions, range).reduce((s, tx) => s + Math.abs(tx.amount), 0);
 }
 
-export type OperatorSalesRow = { operator: string; count: number; total: number; cash: number; transfer: number };
+export type OperatorSalesRow = {
+  operator: string;
+  count: number;
+  total: number;
+  cash: number;
+  transfer: number;
+  card: number;
+};
+
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 /** Net completed sales grouped by operator (uses receipt / device operator name). */
 export function operatorCompletedSalesTotals(
   transactions: Transaction[],
   range?: DateRangeMs,
 ): OperatorSalesRow[] {
-  const map = new Map<string, { count: number; total: number; cash: number; transfer: number }>();
+  const map = new Map<string, { count: number; total: number; cash: number; transfer: number; card: number }>();
   for (const tx of transactions) {
     if (!isCompletedSale(tx)) continue;
     if (range && (tx.createdAt < range.start || tx.createdAt > range.end)) continue;
     const operator = transactionOperatorName(tx) || '—';
-    const prev = map.get(operator) ?? { count: 0, total: 0, cash: 0, transfer: 0 };
+    const prev = map.get(operator) ?? { count: 0, total: 0, cash: 0, transfer: 0, card: 0 };
     prev.count += 1;
     prev.total += Math.abs(tx.amount);
     for (const part of sessionPaymentParts(tx)) {
       if (part.method === 'cash') prev.cash += part.amount;
       if (part.method === 'transfer') prev.transfer += part.amount;
+      if (part.method === 'card') prev.card += part.amount;
     }
     map.set(operator, prev);
   }
@@ -194,15 +212,16 @@ export function operatorCompletedSalesTotals(
     .map(([operator, v]) => ({
       operator,
       count: v.count,
-      total: Math.round(v.total * 100) / 100,
-      cash: Math.round(v.cash * 100) / 100,
-      transfer: Math.round(v.transfer * 100) / 100,
+      total: roundMoney(v.total),
+      cash: roundMoney(v.cash),
+      transfer: roundMoney(v.transfer),
+      card: roundMoney(v.card),
     }))
     .sort((a, b) => b.total - a.total);
 }
 
 export function operatorReversalTotals(transactions: Transaction[], range?: DateRangeMs): OperatorSalesRow[] {
-  const map = new Map<string, { count: number; total: number }>();
+  const map = new Map<string, { count: number; total: number; cash: number; transfer: number; card: number }>();
   for (const tx of transactions) {
     const inRange = !range || (tx.createdAt >= range.start && tx.createdAt <= range.end);
     if (!inRange) continue;
@@ -210,18 +229,24 @@ export function operatorReversalTotals(transactions: Transaction[], range?: Date
       continue;
     }
     const operator = transactionOperatorName(tx) || '—';
-    const prev = map.get(operator) ?? { count: 0, total: 0 };
+    const prev = map.get(operator) ?? { count: 0, total: 0, cash: 0, transfer: 0, card: 0 };
     prev.count += 1;
     prev.total += Math.abs(tx.amount);
+    for (const part of sessionPaymentParts(tx)) {
+      if (part.method === 'cash') prev.cash += part.amount;
+      if (part.method === 'transfer') prev.transfer += part.amount;
+      if (part.method === 'card') prev.card += part.amount;
+    }
     map.set(operator, prev);
   }
   return [...map.entries()]
     .map(([operator, v]) => ({
       operator,
       count: v.count,
-      total: Math.round(v.total * 100) / 100,
-      cash: 0,
-      transfer: 0,
+      total: roundMoney(v.total),
+      cash: roundMoney(v.cash),
+      transfer: roundMoney(v.transfer),
+      card: roundMoney(v.card),
     }))
     .sort((a, b) => b.total - a.total);
 }
@@ -380,6 +405,97 @@ export function sessionDebtSalesTotal(transactions: Transaction[], openedAt: num
   ) / 100;
 }
 
+export type DebtPeriodSummary = { count: number; total: number; cash: number; transfer: number; card: number };
+
+function matchesOperatorFilter(tx: Transaction, operatorFilter?: string): boolean {
+  if (!operatorFilter) return true;
+  return transactionOperatorName(tx) === operatorFilter;
+}
+
+/** Debt still pending from sales recorded within the range (by sale `createdAt`). */
+export function debtPendingSoldInRange(
+  transactions: Transaction[],
+  range: DateRangeMs,
+  operatorFilter?: string,
+): DebtPeriodSummary {
+  let count = 0;
+  let total = 0;
+  for (const tx of transactions) {
+    if (!isPendingDebtSale(tx)) continue;
+    if (tx.createdAt < range.start || tx.createdAt > range.end) continue;
+    if (!matchesOperatorFilter(tx, operatorFilter)) continue;
+    count += 1;
+    total += receivableBalanceDue(tx);
+  }
+  return {
+    count,
+    total: roundMoney(total),
+    cash: 0,
+    transfer: 0,
+    card: 0,
+  };
+}
+
+/** Debt collected within the range (by `collectedAt`). */
+export function debtCollectedInRange(
+  transactions: Transaction[],
+  range: DateRangeMs,
+  operatorFilter?: string,
+): DebtPeriodSummary {
+  let count = 0;
+  let total = 0;
+  let cash = 0;
+  let transfer = 0;
+  let card = 0;
+  for (const tx of transactions) {
+    if (!tx.soldAsDebt || tx.debtStatus !== 'collected' || tx.collectedAt == null) continue;
+    if (tx.collectedAt < range.start || tx.collectedAt > range.end) continue;
+    if (!matchesOperatorFilter(tx, operatorFilter)) continue;
+    count += 1;
+    const principal = receivableDisplayAmount(tx);
+    total += principal;
+    const part = collectedDebtPaymentPart(tx);
+    if (part?.method === 'cash') cash += part.amount;
+    if (part?.method === 'transfer') transfer += part.amount;
+    if (part?.method === 'card') card += part.amount;
+  }
+  return {
+    count,
+    total: roundMoney(total),
+    cash: roundMoney(cash),
+    transfer: roundMoney(transfer),
+    card: roundMoney(card),
+  };
+}
+
+export function resolveSalesLogStatsRange(
+  cashSessionId: string,
+  cashSessions: { id: string; openedAt: number; closedAt: number | null }[],
+  logRange: DateRangeMs | null,
+): DateRangeMs | null {
+  let start: number | null = null;
+  let end: number | null = null;
+  if (cashSessionId) {
+    const session = cashSessions.find((s) => s.id === cashSessionId);
+    if (session) {
+      start = session.openedAt;
+      end = session.closedAt ?? Date.now();
+    }
+  }
+  if (logRange) {
+    if (start == null || end == null) {
+      start = logRange.start;
+      end = logRange.end;
+    } else {
+      start = Math.max(start, logRange.start);
+      end = Math.min(end, logRange.end);
+    }
+  }
+  if (start == null || end == null) return null;
+  if (end < start) return { start: end, end: start };
+  return { start, end };
+}
+
 export function effectiveUnitCost(line: SaleReceiptLine, products: Product[]): number {
   if (line.unitCostSnapshot != null && Number.isFinite(line.unitCostSnapshot)) {
     return line.unitCostSnapshot;
@@ -453,6 +569,77 @@ export function netCogsInRange(transactions: Transaction[], products: Product[],
     }
   }
   return Math.round(sum * 100) / 100;
+}
+
+/** Profit base for incentive pool: gross profit or net (gross − expenses in range). */
+export function salesIncentiveBaseAmount(
+  base: SalesIncentiveBase,
+  grossProfit: number,
+  expensesInRange: number,
+): number {
+  if (base === 'gross') return grossProfit;
+  return Math.round((grossProfit - expensesInRange) * 100) / 100;
+}
+
+export function salesIncentivePoolAmount(baseAmount: number, percent: number): number {
+  if (!Number.isFinite(percent) || percent <= 0) return 0;
+  return Math.round(baseAmount * (percent / 100) * 100) / 100;
+}
+
+export type SalesIncentiveOperatorRow = {
+  operator: string;
+  netSales: number;
+  sharePercent: number;
+  amount: number;
+};
+
+/** Store-wide pool and per-operator shares prorated by net sales in range. */
+export function salesIncentiveDistribution(
+  transactions: Transaction[],
+  products: Product[],
+  expenses: Expense[],
+  range: DateRangeMs,
+  percent: number,
+  base: SalesIncentiveBase,
+): { pool: number; baseAmount: number; rows: SalesIncentiveOperatorRow[] } {
+  const profit = profitGrossInRange(transactions, products, range);
+  const expensesR = expensesTotalInRange(expenses, range);
+  const baseAmount = salesIncentiveBaseAmount(base, profit.grossProfit, expensesR);
+  const pool = salesIncentivePoolAmount(baseAmount, percent);
+  if (pool <= 0) {
+    return { pool: 0, baseAmount, rows: [] };
+  }
+
+  const salesByOp = new Map(operatorCompletedSalesTotals(transactions, range).map((r) => [r.operator, r.total]));
+  const revByOp = new Map(operatorReversalTotals(transactions, range).map((r) => [r.operator, r.total]));
+  const operators = new Set([...salesByOp.keys(), ...revByOp.keys()]);
+
+  const weights: { operator: string; netSales: number }[] = [];
+  for (const operator of operators) {
+    const netSales = Math.round(((salesByOp.get(operator) ?? 0) - (revByOp.get(operator) ?? 0)) * 100) / 100;
+    if (netSales <= 0) continue;
+    weights.push({ operator, netSales });
+  }
+  weights.sort((a, b) => b.netSales - a.netSales);
+
+  const totalNet = weights.reduce((s, w) => s + w.netSales, 0);
+  if (totalNet <= 0) {
+    return { pool, baseAmount, rows: [] };
+  }
+
+  const rows: SalesIncentiveOperatorRow[] = [];
+  let allocated = 0;
+  for (let i = 0; i < weights.length; i++) {
+    const { operator, netSales } = weights[i];
+    const sharePercent = Math.round((netSales / totalNet) * 10000) / 100;
+    const isLast = i === weights.length - 1;
+    const amount = isLast
+      ? Math.round((pool - allocated) * 100) / 100
+      : Math.round(pool * (netSales / totalNet) * 100) / 100;
+    allocated += amount;
+    rows.push({ operator, netSales, sharePercent, amount });
+  }
+  return { pool, baseAmount, rows };
 }
 
 export type TopSellerRow = {

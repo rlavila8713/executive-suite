@@ -5,6 +5,7 @@ import type { SqliteStore } from './db.js';
 import { getDataDir, getDbPath } from './db.js';
 import { getBackupMetrics, getPersistenceMetrics } from './persistenceMetrics.js';
 import { listSqliteBackups } from './dbBackup.js';
+import { BACKUP_SCHEMA_VERSION } from './backupSchema.js';
 
 export const CATALOG_SCHEMA_VERSION = 2;
 
@@ -29,7 +30,9 @@ export type ServerDiagnostics = {
     products: number;
     categories: number;
     transactions: number;
-    schemaVersion: number;
+    /** Internal catalog migration counter (not the JSON backup version). */
+    catalogSchemaVersion: number;
+    backupSchemaVersion: number;
   };
   persistence: ReturnType<typeof getPersistenceMetrics>;
   backup: ReturnType<typeof getBackupMetrics> & { rotatedBackupCount: number };
@@ -59,7 +62,8 @@ export function buildServerDiagnostics(db: SqliteStore): ServerDiagnostics {
       products,
       categories,
       transactions,
-      schemaVersion: CATALOG_SCHEMA_VERSION,
+      catalogSchemaVersion: CATALOG_SCHEMA_VERSION,
+      backupSchemaVersion: BACKUP_SCHEMA_VERSION,
     },
     persistence: getPersistenceMetrics(),
     backup: {
@@ -83,11 +87,13 @@ export type ClientDiagnostics = {
   persistence: { lastSuccessfulPersist: string | null; lastPersistDurationMs: number | null };
   warnings: string[];
   /** Guidance for mobile/Flutter clients consuming this API. */
-  mobileClientHints: {
-    maxImageDimensionPx: number;
-    preferSequentialUploads: boolean;
-    productListUseIncludeImagesFalse: boolean;
-  };
+    mobileClientHints: {
+      maxImageDimensionPx: number;
+      preferSequentialUploads: boolean;
+      productListUseIncludeImagesFalse: boolean;
+      offlinePackPath: string;
+      offlineSalesSyncPath: string;
+    };
 };
 
 function countProductImages(db: SqliteStore): { embedded: number; file: number } {
@@ -134,6 +140,8 @@ export function buildClientDiagnostics(db: SqliteStore, apiBaseUrl: string): Cli
       maxImageDimensionPx: 800,
       preferSequentialUploads: true,
       productListUseIncludeImagesFalse: true,
+      offlinePackPath: '/api/sync/offline-pack',
+      offlineSalesSyncPath: '/api/sync/sales',
     },
   };
 }

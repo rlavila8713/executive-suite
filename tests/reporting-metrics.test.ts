@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { netSalesRevenueInRange, paymentMethodBreakdown, profitGrossInRange } from '../src/lib/reporting.ts';
+import { netSalesRevenueInRange, paymentMethodBreakdown, profitGrossInRange, salesIncentiveBaseAmount, salesIncentiveDistribution, salesIncentivePoolAmount } from '../src/lib/reporting.ts';
 import type { Product, Transaction } from '../src/types.ts';
 
 const range = { start: 0, end: 1_000_000_000_000 };
@@ -112,5 +112,47 @@ describe('profitGrossInRange', () => {
     assert.equal(m.netSales, 10);
     assert.equal(m.cogs, 4);
     assert.equal(m.grossProfit, 6);
+  });
+});
+
+describe('salesIncentivePool', () => {
+  it('applies percent to net base', () => {
+    const base = salesIncentiveBaseAmount('net', 100, 40);
+    assert.equal(base, 60);
+    assert.equal(salesIncentivePoolAmount(base, 10), 6);
+  });
+
+  it('applies percent to gross base', () => {
+    const base = salesIncentiveBaseAmount('gross', 100, 40);
+    assert.equal(base, 100);
+    assert.equal(salesIncentivePoolAmount(base, 2.5), 2.5);
+  });
+});
+
+describe('salesIncentiveDistribution', () => {
+  it('splits pool by net sales share per operator', () => {
+    const baseReceipt = sale.receipt!;
+    const opA: Transaction = {
+      ...sale,
+      id: 'a',
+      amount: 60,
+      operatorName: 'Ana',
+      receipt: { ...baseReceipt, lines: [] },
+    };
+    const opB: Transaction = {
+      ...sale,
+      id: 'b',
+      amount: 40,
+      operatorName: 'Luis',
+      receipt: { ...baseReceipt, lines: [] },
+    };
+    const dist = salesIncentiveDistribution([opA, opB], [product], [], range, 10, 'gross');
+    assert.equal(dist.pool, 10);
+    assert.equal(dist.rows.length, 2);
+    const ana = dist.rows.find((r) => r.operator === 'Ana');
+    const luis = dist.rows.find((r) => r.operator === 'Luis');
+    assert.equal(ana?.amount, 6);
+    assert.equal(luis?.amount, 4);
+    assert.equal(ana!.amount + luis!.amount, dist.pool);
   });
 });

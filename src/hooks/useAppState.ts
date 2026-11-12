@@ -408,14 +408,28 @@ export function useAppState() {
   };
 
   const createInventoryConsumptionExpense = async (payload: {
-    productId: string;
-    quantity: number;
+    items: { productId: string; quantity: number }[];
     source: 'store' | 'warehouse';
     title?: string;
     date: string;
   }) => {
     guardMutation();
-    await api.createInventoryConsumptionExpense(payload);
+    await api.createInventoryConsumptionExpense(
+      payload.items.length === 1
+        ? {
+            productId: payload.items[0].productId,
+            quantity: payload.items[0].quantity,
+            source: payload.source,
+            title: payload.title,
+            date: payload.date,
+          }
+        : {
+            items: payload.items,
+            source: payload.source,
+            title: payload.title,
+            date: payload.date,
+          },
+    );
     await refreshAfterMutation();
   };
 

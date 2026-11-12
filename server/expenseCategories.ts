@@ -24,6 +24,50 @@ export function migrateExpenseCategoriesSchema(db: SqliteStore): void {
     CREATE INDEX IF NOT EXISTS idx_expense_categories_name ON expense_categories(name COLLATE NOCASE);
   `);
   seedSystemExpenseCategories(db);
+  syncExpenseCategoriesFromExpenses(db);
+}
+
+/** Expenses store category by display name; backfill missing rows from distinct expense.category values. */
+export function syncExpenseCategoriesFromExpenses(db: SqliteStore): number {
+  const rows = db.prepare(`SELECT DISTINCT category AS name FROM expenses WHERE TRIM(category) != ''`).all() as {
+    name: string;
+  }[];
+  let created = 0;
+  const now = Date.now();
+  for (const row of rows) {
+    const trimmed = row.name.trim();
+    if (!trimmed) continue;
+    const exists = db
+      .prepare('SELECT id FROM expense_categories WHERE name = ? COLLATE NOCASE LIMIT 1')
+      .get(trimmed) as { id: string } | undefined;
+    if (exists) continue;
+
+    const baseCode = codeFromExpenseCategoryName(trimmed);
+    let code = baseCode;
+    let suffix = 0;
+    while (db.prepare('SELECT id FROM expense_categories WHERE code = ?').get(code)) {
+      suffix += 1;
+      code = `${baseCode.slice(0, 40)}_${suffix}`;
+    }
+
+    db.prepare('INSERT INTO expense_categories (id, name, code, is_system, created_at) VALUES (?, ?, ?, 0, ?)').run(
+      newId(),
+      trimmed,
+      code,
+      now,
+    );
+    created += 1;
+  }
+  return created;
+}
+
+function codeFromExpenseCategoryName(name: string): string {
+  const code = name
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48);
+  return code || `LEGACY_${newId().slice(0, 8).toUpperCase()}`;
 }
 
 function seedSystemExpenseCategories(db: SqliteStore): void {
@@ -52,6 +96,7 @@ export function rowToExpenseCategory(row: ExpenseCategoryRow) {
 }
 
 export function listExpenseCategories(db: SqliteStore) {
+  syncExpenseCategoriesFromExpenses(db);
   const rows = db.prepare('SELECT * FROM expense_categories ORDER BY is_system DESC, name').all() as ExpenseCategoryRow[];
   return rows.map(rowToExpenseCategory);
 }

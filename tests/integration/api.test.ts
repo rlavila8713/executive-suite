@@ -14,6 +14,7 @@ import {
   TEST_DEVICE_ID,
   fillStoreStockFromWarehouse,
 } from './helpers.js';
+import { BACKUP_SCHEMA_VERSION } from '../../server/backupSchema.js';
 
 function readPrivateKey(): string | null {
   const keyPath = path.join(process.cwd(), 'license-private.pem');
@@ -184,6 +185,14 @@ describe('Executive Suite API integration', () => {
       assert.equal(patched.transferBank, 'BANDEC');
       assert.equal(patched.transferAccountNumber, '123');
       assert.equal(patched.transferPhoneNumber, '51234567');
+
+      const incentive = await api<{ salesIncentivePercent: number; salesIncentiveBase: string }>('/api/settings', {
+        method: 'PATCH',
+        body: { salesIncentivePercent: 12.5, salesIncentiveBase: 'gross' },
+      });
+      assert.equal(incentive.status, 200);
+      assert.equal(incentive.body.salesIncentivePercent, 12.5);
+      assert.equal(incentive.body.salesIncentiveBase, 'gross');
     });
 
     it('saves store logo and serves it via /settings/logo', async () => {
@@ -931,6 +940,112 @@ describe('Executive Suite API integration', () => {
       });
     });
 
+    it('records user admin audit log entries for user create and role permission changes', async () => {
+      const created = await api<{ id: string; displayName: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Audit Trail User', roleKey: 'seller', username: 'audittrail' },
+      });
+      assert.equal(created.status, 201);
+
+      await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['catalog.view', 'sales.checkout'] },
+      });
+
+      const log = await api<
+        { action: string; details: Record<string, unknown> }[]
+      >('/api/users/audit-log?limit=20');
+      assert.equal(log.status, 200);
+      assert.ok(Array.isArray(log.body));
+      assert.ok(log.body.some((e) => e.action === 'user.created' && e.details.displayName === 'Audit Trail User'));
+      assert.ok(log.body.some((e) => e.action === 'role.permissions_updated' && e.details.roleKey === 'seller'));
+
+      await api('/api/roles/seller/permissions', {
+        method: 'PATCH',
+        body: { permissionKeys: ['sales.checkout', 'catalog.view', 'inventory.view', 'cash.session'] },
+      });
+    });
+
+    it('serves mobile offline pack and syncs sales with clientSaleId idempotency', async () => {
+      const mobileId = 'mobile-offline-sync';
+      await api('/api/settings', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      const session = await api<{ id: string }>('/api/cash-sessions', {
+        method: 'POST',
+        body: { openingCash: 0 },
+      });
+      assert.equal(session.status, 201);
+
+      const seller = await api<{ operatorId: string }>('/api/users', {
+        method: 'POST',
+        body: { displayName: 'Offline Op', roleKey: 'seller' },
+      });
+      assert.equal(seller.status, 201);
+      await api(`/api/devices/${mobileId}/operator`, {
+        method: 'PATCH',
+        body: { operatorId: seller.body.operatorId },
+      });
+
+      const pack = await api<{ cashSession: { id: string } | null; products: unknown[] }>('/api/sync/offline-pack', {
+        deviceId: mobileId,
+        headers: { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' },
+      });
+      assert.equal(pack.status, 200);
+      assert.equal(pack.body.cashSession?.id, session.body.id);
+      assert.ok(pack.body.products.length > 0);
+
+      const clientSaleId = '22222222-2222-2222-2222-222222222222';
+      const salePayload = {
+        clientSaleId,
+        clientCreatedAt: Date.now(),
+        cashSessionId: session.body.id,
+        syncOffline: true,
+        operatorId: seller.body.operatorId,
+        operatorName: 'Offline Op',
+        amount: 10,
+        receipt: {
+          lines: [{ sku: 'NO-STOCK', quantity: 1 }],
+          paymentMethod: 'cash',
+          subtotal: 10,
+          total: 10,
+        },
+      };
+      const mobileHeaders = { 'X-Client-Kind': 'mobile', 'User-Agent': 'Dart/3.0 (flutter)' };
+
+      const sync = await api<{ results: { status: string; transactionId?: string }[] }>('/api/sync/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: { sales: [salePayload] },
+      });
+      assert.equal(sync.status, 200);
+      assert.equal(sync.body.results[0]?.status, 'created');
+      const txId = sync.body.results[0]?.transactionId;
+      assert.ok(txId);
+
+      const syncDup = await api<{ results: { status: string; transactionId?: string }[] }>('/api/sync/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: { sales: [salePayload] },
+      });
+      assert.equal(syncDup.body.results[0]?.status, 'duplicate');
+      assert.equal(syncDup.body.results[0]?.transactionId, txId);
+
+      const liveDup = await api<{ id: string }>('/api/sales', {
+        method: 'POST',
+        deviceId: mobileId,
+        headers: mobileHeaders,
+        body: salePayload,
+      });
+      assert.equal(liveDup.status, 200);
+      assert.equal(liveDup.body.id, txId);
+
+      await api(`/api/cash-sessions/${session.body.id}/close`, { method: 'POST', body: { closingCash: 10 } });
+    });
+
     it('returns device access context with permissions for assigned operator', async () => {
       const mobileId = 'mobile-access-ctx';
       await api('/api/settings', {
@@ -1086,6 +1201,20 @@ describe('Executive Suite API integration', () => {
       assert.equal(resetBlocked.status, 403);
       assert.equal((resetBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
 
+      const bootstrapBlocked = await api('/api/auth/bootstrap', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(bootstrapBlocked.status, 403);
+      assert.equal((bootstrapBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
+      const loginBlocked = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(loginBlocked.status, 403);
+      assert.equal((loginBlocked.body as { code: string }).code, 'ERR_LICENSE_EXPIRED');
+
       // License activate still allowed when expired
       const privateKey = readPrivateKey();
       if (privateKey) {
@@ -1151,15 +1280,46 @@ describe('Executive Suite API integration', () => {
       });
       assert.equal(customer.status, 201);
 
+      const supplier = await api<{ id: string; name: string }>('/api/suppliers', {
+        method: 'POST',
+        body: { name: 'Backup Supplier' },
+      });
+      assert.equal(supplier.status, 201);
+
+      const purchase = await api<{ id: string }>('/api/purchases', {
+        method: 'POST',
+        body: {
+          purchasedAt: Date.now(),
+          supplierId: supplier.body.id,
+          lines: [{ name: 'Línea backup', unitCost: 1, quantity: 2, unitOfMeasure: 'unidad' }],
+        },
+      });
+      assert.equal(purchase.status, 201);
+
       const backup = await api<{
         schemaVersion: number;
+        accessControl?: { users: { id: string }[] };
+        expenseCategories?: unknown[];
+        userAdminAudit?: unknown[];
+        license?: { trialStartedAt: number };
         products: { id: string; warehouseCost: number; stock: number; cost: number }[];
         warehouseStock: { productId: string; quantity: number }[];
         warehouses: unknown[];
         customers: { id: string; firstName: string }[];
+        suppliers: { id: string; name: string }[];
+        purchaseOrders: { id: string; lines: { name: string }[] }[];
       }>('/api/backup');
       assert.equal(backup.status, 200);
-      assert.equal(backup.body.schemaVersion, 6);
+      assert.equal(backup.body.schemaVersion, BACKUP_SCHEMA_VERSION);
+      const usersBeforeReset = await api<{ id: string; displayName: string }[]>('/api/users');
+      assert.equal(usersBeforeReset.status, 200);
+      const userCountBefore = usersBeforeReset.body.length;
+      assert.ok(userCountBefore >= 1);
+      assert.ok(backup.body.accessControl);
+      assert.equal(backup.body.accessControl!.users.length, userCountBefore);
+      assert.ok(Array.isArray(backup.body.expenseCategories));
+      assert.ok(Array.isArray(backup.body.userAdminAudit));
+      assert.ok(backup.body.license);
       const snap = backup.body.products.find((p) => p.id === productId);
       assert.ok(snap);
       assert.equal(snap!.warehouseCost, 3.5);
@@ -1167,6 +1327,8 @@ describe('Executive Suite API integration', () => {
       assert.equal(snap!.cost, 3.5);
       assert.ok(backup.body.warehouses.length >= 1);
       assert.ok(backup.body.customers.some((c) => c.id === customer.body.id));
+      assert.ok(backup.body.suppliers.some((s) => s.id === supplier.body.id));
+      assert.ok(backup.body.purchaseOrders.some((o) => o.id === purchase.body.id));
       const whRow = backup.body.warehouseStock.find((r) => r.productId === productId);
       assert.ok(whRow);
       assert.equal(whRow!.quantity, 8);
@@ -1190,8 +1352,17 @@ describe('Executive Suite API integration', () => {
       assert.ok(restoredWh);
       assert.equal(restoredWh!.quantity, 8);
 
+      const suppliersAfter = await api<{ id: string; name: string }[]>('/api/suppliers');
+      assert.ok(suppliersAfter.body.some((s) => s.id === supplier.body.id));
+      const purchasesAfter = await api<{ id: string }[]>('/api/purchases');
+      assert.ok(purchasesAfter.body.some((o) => o.id === purchase.body.id));
+
       const customers = await api<{ id: string; firstName: string }[]>('/api/customers');
       assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
+
+      const usersAfter = await api<{ id: string; displayName: string }[]>('/api/users');
+      assert.equal(usersAfter.status, 200);
+      assert.equal(usersAfter.body.length, userCountBefore);
     });
 
     it('bootstrap, login, and enforce login when required', async () => {
@@ -1202,7 +1373,9 @@ describe('Executive Suite API integration', () => {
           method: 'POST',
           body: { username: 'admin', password: 'adminpass1' },
         });
-        assert.equal(boot.status, 204);
+        assert.equal(boot.status, 201);
+        const bootBody = boot.body as { recoveryCode?: string };
+        assert.ok(bootBody.recoveryCode?.includes('-'));
       }
       const login = await api<{ token: string; access: { permissions: string[] } }>('/api/auth/login', {
         method: 'POST',
@@ -1224,6 +1397,49 @@ describe('Executive Suite API integration', () => {
 
       const ok = await api('/api/products?includeImages=false', { authToken: login.body.token });
       assert.equal(ok.status, 200);
+
+      const licenseNoAuth = await api<{ status: string }>('/api/license');
+      assert.equal(licenseNoAuth.status, 200);
+      assert.ok(typeof licenseNoAuth.body.status === 'string');
+    });
+
+    it('recovers manager password with recovery code', async () => {
+      const login = await api<{ token: string }>('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(login.status, 200);
+
+      const regen = await api<{ recoveryCode: string }>('/api/auth/recovery-code', {
+        method: 'POST',
+        authToken: login.body.token,
+      });
+      assert.equal(regen.status, 201);
+      const code = regen.body.recoveryCode;
+
+      const recover = await api('/api/auth/recover', {
+        method: 'POST',
+        body: { username: 'admin', recoveryCode: code, newPassword: 'adminpass2' },
+      });
+      assert.equal(recover.status, 204);
+
+      const badLogin = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass1' },
+      });
+      assert.equal(badLogin.status, 401);
+
+      const okLogin = await api('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: 'adminpass2' },
+      });
+      assert.equal(okLogin.status, 200);
+
+      await api('/api/auth/password', {
+        method: 'PATCH',
+        body: { password: 'adminpass1', keepSession: true },
+        authToken: okLogin.body.token,
+      });
     });
 
     it('factory reset clears operational data without restarting the trial', async () => {
@@ -1255,6 +1471,94 @@ describe('Executive Suite API integration', () => {
       const license = await api<{ status: string; trialStartedAt: number }>('/api/license');
       assert.equal(license.body.status, 'trial');
       assert.equal(license.body.trialStartedAt, trialStartedAt);
+    });
+  });
+
+  describe('purchases & suppliers', () => {
+    it('CRUD supplier, assisted purchase receive updates warehouse', async () => {
+      const supplier = await api<{ id: string; name: string }>('/api/suppliers', {
+        method: 'POST',
+        body: { name: 'Distribuidora Test' },
+      });
+      assert.equal(supplier.status, 201);
+
+      const product = await api<{ id: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Harina 1kg',
+          sku: 'HAR-001',
+          category: 'General',
+          price: 2,
+          cost: 0,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      await api(`/api/products/${product.body.id}/receive`, {
+        method: 'POST',
+        body: { quantity: 5, unitCost: 1.2, price: 2 },
+      });
+
+      const purchase = await api<{ id: string; status: string }>('/api/purchases', {
+        method: 'POST',
+        body: {
+          purchasedAt: Date.now(),
+          supplierId: supplier.body.id,
+          invoiceNumber: 'F-100',
+          lines: [
+            {
+              productId: product.body.id,
+              name: 'Harina 1kg',
+              unitCost: 1.5,
+              quantity: 10,
+              unitOfMeasure: 'unidad',
+            },
+            {
+              name: 'Producto nuevo compra',
+              barcode: 'NEWBAR999',
+              unitCost: 3,
+              quantity: 4,
+              unitOfMeasure: 'unidad',
+            },
+          ],
+        },
+      });
+      assert.equal(purchase.status, 201);
+
+      const submit = await api<{ status: string }>(`/api/purchases/${purchase.body.id}/submit-for-review`, {
+        method: 'POST',
+      });
+      assert.equal(submit.status, 200);
+      assert.equal(submit.body.status, 'pending_review');
+
+      const review = await api<{ lines: { lineId: string; needsReview: boolean; kind: string }[] }>(
+        `/api/purchases/${purchase.body.id}/warehouse-review`,
+      );
+      assert.equal(review.status, 200);
+      assert.ok(review.body.lines.some((l) => l.needsReview));
+
+      const receive = await api<{ purchase: { status: string } }>(
+        `/api/purchases/${purchase.body.id}/receive-to-warehouse`,
+        {
+          method: 'POST',
+          body: {
+            lines: review.body.lines.map((l) => ({
+              lineId: l.lineId,
+              action: 'receive',
+              confirmed: true,
+              createProduct: l.kind === 'new_product',
+            })),
+          },
+        },
+      );
+      assert.equal(receive.status, 200);
+      assert.equal(receive.body.purchase.status, 'posted');
+
+      const whStock = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      const harina = whStock.body.find((r) => r.productId === product.body.id);
+      assert.ok(harina);
+      assert.equal(harina!.quantity, 15);
     });
   });
 });

@@ -16,6 +16,7 @@ import {
   HelpCircle,
   Wallet,
   QrCode,
+  HandCoins,
 } from 'lucide-react';
 import { Card, Button, Input, Modal } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
@@ -30,6 +31,7 @@ import {
   type LicenseInfo,
   type LicensePlanId,
   type LicenseRequestPayload,
+  type SalesIncentiveBase,
 } from '../types';
 import { mapMutationError } from '../lib/mutationErrors';
 import { cn } from '../lib/utils';
@@ -48,7 +50,7 @@ import { CardQrModal } from '../components/CardQrModal';
 import { buildServerConnectQrPayload, isValidTransferPhone, normalizeTransferPhone } from '../lib/paymentQr';
 import { formatAppDate, formatAppDateTime } from '../lib/dateFormat';
 
-type Section = 'general' | 'payments' | 'profile' | 'notifications' | 'security' | 'regional' | 'billing' | 'data' | 'server';
+type Section = 'general' | 'payments' | 'profile' | 'notifications' | 'security' | 'regional' | 'incentives' | 'billing' | 'data' | 'server';
 
 const DEVICES_PAGE_SIZE = 10;
 
@@ -124,6 +126,12 @@ export function Settings({
   const [profileMessage, setProfileMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null,
   );
+  const [recoveryCodeBusy, setRecoveryCodeBusy] = useState(false);
+  const [recoveryCodeMsg, setRecoveryCodeMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [recoveryCodeModal, setRecoveryCodeModal] = useState<string | null>(null);
+  const [hasRecoveryCode, setHasRecoveryCode] = useState(false);
+  const [incentivePercentDraft, setIncentivePercentDraft] = useState(String(settings.salesIncentivePercent));
+  const [incentiveBaseDraft, setIncentiveBaseDraft] = useState<SalesIncentiveBase>(settings.salesIncentiveBase);
 
   const [draft, setDraft] = useState({
     storeName: settings.storeName,
@@ -217,6 +225,11 @@ export function Settings({
   }, [settings]);
 
   useEffect(() => {
+    setIncentivePercentDraft(String(settings.salesIncentivePercent));
+    setIncentiveBaseDraft(settings.salesIncentiveBase);
+  }, [settings.salesIncentivePercent, settings.salesIncentiveBase]);
+
+  useEffect(() => {
     if (initialSection) setSection(initialSection);
   }, [initialSection]);
 
@@ -226,6 +239,26 @@ export function Settings({
     setProfileDraft({ displayName: u.displayName, username: u.username ?? '' });
     setProfilePassword('');
   }, [access?.user?.id, access?.user?.displayName, access?.user?.username]);
+
+  useEffect(() => {
+    if (section !== 'security') return;
+    void api.getAuthStatus().then((s) => setHasRecoveryCode(s.hasRecoveryCode)).catch(() => {});
+  }, [section]);
+
+  const generateRecoveryCode = async () => {
+    setRecoveryCodeBusy(true);
+    setRecoveryCodeMsg(null);
+    try {
+      const res = await api.regenerateRecoveryCode();
+      setHasRecoveryCode(true);
+      setRecoveryCodeModal(res.recoveryCode);
+      setRecoveryCodeMsg({ type: 'ok', text: t('settings.recoveryCodeGenerateOk') });
+    } catch (e) {
+      setRecoveryCodeMsg({ type: 'err', text: mapMutationError(e, t) });
+    } finally {
+      setRecoveryCodeBusy(false);
+    }
+  };
 
   const handleRequestLicense = async (planId: LicensePlanId) => {
     setBillingMsg(null);
@@ -536,6 +569,15 @@ export function Settings({
     });
   };
 
+  const saveIncentives = async () => {
+    const raw = parseFloat(incentivePercentDraft.replace(',', '.'));
+    const percent = Number.isFinite(raw) ? Math.min(100, Math.max(0, raw)) : 0;
+    await onUpdate({
+      salesIncentivePercent: Math.round(percent * 100) / 100,
+      salesIncentiveBase: incentiveBaseDraft,
+    });
+  };
+
   const saveProfile = async () => {
     const u = access?.user;
     if (!u) return;
@@ -628,6 +670,7 @@ export function Settings({
     { id: 'notifications' as const, label: t('settings.navNotifications'), icon: Bell },
     { id: 'security' as const, label: t('settings.navSecurity'), icon: Shield },
     { id: 'regional' as const, label: t('settings.navRegional'), icon: Globe },
+    { id: 'incentives' as const, label: t('settings.navIncentives'), icon: HandCoins },
     { id: 'billing' as const, label: t('settings.navBilling'), icon: CreditCard },
     { id: 'data' as const, label: t('settings.navData'), icon: HardDrive },
     { id: 'server' as const, label: t('settings.navServer'), icon: Globe },
@@ -951,10 +994,38 @@ export function Settings({
                   />
                 </button>
               </div>
+              {access?.permissions.includes('settings.manage') ? (
+                <div className="mt-6 p-4 bg-surface-container-low rounded-xl space-y-3">
+                  <div>
+                    <p className="text-sm font-bold">{t('settings.recoveryCodeTitle')}</p>
+                    <p className="text-xs text-on-surface-variant mt-1">{t('settings.recoveryCodeBody')}</p>
+                    <p className="text-xs text-on-surface-variant mt-2">
+                      {hasRecoveryCode ? t('settings.recoveryCodeActive') : t('settings.recoveryCodeNone')}
+                    </p>
+                  </div>
+                  {recoveryCodeMsg ? (
+                    <p
+                      className={cn(
+                        'text-sm',
+                        recoveryCodeMsg.type === 'ok' ? 'text-green-700' : 'text-error',
+                      )}
+                    >
+                      {recoveryCodeMsg.text}
+                    </p>
+                  ) : null}
+                  <Button
+                    variant="secondary"
+                    disabled={recoveryCodeBusy}
+                    onClick={() => void generateRecoveryCode()}
+                  >
+                    {recoveryCodeBusy ? t('users.saving') : t('settings.recoveryCodeGenerate')}
+                  </Button>
+                </div>
+              ) : null}
               {access?.user ? (
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-4 p-4 bg-surface-container-low rounded-xl">
                   <p className="text-sm font-medium">{access.user.displayName}</p>
-                  <Button variant="outline" onClick={() => void logout()}>
+                  <Button variant="ghost" onClick={() => void logout()}>
                     {t('nav.userMenuLogout')}
                   </Button>
                 </div>
@@ -978,6 +1049,62 @@ export function Settings({
                   <option value="en">{t('settings.languageEn')}</option>
                 </select>
                 <p className="text-xs text-on-surface-variant">{t('settings.languageHelp')}</p>
+              </div>
+            </Card>
+          )}
+
+          {section === 'incentives' && (
+            <Card title={t('settings.incentivesTitle')}>
+              <p className="text-sm text-on-surface-variant mt-2 mb-6">{t('settings.incentivesIntro')}</p>
+              <div className="space-y-6 max-w-md">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                    {t('settings.incentivePercentLabel')}
+                  </label>
+                  <Input
+                    type="text"
+                    inputMode="decimal"
+                    value={incentivePercentDraft}
+                    onChange={(e) => setIncentivePercentDraft(e.target.value)}
+                    placeholder="0"
+                  />
+                  <p className="text-xs text-on-surface-variant">{t('settings.incentivePercentHelp')}</p>
+                </div>
+                <fieldset className="space-y-3">
+                  <legend className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                    {t('settings.incentiveBaseLegend')}
+                  </legend>
+                  
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-black/10 px-4 py-3 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5">
+                    <input
+                      type="radio"
+                      name="incentiveBase"
+                      className="mt-1"
+                      checked={incentiveBaseDraft === 'gross'}
+                      onChange={() => setIncentiveBaseDraft('gross')}
+                    />
+                    <span>
+                      <span className="text-sm font-bold block">{t('settings.incentiveBaseGross')}</span>
+                      <span className="text-xs text-on-surface-variant">{t('settings.incentiveBaseGrossHelp')}</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-black/10 px-4 py-3 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5">
+                    <input
+                      type="radio"
+                      name="incentiveBase"
+                      className="mt-1"
+                      checked={incentiveBaseDraft === 'net'}
+                      onChange={() => setIncentiveBaseDraft('net')}
+                    />
+                    <span>
+                      <span className="text-sm font-bold block">{t('settings.incentiveBaseNet')}</span>
+                      <span className="text-xs text-on-surface-variant">{t('settings.incentiveBaseNetHelp')}</span>
+                    </span>
+                  </label>
+                </fieldset>
+                <div className="pt-2 flex justify-end">
+                  <Button onClick={() => void saveIncentives()}>{t('settings.saveChanges')}</Button>
+                </div>
               </div>
             </Card>
           )}
@@ -1579,6 +1706,20 @@ export function Settings({
             {backupBusy ? t('settings.restoring') : t('settings.yesRestore')}
           </Button>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={recoveryCodeModal != null}
+        onClose={() => setRecoveryCodeModal(null)}
+        title={t('settings.recoveryCodeTitle')}
+      >
+        <p className="text-sm text-on-surface-variant mb-4">{t('settings.recoveryCodeBody')}</p>
+        <p className="text-lg font-mono font-bold tracking-widest text-center py-4 bg-surface-container-low rounded-xl">
+          {recoveryCodeModal}
+        </p>
+        <Button className="w-full mt-4" onClick={() => setRecoveryCodeModal(null)}>
+          {t('auth.recoveryCodeSaved')}
+        </Button>
       </Modal>
 
       <CardQrModal

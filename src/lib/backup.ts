@@ -5,9 +5,12 @@ import type {
   Expense,
   Product,
   ProductCategory,
+  ExpenseCategory,
   SaleReceipt,
   SaleReceiptLine,
   Customer,
+  Supplier,
+  PurchaseOrder,
   Transaction,
   Warehouse,
   WarehouseMovement,
@@ -36,10 +39,13 @@ function markDexieMigrated(): void {
   }
 }
 
-/** Current export format. Imports accept schema versions 1–6. */
-export const BACKUP_SCHEMA_VERSION = 6;
+/**
+ * Current JSON backup format (`GET /api/backup`).
+ * Keep in sync with `server/backupSchema.ts` → `BACKUP_SCHEMA_VERSION`.
+ */
+export const BACKUP_SCHEMA_VERSION = 9;
 
-const SUPPORTED_BACKUP_VERSIONS = [1, 2, 3, 4, 5, 6] as const;
+const SUPPORTED_BACKUP_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export type ExecutiveSuiteBackup = {
   schemaVersion: (typeof SUPPORTED_BACKUP_VERSIONS)[number];
@@ -62,6 +68,72 @@ export type ExecutiveSuiteBackup = {
   warehouseSections?: WarehouseSection[];
   warehouseStock?: WarehouseStock[];
   warehouseMovements?: WarehouseMovement[];
+  /** RBAC: users, role grants, device-operator bindings (schema ≥ 7). */
+  accessControl?: ExecutiveSuiteBackupAccessControl;
+  /** Expense category master (schema ≥ 8). */
+  expenseCategories?: ExpenseCategory[];
+  /** Admin audit trail (schema ≥ 8). */
+  userAdminAudit?: ExecutiveSuiteBackupAuditEntry[];
+  /** Trial / paid license state (schema ≥ 8). */
+  license?: ExecutiveSuiteBackupLicense;
+  /** Suppliers master data (schema ≥ 9). */
+  suppliers?: Supplier[];
+  /** Purchase orders with lines embedded (schema ≥ 9; invoice image files are not in JSON). */
+  purchaseOrders?: PurchaseOrder[];
+};
+
+export type ExecutiveSuiteBackupAuditEntry = {
+  id: string;
+  action: string;
+  createdAt: number;
+  actorUserId: string | null;
+  actorDisplayName: string;
+  actorUsername: string | null;
+  deviceId: string | null;
+  details: Record<string, unknown>;
+};
+
+export type ExecutiveSuiteBackupLicense = {
+  trialStartedAt: number;
+  planId: string | null;
+  paidUntil: number | null;
+  deviceFingerprint: string | null;
+  deviceRegisteredAt: number | null;
+  lastPaymentAt: number | null;
+  licenseNonce: string | null;
+  redemptions: { nonce: string; redeemedAt: number }[];
+};
+
+export type ExecutiveSuiteBackupAccessControl = {
+  roles: { key: string; permissionKeys: string[] }[];
+  users: {
+    id: string;
+    displayName: string;
+    username: string | null;
+    active: boolean;
+    passwordHash: string | null;
+    roleKey: string;
+    operatorId: string;
+    createdAt: number;
+    updatedAt: number;
+  }[];
+  operators: {
+    id: string;
+    displayName: string;
+    userId: string;
+    active: boolean;
+    createdAt: number;
+  }[];
+  connectedDevices: {
+    deviceId: string;
+    clientKind: string;
+    userAgent: string;
+    firstSeenAt: number;
+    lastSeenAt: number;
+    revokedAt: number | null;
+    operatorName: string;
+    operatorId: string | null;
+  }[];
 };
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -196,6 +268,12 @@ function isExpense(x: unknown): x is Expense {
 function isAppSettings(x: unknown): x is AppSettings {
   if (!isRecord(x)) return false;
   const localeOk = x.locale === undefined || x.locale === 'es' || x.locale === 'en';
+  const authLoginOk = x.authLoginRequired === undefined || typeof x.authLoginRequired === 'boolean';
+  const incentivePercentOk =
+    x.salesIncentivePercent === undefined ||
+    (typeof x.salesIncentivePercent === 'number' && Number.isFinite(x.salesIncentivePercent));
+  const incentiveBaseOk =
+    x.salesIncentiveBase === undefined || x.salesIncentiveBase === 'net' || x.salesIncentiveBase === 'gross';
   const cardQrOk = x.cardQrPayload === undefined || typeof x.cardQrPayload === 'string';
   const transferOk =
     (x.transferBank === undefined || typeof x.transferBank === 'string') &&
@@ -221,7 +299,10 @@ function isAppSettings(x: unknown): x is AppSettings {
     typeof x.lowStockNotifications === 'boolean' &&
     typeof x.managerName === 'string' &&
     typeof x.managerTitle === 'string' &&
-    localeOk
+    localeOk &&
+    authLoginOk &&
+    incentivePercentOk &&
+    incentiveBaseOk
   );
 }
 
@@ -261,7 +342,10 @@ export function parseBackupJson(text: string): ExecutiveSuiteBackup {
     version !== 3 &&
     version !== 4 &&
     version !== 5 &&
-    version !== 6
+    version !== 6 &&
+    version !== 7 &&
+    version !== 8 &&
+    version !== 9
   ) {
     throw new Error(
       `Unsupported backup version: ${String(version)}. Expected ${SUPPORTED_BACKUP_VERSIONS.join(', ')}.`,

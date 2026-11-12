@@ -3,6 +3,7 @@ import { newId } from './db.js';
 import { ensureConnectedDevicesSchema } from './connectedDevices.js';
 import { ApiError } from './apiError.js';
 import type { ClientKind } from './connectedDevices.js';
+import { migrateUserAuditSchema } from './userAuditLog.js';
 
 export type PermissionScope = 'web' | 'mobile' | 'both';
 
@@ -31,8 +32,8 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'warehouse.receive', description: 'Warehouse stock entries', scope: 'both', group: 'warehouse' },
   { key: 'warehouse.transfer', description: 'Transfer warehouse stock to store', scope: 'both', group: 'warehouse' },
   { key: 'catalog.view', description: 'View products and customers', scope: 'both', group: 'catalog' },
-  { key: 'catalog.edit', description: 'Edit catalog', scope: 'web', group: 'catalog' },
-  { key: 'reports.view', description: 'View reports', scope: 'web', group: 'reports' },
+  { key: 'catalog.edit', description: 'Edit catalog and purchases', scope: 'both', group: 'catalog' },
+  { key: 'reports.view', description: 'View reports', scope: 'both', group: 'reports' },
   { key: 'users.manage', description: 'Manage users and roles', scope: 'web', group: 'administration' },
   { key: 'devices.manage', description: 'Assign devices and operators', scope: 'web', group: 'administration' },
   { key: 'settings.manage', description: 'Store settings and license', scope: 'web', group: 'administration' },
@@ -149,6 +150,7 @@ function hasColumn(db: SqliteStore, table: string, column: string): boolean {
 
 export function migrateRbacSchema(db: SqliteStore): void {
   ensureConnectedDevicesSchema(db);
+  migrateUserAuditSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS roles (
@@ -366,15 +368,28 @@ function backfillOperatorsFromLegacyNames(db: SqliteStore): void {
   }
 }
 
-function bootstrapDefaultManagerUser(db: SqliteStore): void {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number };
-  if (count.c > 0) return;
+/** Placeholder encargado without password — required for first-time bootstrap after RBAC migration. */
+export function ensureManagerUserForBootstrap(db: SqliteStore): void {
+  const existing = db
+    .prepare(
+      `SELECT u.id FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE r.key = ?
+       LIMIT 1`,
+    )
+    .get(ROLE_MANAGER) as { id: string } | undefined;
+  if (existing) return;
 
   const settings = db.prepare('SELECT manager_name FROM app_settings WHERE id = ?').get('main') as
     | { manager_name: string }
     | undefined;
   const name = (settings?.manager_name ?? 'Encargado').trim() || 'Encargado';
   createUserWithOperator(db, name, ROLE_MANAGER, true);
+}
+
+function bootstrapDefaultManagerUser(db: SqliteStore): void {
+  ensureManagerUserForBootstrap(db);
 }
 
 function linkDevicesToOperatorsByName(db: SqliteStore): void {
@@ -618,6 +633,12 @@ function mapUserRow(db: SqliteStore, row: UserRow): AppUser {
 export function listUsers(db: SqliteStore): AppUser[] {
   const rows = db.prepare('SELECT * FROM users ORDER BY display_name COLLATE NOCASE').all() as UserRow[];
   return rows.map((r) => mapUserRow(db, r));
+}
+
+export function getAppUserById(db: SqliteStore, userId: string): AppUser | null {
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as UserRow | undefined;
+  if (!row) return null;
+  return mapUserRow(db, row);
 }
 
 export type OperatorOption = {

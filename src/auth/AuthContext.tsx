@@ -14,6 +14,7 @@ import { getAuthToken, setAuthToken } from './token';
 export type AuthStatus = {
   loginRequired: boolean;
   needsBootstrap: boolean;
+  hasRecoveryCode: boolean;
   storeName: string;
 };
 
@@ -23,7 +24,7 @@ type AuthContextValue = {
   access: DeviceAccessContext | null;
   status: AuthStatus | null;
   login: (username: string, password: string) => Promise<void>;
-  bootstrap: (username: string, password: string) => Promise<void>;
+  bootstrap: (username: string, password: string) => Promise<string>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
 };
@@ -79,8 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshSession]);
 
   const bootstrap = useCallback(async (username: string, password: string) => {
-    await api.bootstrapAuth(username, password);
+    const result = await api.bootstrapAuth(username, password);
     await login(username, password);
+    return result.recoveryCode;
   }, [login]);
 
   const logout = useCallback(async () => {

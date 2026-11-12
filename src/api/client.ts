@@ -10,6 +10,9 @@ import type {
   ConnectedDevice,
   ConnectedDevicesPage,
   Customer,
+  PurchaseLineReview,
+  PurchaseOrder,
+  Supplier,
   Expense,
   ExpenseCategory,
   LicenseInfo,
@@ -25,6 +28,7 @@ import type {
   WarehouseSection,
   WarehouseStock,
   WarehouseSummaryReport,
+  UserAdminAuditEntry,
 } from '../types';
 import type { ExecutiveSuiteBackup } from '../lib/backup';
 import { getApiUrl } from './config';
@@ -320,8 +324,9 @@ export const api = {
   deleteExpenseCategory: (id: string) =>
     request<void>(`/api/expense-categories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   createInventoryConsumptionExpense: (body: {
-    productId: string;
-    quantity: number;
+    productId?: string;
+    quantity?: number;
+    items?: { productId: string; quantity: number }[];
     source: 'store' | 'warehouse';
     title?: string;
     date?: string;
@@ -456,7 +461,9 @@ export const api = {
   getDeviceAccess: () => request<DeviceAccessContext>('/api/device/access'),
 
   getAuthStatus: () =>
-    request<{ loginRequired: boolean; needsBootstrap: boolean; storeName: string }>('/api/auth/status'),
+    request<{ loginRequired: boolean; needsBootstrap: boolean; hasRecoveryCode: boolean; storeName: string }>(
+      '/api/auth/status',
+    ),
   getAuthSession: () =>
     request<{
       authenticated: boolean;
@@ -470,10 +477,17 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   bootstrapAuth: (username: string, password: string) =>
-    request<void>('/api/auth/bootstrap', {
+    request<{ recoveryCode: string }>('/api/auth/bootstrap', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  recoverPassword: (username: string, recoveryCode: string, newPassword: string) =>
+    request<void>('/api/auth/recover', {
+      method: 'POST',
+      body: JSON.stringify({ username, recoveryCode, newPassword }),
+    }),
+  regenerateRecoveryCode: () =>
+    request<{ recoveryCode: string }>('/api/auth/recovery-code', { method: 'POST' }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   updateAuthProfile: (body: { displayName?: string; username?: string | null }) =>
     request<AppUser>('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(body) }),
@@ -506,4 +520,59 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  getSuppliers: () => request<Supplier[]>('/api/suppliers'),
+  createSupplier: (body: Omit<Supplier, 'createdAt' | 'updatedAt'>) =>
+    request<Supplier>('/api/suppliers', { method: 'POST', body: JSON.stringify(body) }),
+  updateSupplier: (id: string, body: Partial<Pick<Supplier, 'name' | 'address' | 'phone'>>) =>
+    request<Supplier>(`/api/suppliers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteSupplier: (id: string) =>
+    request<void>(`/api/suppliers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getPurchases: (params?: { status?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set('status', params.status);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return request<PurchaseOrder[]>(`/api/purchases${suffix}`);
+  },
+  getPurchase: (id: string) => request<PurchaseOrder>(`/api/purchases/${encodeURIComponent(id)}`),
+  submitPurchaseForReview: (id: string) =>
+    request<PurchaseOrder>(`/api/purchases/${encodeURIComponent(id)}/submit-for-review`, { method: 'POST' }),
+  getPurchaseWarehouseReview: (id: string) =>
+    request<{ purchaseId: string; status: string; lines: PurchaseLineReview[]; needsReviewCount: number }>(
+      `/api/purchases/${encodeURIComponent(id)}/warehouse-review`,
+    ),
+  receivePurchaseToWarehouse: (
+    id: string,
+    body: {
+      sectionId?: string | null;
+      defaultSalePrice?: number;
+      lines: {
+        lineId: string;
+        action: 'receive' | 'skip';
+        productId?: string | null;
+        createProduct?: boolean;
+        unitCost?: number;
+        confirmed?: boolean;
+      }[];
+    },
+  ) =>
+    request<{
+      purchase: PurchaseOrder;
+      receipts: unknown[];
+      warnings: { code: string; lineId: string; message: string }[];
+    }>(`/api/purchases/${encodeURIComponent(id)}/receive-to-warehouse`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  listUserAdminAuditLog: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set('limit', String(params.limit));
+    if (params?.offset != null) q.set('offset', String(params.offset));
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return request<UserAdminAuditEntry[]>(`/api/users/audit-log${suffix}`);
+  },
 };

@@ -2,6 +2,10 @@ import type { Request, Response, NextFunction } from 'express';
 import { getDb, newId, rowToCategory, type SqliteStore } from './db.js';
 import { codeFromCategoryName } from './migrations.js';
 import { ApiError } from './routes.js';
+import {
+  countProductsUsingLocation,
+  countProductsUsingSubcategory,
+} from './nomenclatorGuards.js';
 
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -106,14 +110,12 @@ export function registerCatalogRoutes(router: import('express').Router): void {
         | { id: string; name: string }
         | undefined;
       if (!row) throw new ApiError(404, 'Subcategory not found');
-      const count = db.prepare('SELECT COUNT(*) AS c FROM products WHERE subcategory_id = ?').get(req.params.id) as {
-        c: number;
-      };
-      if (count.c > 0) {
+      const productCount = countProductsUsingSubcategory(db, row.id, row.name);
+      if (productCount > 0) {
         throw new ApiError(
           409,
-          `Subcategory in use by ${count.c} product(s)`,
-          `ERR_SUBCATEGORY_IN_USE|${count.c}|${encodeURIComponent(row.name)}`,
+          `Subcategory in use by ${productCount} product(s)`,
+          `ERR_SUBCATEGORY_IN_USE|${productCount}|${encodeURIComponent(row.name)}`,
         );
       }
       db.prepare('DELETE FROM subcategories WHERE id = ?').run(req.params.id);
@@ -165,9 +167,19 @@ export function registerCatalogRoutes(router: import('express').Router): void {
     '/locations/:id',
     asyncHandler(async (req, res) => {
       const db = getDb();
-      const result = db.prepare('DELETE FROM locations WHERE id = ?').run(req.params.id);
-      if (result.changes === 0) throw new ApiError(404, 'Location not found');
-      db.prepare('UPDATE products SET location_id = NULL WHERE location_id = ?').run(req.params.id);
+      const row = db.prepare('SELECT id, name FROM locations WHERE id = ?').get(req.params.id) as
+        | { id: string; name: string }
+        | undefined;
+      if (!row) throw new ApiError(404, 'Location not found');
+      const productCount = countProductsUsingLocation(db, row.id);
+      if (productCount > 0) {
+        throw new ApiError(
+          409,
+          `Location in use by ${productCount} product(s)`,
+          `ERR_LOCATION_IN_USE|${productCount}|${encodeURIComponent(row.name)}`,
+        );
+      }
+      db.prepare('DELETE FROM locations WHERE id = ?').run(req.params.id);
       res.status(204).send();
     }),
   );

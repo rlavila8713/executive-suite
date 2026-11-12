@@ -12,7 +12,7 @@ import { Card, Button, Input } from '../components/ui';
 import { TableIconAction } from '../components/TableIconAction';
 import { ProductMovementsDialog } from '../components/ProductMovementsDialog';
 import { ProductThumb } from '../components/ProductThumb';
-import { Product, ProductCategory, ProductSubcategory } from '../types';
+import { Product, ProductCategory, ProductSubcategory, WarehouseStock } from '../types';
 import { cn, rowMatchesSearch } from '../lib/utils';
 import { useI18n } from '../i18n/I18nContext';
 import { printTableDocument, downloadCsv } from '../lib/printDocument';
@@ -34,6 +34,7 @@ interface InventoryProps {
   products: Product[];
   productCategories: ProductCategory[];
   productSubcategories: ProductSubcategory[];
+  warehouseStock?: WarehouseStock[];
   globalSearch?: string;
   onSyncStock?: () => void | Promise<void>;
   syncBusy?: boolean;
@@ -66,11 +67,16 @@ export function Inventory({
   products,
   productCategories,
   productSubcategories,
+  warehouseStock = [],
   globalSearch = '',
   onSyncStock,
   syncBusy,
 }: InventoryProps) {
   const { t, locale } = useI18n();
+  const warehouseQtyByProduct = useMemo(
+    () => new Map(warehouseStock.map((row) => [row.productId, row.quantity])),
+    [warehouseStock],
+  );
   const [localSearch, setLocalSearch] = useState('');
   const [stockChip, setStockChip] = useState<StockChip>('all');
   const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>({ kind: 'all' });
@@ -117,6 +123,7 @@ export function Inventory({
       p.name,
       p.sku,
       String(p.stock),
+      String(warehouseQtyByProduct.get(p.id) ?? 0),
       p.price > 0 ? p.price.toFixed(2) : '—',
       p.stock > 0 || p.cost > 0 ? p.cost.toFixed(2) : '',
       statusLabel(p),
@@ -124,10 +131,11 @@ export function Inventory({
     const ok = printTableDocument(
       t('inventory.stockReport'),
       formatAppDateTime(Date.now(), locale, 'medium'),
-      [
+        [
         t('inventory.colDetails'),
         t('common.sku'),
-        t('inventory.colCurrentStock'),
+        t('inventory.colStoreStock'),
+        t('inventory.colWarehouseStock'),
         t('inventory.colSalePrice'),
         t('inventory.colAvgCost'),
         t('inventory.colStatus'),
@@ -137,7 +145,7 @@ export function Inventory({
     if (!ok) {
       downloadCsv(
         `stock-${new Date().toISOString().slice(0, 10)}.csv`,
-        ['name', 'sku', 'stock', 'price', 'cost', 'status'],
+        ['name', 'sku', 'store_stock', 'warehouse_stock', 'price', 'cost', 'status'],
         rows,
       );
     }
@@ -274,12 +282,17 @@ export function Inventory({
                     <p className="text-sm font-bold text-primary line-clamp-2 leading-tight">{product.name}</p>
                     <p className="text-[10px] text-on-surface-variant">{product.sku}</p>
                   </div>
-                  <div className="text-xs flex justify-between gap-2">
-                    <span className="font-bold text-primary">{product.stock} unidades</span>
-                    <span className="text-on-surface-variant text-right">
-                      {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
+                  <div className="text-xs flex flex-col gap-1">
+                    <span className="font-bold text-primary">
+                      {t('inventory.colStoreStock')}: {product.stock}
+                    </span>
+                    <span className="text-on-surface-variant">
+                      {t('inventory.colWarehouseStock')}: {warehouseQtyByProduct.get(product.id) ?? 0}
                     </span>
                   </div>
+                  <p className="text-xs text-on-surface-variant text-right">
+                    {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
+                  </p>
                   <div className="mt-auto flex justify-center">
                     <TableIconAction
                       icon={History}
@@ -310,7 +323,8 @@ export function Inventory({
               <thead>
                 <tr className="bg-surface-container-low border-b border-black/5">
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black">{t('inventory.colDetails')}</th>
-                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colCurrentStock')}</th>
+                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colStoreStock')}</th>
+                  <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colWarehouseStock')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colSalePrice')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-right">{t('inventory.colAvgCost')}</th>
                   <th className="py-3 px-4 text-[10px] text-on-surface-variant uppercase tracking-widest font-black text-center">{t('inventory.colStatus')}</th>
@@ -330,6 +344,9 @@ export function Inventory({
                       </div>
                     </td>
                     <td className="py-3 px-4 text-right font-bold text-primary">{product.stock}</td>
+                    <td className="py-3 px-4 text-right font-bold text-on-surface-variant">
+                      {warehouseQtyByProduct.get(product.id) ?? 0}
+                    </td>
                     <td className="py-3 px-4 text-right text-sm">
                       {product.price > 0 ? `$${product.price.toFixed(2)}` : '—'}
                     </td>

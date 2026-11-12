@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 import { Button, Input, Modal } from './ui';
+import { TableIconAction } from './TableIconAction';
 import type { Expense, ExpenseCategory, Product, WarehouseStock } from '../types';
 import { INVENTORY_CONSUMPTION_CATEGORY_CODE } from '../constants/expenseCategories';
 import { useI18n } from '../i18n/I18nContext';
@@ -8,6 +9,8 @@ import { rowMatchesSearch } from '../lib/utils';
 import { mapMutationError } from '../lib/mutationErrors';
 
 type SourceTab = 'store' | 'warehouse';
+
+type ConsumptionLine = { productId: string; quantity: string };
 
 interface ExpenseFormModalProps {
   isOpen: boolean;
@@ -18,8 +21,7 @@ interface ExpenseFormModalProps {
   onClose: () => void;
   onSaveRegular: (row: Omit<Expense, 'id'>) => Promise<void>;
   onSaveConsumption: (payload: {
-    productId: string;
-    quantity: number;
+    items: { productId: string; quantity: number }[];
     source: 'store' | 'warehouse';
     title?: string;
     date: string;
@@ -43,8 +45,7 @@ export function ExpenseFormModal({
   const [amount, setAmount] = useState('');
   const [sourceTab, setSourceTab] = useState<SourceTab>('store');
   const [search, setSearch] = useState('');
-  const [selectedProductId, setSelectedProductId] = useState('');
-  const [quantity, setQuantity] = useState('1');
+  const [consumptionLines, setConsumptionLines] = useState<ConsumptionLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -52,6 +53,7 @@ export function ExpenseFormModal({
   const isConsumption = selectedCategory?.code === INVENTORY_CONSUMPTION_CATEGORY_CODE && !editing;
 
   const stockByProduct = useMemo(() => new Map(warehouseStock.map((s) => [s.productId, s])), [warehouseStock]);
+  const selectedProductIds = useMemo(() => new Set(consumptionLines.map((l) => l.productId)), [consumptionLines]);
 
   /** Avoid resetting the form when parent polling refreshes `categories` / props. */
   const formSessionKey = isOpen ? (editing?.id ?? 'new') : null;
@@ -77,8 +79,7 @@ export function ExpenseFormModal({
       setDate(new Date().toISOString().slice(0, 10));
       setAmount('');
       setSearch('');
-      setSelectedProductId('');
-      setQuantity('1');
+      setConsumptionLines([]);
       setSourceTab('store');
     }
     setError(null);
@@ -106,16 +107,34 @@ export function ExpenseFormModal({
   }, [products, search, sourceTab, stockByProduct]);
 
   const previewAmount = useMemo(() => {
-    const p = products.find((x) => x.id === selectedProductId);
-    const qty = Math.floor(Number(quantity));
-    if (!p || !Number.isFinite(qty) || qty <= 0) return null;
-    if (sourceTab === 'store') {
-      return Math.round(p.cost * qty * 100) / 100;
+    let total = 0;
+    for (const line of consumptionLines) {
+      const p = products.find((x) => x.id === line.productId);
+      const qty = Math.floor(Number(line.quantity));
+      if (!p || !Number.isFinite(qty) || qty <= 0) continue;
+      if (sourceTab === 'store') {
+        total += p.cost * qty;
+      } else {
+        const wh = stockByProduct.get(p.id);
+        if (wh) total += wh.unitCost * qty;
+      }
     }
-    const wh = stockByProduct.get(p.id);
-    if (!wh) return null;
-    return Math.round(wh.unitCost * qty * 100) / 100;
-  }, [products, selectedProductId, quantity, sourceTab, stockByProduct]);
+    if (total <= 0) return null;
+    return Math.round(total * 100) / 100;
+  }, [products, consumptionLines, sourceTab, stockByProduct]);
+
+  const toggleProduct = (productId: string) => {
+    setConsumptionLines((prev) => {
+      if (prev.some((l) => l.productId === productId)) {
+        return prev.filter((l) => l.productId !== productId);
+      }
+      return [...prev, { productId, quantity: '1' }];
+    });
+  };
+
+  const setLineQty = (productId: string, quantity: string) => {
+    setConsumptionLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, quantity } : l)));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,14 +142,18 @@ export function ExpenseFormModal({
     setBusy(true);
     try {
       if (isConsumption) {
-        const qty = Math.floor(Number(quantity));
-        if (!selectedProductId || qty <= 0) {
+        const items = consumptionLines
+          .map((line) => ({
+            productId: line.productId,
+            quantity: Math.floor(Number(line.quantity)),
+          }))
+          .filter((row) => row.productId && Number.isFinite(row.quantity) && row.quantity > 0);
+        if (items.length === 0) {
           setError(t('expenses.consumptionSelectProduct'));
           return;
         }
         await onSaveConsumption({
-          productId: selectedProductId,
-          quantity: qty,
+          items,
           source: sourceTab,
           title: title.trim() || undefined,
           date,
@@ -162,7 +185,12 @@ export function ExpenseFormModal({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={editing ? t('expenses.editExpense') : t('expenses.addExpenseTitle')}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={editing ? t('expenses.editExpense') : t('expenses.addExpenseTitle')}
+      size={isConsumption ? 'xlarge' : 'default'}
+    >
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <div className="space-y-1">
           <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.colCategory')}</label>
@@ -197,7 +225,7 @@ export function ExpenseFormModal({
                   type="button"
                   onClick={() => {
                     setSourceTab(tab);
-                    setSelectedProductId('');
+                    setConsumptionLines([]);
                   }}
                   className={
                     sourceTab === tab
@@ -209,39 +237,118 @@ export function ExpenseFormModal({
                 </button>
               ))}
             </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={14} />
-              <Input className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('expenses.consumptionSearch')} />
-            </div>
-            <div className="max-h-48 overflow-y-auto border border-black/5 rounded-lg divide-y divide-black/5">
-              {visibleProducts.map((p) => {
-                const wh = stockByProduct.get(p.id);
-                const qtyAvail = sourceTab === 'store' ? p.stock : (wh?.quantity ?? 0);
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setSelectedProductId(p.id)}
-                    className={
-                      selectedProductId === p.id
-                        ? 'w-full text-left px-3 py-2 bg-primary/10'
-                        : 'w-full text-left px-3 py-2 hover:bg-surface-container-low'
-                    }
-                  >
-                    <p className="text-sm font-bold text-primary">{p.name}</p>
-                    <p className="text-[10px] text-on-surface-variant">
-                      {p.sku} · {t('expenses.consumptionAvailable', { count: qtyAvail })}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-[14rem]">
+              <div className="flex flex-col min-h-0 border border-black/5 rounded-xl overflow-hidden bg-surface-container-lowest">
+                <div className="p-3 border-b border-black/5 space-y-2">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                    {t('expenses.consumptionPickTitle')}
+                  </p>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={14} />
+                    <Input
+                      className="pl-9"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder={t('expenses.consumptionSearch')}
+                    />
+                  </div>
+                </div>
+                <div className="overflow-y-auto max-h-64 lg:max-h-72 flex-1">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-surface-container-low z-10">
+                      <tr className="text-left text-[10px] uppercase tracking-widest text-on-surface-variant border-b border-black/5">
+                        <th className="py-2 px-3 font-bold">{t('expenses.consumptionColProduct')}</th>
+                        <th className="py-2 px-3 text-right font-bold w-20">{t('expenses.consumptionColAvail')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleProducts.map((p) => {
+                        const wh = stockByProduct.get(p.id);
+                        const qtyAvail = sourceTab === 'store' ? p.stock : (wh?.quantity ?? 0);
+                        const selected = selectedProductIds.has(p.id);
+                        return (
+                          <tr
+                            key={p.id}
+                            className={
+                              selected
+                                ? 'bg-primary/10 cursor-pointer'
+                                : 'hover:bg-surface-container-low cursor-pointer border-b border-black/5'
+                            }
+                            onClick={() => toggleProduct(p.id)}
+                          >
+                            <td className="py-2 px-3">
+                              <p className="font-bold text-primary text-sm leading-tight">{p.name}</p>
+                              <p className="text-[10px] text-on-surface-variant">{p.sku}</p>
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono text-xs">{qtyAvail}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {visibleProducts.length === 0 ? (
+                    <p className="text-xs text-center text-on-surface-variant py-8">{t('expenses.consumptionNoProducts')}</p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex flex-col min-h-0 border border-primary/20 rounded-xl overflow-hidden bg-primary/5">
+                <div className="p-3 border-b border-primary/15">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-primary">
+                    {t('expenses.consumptionSelectedTitle')}
+                  </p>
+                </div>
+                <div className="overflow-y-auto max-h-64 lg:max-h-72 flex-1">
+                  {consumptionLines.length === 0 ? (
+                    <p className="text-xs text-center text-on-surface-variant py-10 px-4">
+                      {t('expenses.consumptionSelectedEmpty')}
                     </p>
-                  </button>
-                );
-              })}
-              {visibleProducts.length === 0 ? (
-                <p className="text-xs text-center text-on-surface-variant py-4">{t('expenses.consumptionNoProducts')}</p>
-              ) : null}
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">{t('expenses.consumptionQty')}</label>
-              <Input type="number" min={1} step={1} value={quantity} onChange={(e) => setQuantity(e.target.value)} required />
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-primary/10 z-10">
+                        <tr className="text-left text-[10px] uppercase tracking-widest text-on-surface-variant border-b border-primary/15">
+                          <th className="py-2 px-3 font-bold">{t('expenses.consumptionColProduct')}</th>
+                          <th className="py-2 px-3 text-right font-bold w-24">{t('expenses.consumptionQty')}</th>
+                          <th className="py-2 px-3 w-12 text-right font-bold sr-only">{t('common.delete')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {consumptionLines.map((line) => {
+                          const p = products.find((x) => x.id === line.productId);
+                          if (!p) return null;
+                          return (
+                            <tr key={line.productId} className="border-b border-primary/10">
+                              <td className="py-2 px-3">
+                                <p className="font-bold text-primary text-sm leading-tight">{p.name}</p>
+                                <p className="text-[10px] text-on-surface-variant">{p.sku}</p>
+                              </td>
+                              <td className="py-2 px-3">
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  className="w-full text-right"
+                                  value={line.quantity}
+                                  onChange={(e) => setLineQty(line.productId, e.target.value)}
+                                  required
+                                />
+                              </td>
+                              <td className="py-2 px-3 text-right">
+                                <TableIconAction
+                                  icon={Trash2}
+                                  label={t('common.delete')}
+                                  tone="danger"
+                                  onClick={() => toggleProduct(line.productId)}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
             </div>
             {previewAmount != null ? (
               <p className="text-sm font-bold text-primary">{t('expenses.consumptionPreview', { amount: previewAmount.toFixed(2) })}</p>
