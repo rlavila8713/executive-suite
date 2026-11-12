@@ -8,6 +8,8 @@ import { normalizeStoreLogo } from './storeLogo.js';
 import { ApiError } from './apiError.js';
 import { normalizeProductImageForStore } from './normalizeProductImage.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migratePurchasesSchema } from './purchaseMigrations.js';
+import { isSupportedBackupSchemaVersion } from './backupSchema.js';
 import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 import {
   applyAccessControlBackupSnapshot,
@@ -42,6 +44,10 @@ export type BackupImportBody = {
   expenseCategories?: BackupExtrasSnapshot['expenseCategories'];
   userAdminAudit?: BackupExtrasSnapshot['userAdminAudit'];
   license?: BackupExtrasSnapshot['license'];
+  /** Supplier directory (schema ≥ 9). */
+  suppliers?: unknown[];
+  /** Purchase orders with embedded lines (schema ≥ 9). */
+  purchaseOrders?: unknown[];
 };
 
 export type ImportBackupOptions = {
@@ -82,17 +88,7 @@ export function validateBackupImportPayload(data: unknown, options: ImportBackup
   if (!isRecord(body.appSettings)) throw new ApiError(400, 'Invalid appSettings');
 
   const sv = body.schemaVersion;
-  if (
-    sv !== undefined &&
-    sv !== 1 &&
-    sv !== 2 &&
-    sv !== 3 &&
-    sv !== 4 &&
-    sv !== 5 &&
-    sv !== 6 &&
-    sv !== 7 &&
-    sv !== 8
-  ) {
+  if (sv !== undefined && !isSupportedBackupSchemaVersion(sv)) {
     throw new ApiError(400, `Unsupported backup version: ${String(sv)}`);
   }
 
@@ -125,6 +121,15 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
     db.prepare('DELETE FROM products').run();
     db.prepare('DELETE FROM transactions').run();
     db.prepare('DELETE FROM customers').run();
+    migratePurchasesSchema(db);
+    try {
+      db.prepare('DELETE FROM purchase_invoice_images').run();
+      db.prepare('DELETE FROM purchase_lines').run();
+      db.prepare('DELETE FROM purchase_orders').run();
+      db.prepare('DELETE FROM suppliers').run();
+    } catch {
+      /* optional */
+    }
     db.prepare('DELETE FROM expenses').run();
     migrateExpenseCategoriesSchema(db);
     db.prepare('DELETE FROM expense_categories').run();
@@ -420,6 +425,89 @@ export function applyBackupImport(db: SqliteStore, data: BackupImportBody): void
     if (!data.warehouses?.length) {
       migrateWarehouseSchema(db);
       migrateExpenseCategoriesSchema(db);
+    }
+
+    const insertSupplier = db.prepare(
+      `INSERT INTO suppliers (id, name, address, phone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const s of data.suppliers ?? []) {
+      const row = s as {
+        id: string;
+        name: string;
+        address?: string;
+        phone?: string;
+        createdAt?: number;
+        updatedAt?: number;
+      };
+      const now = Date.now();
+      insertSupplier.run(
+        row.id,
+        row.name,
+        row.address ?? '',
+        row.phone ?? '',
+        row.createdAt ?? now,
+        row.updatedAt ?? now,
+      );
+    }
+
+    const insertPurchase = db.prepare(
+      `INSERT INTO purchase_orders (id, supplier_id, invoice_number, notes, purchased_at, status, warehouse_posted_at, submitted_for_review_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertPurchaseLine = db.prepare(
+      `INSERT INTO purchase_lines (id, purchase_id, product_id, name, barcode, unit_cost, quantity, unit_of_measure, warehouse_received_qty)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const o of data.purchaseOrders ?? []) {
+      const order = o as {
+        id: string;
+        supplierId?: string | null;
+        invoiceNumber?: string;
+        notes?: string;
+        purchasedAt: number;
+        status?: string;
+        warehousePostedAt?: number | null;
+        submittedForReviewAt?: number | null;
+        createdAt?: number;
+        updatedAt?: number;
+        lines?: {
+          id: string;
+          purchaseId?: string;
+          productId?: string | null;
+          name: string;
+          barcode?: string;
+          unitCost: number;
+          quantity: number;
+          unitOfMeasure?: string;
+          warehouseReceivedQty?: number;
+        }[];
+      };
+      const now = Date.now();
+      insertPurchase.run(
+        order.id,
+        order.supplierId ?? null,
+        order.invoiceNumber?.trim() ? order.invoiceNumber : null,
+        order.notes ?? '',
+        order.purchasedAt,
+        order.status ?? 'draft',
+        order.warehousePostedAt ?? null,
+        order.submittedForReviewAt ?? null,
+        order.createdAt ?? now,
+        order.updatedAt ?? now,
+      );
+      for (const line of order.lines ?? []) {
+        insertPurchaseLine.run(
+          line.id,
+          order.id,
+          line.productId ?? null,
+          line.name,
+          line.barcode?.trim() ? line.barcode : null,
+          line.unitCost,
+          line.quantity,
+          line.unitOfMeasure ?? 'unidad',
+          line.warehouseReceivedQty ?? 0,
+        );
+      }
     }
 
     applyAccessControlBackupSnapshot(db, data.accessControl);

@@ -21,6 +21,10 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_DUPLICATE_LOCATION') return t('errors.duplicateLocation');
   if (code.startsWith('ERR_CATEGORY_IN_USE')) return mapCategoryInUse(code, t);
   if (code.startsWith('ERR_PRODUCT_IN_USE')) return mapProductInUse(code, t);
+  if (code.startsWith('ERR_PRODUCT_WAREHOUSE_STOCK')) return mapProductWarehouseStock(code, t);
+  if (code.startsWith('ERR_PRODUCT_STORE_STOCK')) return mapProductStoreStock(code, t);
+  if (code.startsWith('ERR_LOCATION_IN_USE')) return mapLocationInUse(code, t);
+  if (code.startsWith('ERR_CUSTOMER_IN_USE')) return mapCustomerInUse(code, t);
   if (code === 'ERR_CASH_SESSION_OPEN') return t('reports.cashErrOpen');
   if (code === 'ERR_CASH_SESSION_REQUIRED') return t('errors.cashSessionRequired');
   if (code === 'ERR_CASH_SESSION_DAILY_CLOSE_REQUIRED') return t('errors.cashSessionDailyCloseRequired');
@@ -54,6 +58,12 @@ function mapMutationErrorCode(code: string, t: TranslateFn): string {
   if (code === 'ERR_SETTLED_TRANSACTION_IMMUTABLE') return t('errors.settledTransactionImmutable');
   if (code === 'ERR_INVALID_RECEIVE_QTY') return t('inventory.receiveInvalidQty');
   if (code === 'ERR_INVALID_RECEIVE_COST') return t('inventory.receiveInvalidCost');
+  if (code === 'ERR_PURCHASE_NOT_EDITABLE') return t('purchases.errors.notEditable');
+  if (code === 'ERR_PURCHASE_ALREADY_POSTED') return t('purchases.errors.alreadyPosted');
+  if (code === 'ERR_PURCHASE_REVIEW_REQUIRED') return t('purchases.errors.reviewRequired');
+  if (code === 'ERR_PURCHASE_LINE_NOT_CONFIRMED') return t('purchases.errors.lineNotConfirmed');
+  if (code === 'ERR_SUPPLIER_HAS_PURCHASES') return t('purchases.errors.supplierInUse');
+  if (code === 'ERR_PURCHASE_EMPTY') return t('purchases.errors.empty');
   if (code === 'ERR_INVALID_RECEIVE_PRICE') return t('inventory.receiveInvalidPrice');
   if (code === 'ERR_INVALID_TRANSFER_QTY') return t('inventory.transferInvalidQty');
   if (code === 'ERR_INVALID_TRANSFER_PRICE') return t('warehouse.transferInvalidPrice');
@@ -124,4 +134,32 @@ function mapSubcategoryInUse(code: string, t: TranslateFn): string {
   const count = parts[1] ?? '0';
   const name = parts[2] ? decodeURIComponent(parts[2]) : '';
   return t('errors.subcategoryInUse', { name, count });
+}
+
+function mapProductWarehouseStock(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const count = parts[1] ?? '0';
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return t('errors.productWarehouseStock', { name, count });
+}
+
+function mapProductStoreStock(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const count = parts[1] ?? '0';
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return t('errors.productStoreStock', { name, count });
+}
+
+function mapLocationInUse(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const count = parts[1] ?? '0';
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return t('errors.locationInUse', { name, count });
+}
+
+function mapCustomerInUse(code: string, t: TranslateFn): string {
+  const parts = code.split('|');
+  const count = parts[1] ?? '0';
+  const name = parts[2] ? decodeURIComponent(parts[2]) : '';
+  return t('errors.customerInUse', { name, count });
 }

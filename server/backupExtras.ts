@@ -1,5 +1,10 @@
 import type { SqliteStore } from './db.js';
-import { migrateExpenseCategoriesSchema, rowToExpenseCategory, type ExpenseCategoryRow } from './expenseCategories.js';
+import {
+  migrateExpenseCategoriesSchema,
+  rowToExpenseCategory,
+  syncExpenseCategoriesFromExpenses,
+  type ExpenseCategoryRow,
+} from './expenseCategories.js';
 import { ensureLicenseRow } from './license.js';
 import {
   migrateUserAuditSchema,
@@ -45,6 +50,7 @@ export type BackupExtrasSnapshot = {
 
 export function buildBackupExtrasSnapshot(db: SqliteStore): BackupExtrasSnapshot {
   migrateExpenseCategoriesSchema(db);
+  syncExpenseCategoriesFromExpenses(db);
   migrateUserAuditSchema(db);
   ensureLicenseRow(db);
 
@@ -134,6 +140,7 @@ export function applyBackupExtrasSnapshot(db: SqliteStore, extras: Partial<Backu
   } else {
     migrateExpenseCategoriesSchema(db);
   }
+  syncExpenseCategoriesFromExpenses(db);
 
   db.prepare('DELETE FROM user_admin_audit_log').run();
   if (extras?.userAdminAudit?.length) {

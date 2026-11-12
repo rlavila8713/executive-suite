@@ -2,7 +2,7 @@
 
 **Proyecto:** Executive Suite  
 **Descripción:** Punto de venta, inventario y finanzas para retail; API REST local en LAN.  
-**Fecha del documento:** 2 de noviembre de 2026
+**Fecha del documento:** 11 de noviembre de 2026
 
 ---
 
@@ -83,7 +83,14 @@ Sistema de **punto de venta (POS)**, **catálogo**, **almacén → tienda**, **c
 - **Enviar a tienda**: transfiere cantidad al stock de tienda, pondera **coste de tienda** y fija **precio de venta** (PVP).
 - Cambio de sección sin alterar cantidad total.
 - Resumen/reporte de almacén vía API.
-- Solo cliente **web** (`X-Client-Kind: web`) para movimientos de almacén.
+- Solo cliente **web** (`X-Client-Kind: web`) para la mayoría de movimientos; excepción: recepción vía compras en móvil (`docs/PURCHASES.md`).
+
+#### Compras a proveedores
+
+- **Móvil:** CRUD proveedores y órdenes de compra (`catalog.edit`), líneas con barcode, UOM, fotos de factura (local → API).
+- **Web:** cola `pending_review`, revisión asistida (coste ponderado, producto nuevo, enlace al catálogo) y autorización de entrada (`warehouse.receive`).
+- API: `/api/suppliers`, `/api/purchases`, `submit-for-review`, `warehouse-review`, `receive-to-warehouse`.
+- Entradas de almacén con `referenceType: purchase`.
 
 #### Inventario (tienda)
 
@@ -153,7 +160,7 @@ Sistema de **punto de venta (POS)**, **catálogo**, **almacén → tienda**, **c
 - Regional: moneda, idioma, formato de fechas.
 - **Incentivos de venta**: % y base (neto/bruto).
 - **Facturación / licencias**: trial 15 días, planes mensual/trimestral/anual, solicitar código, activar clave firmada (Ed25519).
-- **Datos**: export/import backup JSON (v8 = estado completo del servidor), reset de fábrica (preserva licencia/trial del dispositivo).
+- **Datos**: export/import backup JSON (**v9** = estado completo incl. compras; ver `docs/BACKUP_SCHEMA.md`), reset de fábrica (preserva licencia/trial del dispositivo).
 - **Servidor local**: URL del API; diagnóstico y QR para conectar móvil.
 
 #### Ayuda
@@ -165,7 +172,8 @@ Sistema de **punto de venta (POS)**, **catálogo**, **almacén → tienda**, **c
 | Área | Capacidad |
 |------|-----------|
 | Health | Estado, versión, URLs LAN |
-| Backup | Export/import JSON v8 (estado completo) + imágenes |
+| Backup | Export/import JSON v9 (`suppliers`, `purchaseOrders`; ver `BACKUP_SCHEMA.md`) |
+| Compras | Proveedores y recepción asistida (`PURCHASES.md`, OpenAPI tag `purchases`) |
 | Licencia | Consulta, solicitud, activación; bloqueo de escritura si trial vencido |
 | Ventas móvil | `POST /api/sales` con `clientSaleId` idempotente |
 | Sync offline | `GET /api/sync/offline-pack`, `POST /api/sync/sales` (solo móvil) |
@@ -237,7 +245,11 @@ Sistema de **punto de venta (POS)**, **catálogo**, **almacén → tienda**, **c
 | **warehouses** | Depósitos | `is_default` |
 | **warehouse_sections** | Secciones del almacén | único por `(warehouse_id, name)` |
 | **warehouse_stock** | Stock en depósito | único `(warehouse_id, product_id)`, `quantity`, `unit_cost` |
-| **warehouse_movements** | Auditoría de movimientos | tipos ENTRY, TRANSFER_TO_STORE, etc.; reversión |
+| **warehouse_movements** | Auditoría de movimientos | tipos ENTRY, TRANSFER_TO_STORE, etc.; `reference_type` p. ej. `purchase`; reversión |
+| **suppliers** | Proveedores de compras | `name`, contacto, timestamps |
+| **purchase_orders** | Compras registradas | `status`, `purchased_at`, `supplier_id`, posteo almacén |
+| **purchase_lines** | Líneas de compra | `product_id` opcional, UOM, costes, `warehouse_received_qty` |
+| **purchase_invoice_images** | Fotos de factura (disco) | `storage_path` bajo `DATA_DIR/purchase-images/` |
 | **license_state** | Trial y suscripción | `trial_started_at`, `paid_until`, `plan_id`, dispositivo |
 | **license_redemptions** | Claves ya canjeadas | `nonce` PK |
 | **connected_devices** | Dispositivos LAN | `client_kind`, revocación, `operator_id` |

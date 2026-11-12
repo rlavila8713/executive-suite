@@ -7,7 +7,7 @@ info:
 
     **Examples:** `components/examples/*` mirror payloads from `tests/integration/api.test.ts`
     (offline pack + sync idempotency, device access, minimal checkout receipt lines).
-  version: 0.1.1-draft
+  version: 0.2.0-draft
 servers:
   - url: http://{host}:4000
     variables:
@@ -20,6 +20,8 @@ tags:
     description: Mobile offline pack and sale replay
   - name: sales
     description: Live checkout (shared with web; mobile idempotency via clientSaleId)
+  - name: purchases
+    description: Supplier purchases, warehouse review and receive (mobile sync + web assisted flow)
 
 paths:
   /api/sync/offline-pack:
@@ -180,6 +182,202 @@ paths:
               examples:
                 integrationDuplicate:
                   $ref: '#/components/examples/IntegrationTransactionAfterSync'
+        '4XX':
+          $ref: '#/components/responses/ApiError'
+
+  /api/suppliers:
+    get:
+      tags: [purchases]
+      summary: List suppliers
+      operationId: listSuppliers
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Supplier array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Supplier'
+    post:
+      tags: [purchases]
+      summary: Create supplier
+      operationId: createSupplier
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupplierInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supplier'
+
+  /api/purchases:
+    get:
+      tags: [purchases]
+      summary: List purchase orders
+      operationId: listPurchases
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, pending_review, posted, cancelled]
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Purchase orders with embedded lines
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PurchaseOrder'
+    post:
+      tags: [purchases]
+      summary: Create purchase order (draft)
+      operationId: createPurchase
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseOrderInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrder'
+
+  /api/purchases/{purchaseId}/submit-for-review:
+    post:
+      tags: [purchases]
+      summary: Move draft → pending_review (web queue)
+      operationId: submitPurchaseForReview
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseOrder'
+
+  /api/purchases/{purchaseId}/warehouse-review:
+    get:
+      tags: [purchases]
+      summary: Assisted review payload (cost projection, flags)
+      operationId: getPurchaseWarehouseReview
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Line-level review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseWarehouseReview'
+
+  /api/purchases/{purchaseId}/receive-to-warehouse:
+    post:
+      tags: [purchases]
+      summary: Post purchase lines to warehouse (referenceType purchase)
+      description: |
+        Web-only warehouse posting: purchase must be in `pending_review` (`ERR_PURCHASE_REVIEW_REQUIRED` if still `draft`).
+        Mobile clients register purchases and call `submit-for-review`; they do not use this route.
+        Lines with needsReview require `confirmed: true`.
+      operationId: receivePurchaseToWarehouse
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+        - $ref: '#/components/parameters/XClientKindMobile'
+        - name: purchaseId
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceivePurchaseToWarehouseRequest'
+      responses:
+        '200':
+          description: Posted purchase and per-line receipts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceivePurchaseToWarehouseResponse'
+
+  /api/backup:
+    get:
+      tags: [purchases]
+      summary: Full JSON backup (schemaVersion 9 includes suppliers and purchaseOrders)
+      description: See docs/BACKUP_SCHEMA.md
+      operationId: exportBackup
+      parameters:
+        - $ref: '#/components/parameters/XDeviceId'
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Backup snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutiveSuiteBackup'
         '4XX':
           $ref: '#/components/responses/ApiError'
 
@@ -1015,3 +1213,162 @@ components:
         transaction:
           $ref: '#/components/schemas/Transaction'
       required: [status, transaction]
+
+    Supplier:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        address: { type: string }
+        phone: { type: string }
+        createdAt: { type: integer, format: int64 }
+        updatedAt: { type: integer, format: int64 }
+      required: [id, name]
+
+    SupplierInput:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        address: { type: string }
+        phone: { type: string }
+      required: [name]
+
+    PurchaseLine:
+      type: object
+      properties:
+        id: { type: string }
+        purchaseId: { type: string }
+        productId: { type: string, nullable: true }
+        name: { type: string }
+        barcode: { type: string }
+        unitCost: { type: number }
+        quantity: { type: number }
+        unitOfMeasure:
+          type: string
+          enum: [unidad, par, caja, paquete, metro, kg, litro]
+        warehouseReceivedQty: { type: number }
+      required: [id, name, unitCost, quantity]
+
+    PurchaseOrder:
+      type: object
+      properties:
+        id: { type: string }
+        purchasedAt: { type: integer, format: int64 }
+        supplierId: { type: string, nullable: true }
+        supplierName: { type: string }
+        invoiceNumber: { type: string }
+        notes: { type: string }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseLine'
+        status:
+          type: string
+          enum: [draft, pending_review, posted, cancelled]
+        totalCost: { type: number }
+        warehousePostedAt: { type: integer, format: int64, nullable: true }
+        submittedForReviewAt: { type: integer, format: int64, nullable: true }
+        createdAt: { type: integer, format: int64 }
+        updatedAt: { type: integer, format: int64 }
+      required: [id, purchasedAt, lines, status]
+
+    PurchaseOrderInput:
+      type: object
+      properties:
+        id: { type: string }
+        purchasedAt: { type: integer, format: int64 }
+        supplierId: { type: string, nullable: true }
+        invoiceNumber: { type: string }
+        notes: { type: string }
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              productId: { type: string, nullable: true }
+              name: { type: string }
+              barcode: { type: string }
+              unitCost: { type: number }
+              quantity: { type: number }
+              unitOfMeasure: { type: string }
+            required: [name, unitCost, quantity]
+      required: [purchasedAt, lines]
+
+    PurchaseLineReview:
+      type: object
+      properties:
+        lineId: { type: string }
+        needsReview: { type: boolean }
+        reviewReason:
+          type: string
+          enum: [cost_ponderation, new_product, unlinked, none]
+        projectedWarehouseUnitCost: { type: number }
+        currentWarehouseQty: { type: number }
+        receiveQuantity: { type: number }
+
+    PurchaseWarehouseReview:
+      type: object
+      properties:
+        purchaseId: { type: string }
+        status: { type: string }
+        needsReviewCount: { type: integer }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseLineReview'
+      required: [purchaseId, lines]
+
+    ReceivePurchaseLineDecision:
+      type: object
+      properties:
+        lineId: { type: string }
+        action: { type: string, enum: [receive, skip] }
+        productId: { type: string, nullable: true }
+        createProduct: { type: boolean }
+        unitCost: { type: number }
+        confirmed: { type: boolean }
+      required: [lineId, action]
+
+    ReceivePurchaseToWarehouseRequest:
+      type: object
+      properties:
+        sectionId: { type: string, nullable: true }
+        defaultSalePrice: { type: number }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReceivePurchaseLineDecision'
+      required: [lines]
+
+    ReceivePurchaseToWarehouseResponse:
+      type: object
+      properties:
+        purchase:
+          $ref: '#/components/schemas/PurchaseOrder'
+        warnings:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              lineId: { type: string }
+              message: { type: string }
+
+    ExecutiveSuiteBackup:
+      type: object
+      description: GET /api/backup response (schemaVersion 9)
+      properties:
+        schemaVersion:
+          type: integer
+          example: 9
+        suppliers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Supplier'
+        purchaseOrders:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseOrder'

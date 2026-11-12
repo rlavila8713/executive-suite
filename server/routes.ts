@@ -17,6 +17,9 @@ import { computeWeightedAverageCost } from './inventoryCost.js';
 import { DEFAULT_APP_SETTINGS, normalizeTransferPhone } from './constants.js';
 import { registerCatalogRoutes } from './catalogRoutes.js';
 import { registerWarehouseRoutes } from './warehouseRoutes.js';
+import { registerPurchaseRoutes } from './purchaseRoutes.js';
+import { rowToPurchaseOrder, rowToSupplier, type PurchaseOrderRow } from './purchases.js';
+import { BACKUP_SCHEMA_VERSION } from './backupSchema.js';
 import {
   ensureWarehouseStockRow,
   getDefaultWarehouse,
@@ -34,8 +37,14 @@ import {
   deleteExpenseCategory,
   listExpenseCategories,
   renameExpenseCategory,
+  syncExpenseCategoriesFromExpenses,
 } from './expenseCategories.js';
-import { createInventoryConsumptionExpense } from './inventoryConsumption.js';
+import { createInventoryConsumptionExpense, createInventoryConsumptionExpenseBatch } from './inventoryConsumption.js';
+import {
+  countProductsUsingCategory,
+  countTransactionsUsingCustomer,
+  countWarehouseStockUnitsForProduct,
+} from './nomenclatorGuards.js';
 import { normalizeInitialStoreStock, rejectDirectStoreStockMutation } from './storeStockPolicy.js';
 import { importProductsFromRows, validateProductImportRows, type ProductImportInput } from './importCatalog.js';
 import { codeFromCategoryName } from './migrations.js';
@@ -358,16 +367,31 @@ export function registerRoutes(router: import('express').Router): void {
     '/products/:id',
     asyncHandler(async (req, res) => {
       const db = getDb();
-      const product = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(req.params.id) as
-        | { id: string; name: string; sku: string }
+      const product = db.prepare('SELECT id, name, sku, stock FROM products WHERE id = ?').get(req.params.id) as
+        | { id: string; name: string; sku: string; stock: number }
         | undefined;
       if (!product) throw new ApiError(404, 'Product not found');
+      if (product.stock > 0) {
+        throw new ApiError(
+          409,
+          `Product has store stock`,
+          `ERR_PRODUCT_STORE_STOCK|${product.stock}|${encodeURIComponent(product.name)}`,
+        );
+      }
       const usage = countSalesUsingProduct(db, product.id, product.sku);
       if (usage.count > 0) {
         throw new ApiError(
           409,
           `Product in use by ${usage.count} sale(s)`,
           `ERR_PRODUCT_IN_USE|${usage.count}|${encodeURIComponent(product.name)}`,
+        );
+      }
+      const whUnits = countWarehouseStockUnitsForProduct(db, product.id);
+      if (whUnits > 0) {
+        throw new ApiError(
+          409,
+          `Product has warehouse stock`,
+          `ERR_PRODUCT_WAREHOUSE_STOCK|${whUnits}|${encodeURIComponent(product.name)}`,
         );
       }
       db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
@@ -474,12 +498,12 @@ export function registerRoutes(router: import('express').Router): void {
         | { id: string; name: string }
         | undefined;
       if (!row) throw new ApiError(404, 'Category not found');
-      const count = db.prepare('SELECT COUNT(*) AS c FROM products WHERE category = ?').get(row.name) as { c: number };
-      if (count.c > 0) {
+      const productCount = countProductsUsingCategory(db, row.id, row.name);
+      if (productCount > 0) {
         throw new ApiError(
           409,
-          `Category in use by ${count.c} product(s)`,
-          `ERR_CATEGORY_IN_USE|${count.c}|${encodeURIComponent(row.name)}`,
+          `Category in use by ${productCount} product(s)`,
+          `ERR_CATEGORY_IN_USE|${productCount}|${encodeURIComponent(row.name)}`,
         );
       }
       db.prepare('DELETE FROM subcategories WHERE category_id = ?').run(req.params.id);
@@ -978,8 +1002,20 @@ export function registerRoutes(router: import('express').Router): void {
     '/customers/:id',
     asyncHandler(async (req, res) => {
       const db = getDb();
-      const r = db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
-      if (r.changes === 0) throw new ApiError(404, 'Customer not found');
+      const row = db.prepare('SELECT id, first_name, last_name FROM customers WHERE id = ?').get(req.params.id) as
+        | { id: string; first_name: string; last_name: string }
+        | undefined;
+      if (!row) throw new ApiError(404, 'Customer not found');
+      const txCount = countTransactionsUsingCustomer(db, row.id);
+      if (txCount > 0) {
+        const label = `${row.first_name} ${row.last_name}`.trim();
+        throw new ApiError(
+          409,
+          `Customer in use by ${txCount} transaction(s)`,
+          `ERR_CUSTOMER_IN_USE|${txCount}|${encodeURIComponent(label)}`,
+        );
+      }
+      db.prepare('DELETE FROM customers WHERE id = ?').run(req.params.id);
       res.status(204).send();
     }),
   );
@@ -1023,24 +1059,44 @@ export function registerRoutes(router: import('express').Router): void {
       const body = req.body as {
         productId?: string;
         quantity?: number;
+        items?: { productId?: string; quantity?: number }[];
         source?: 'store' | 'warehouse';
         title?: string;
         date?: string;
       };
-      if (!body.productId || !body.source) {
-        throw new ApiError(400, 'productId and source required');
+      if (!body.source) {
+        throw new ApiError(400, 'source required');
       }
       const db = getDb();
       const deviceId = req.header('X-Device-Id')?.trim() ?? '';
       const operator = deviceOperatorDisplayName(db, deviceId);
-      const result = createInventoryConsumptionExpense(db, {
-        productId: body.productId,
-        quantity: Math.floor(Number(body.quantity)),
-        source: body.source,
-        title: body.title,
-        date: body.date,
-        createdBy: operator || null,
-      });
+      const batchItems =
+        body.items?.map((row) => ({
+          productId: String(row.productId ?? ''),
+          quantity: Math.floor(Number(row.quantity)),
+        })) ?? [];
+      const result =
+        batchItems.length > 0
+          ? createInventoryConsumptionExpenseBatch(db, {
+              items: batchItems,
+              source: body.source,
+              title: body.title,
+              date: body.date,
+              createdBy: operator || null,
+            })
+          : (() => {
+              if (!body.productId) {
+                throw new ApiError(400, 'productId or items required');
+              }
+              return createInventoryConsumptionExpense(db, {
+                productId: body.productId,
+                quantity: Math.floor(Number(body.quantity)),
+                source: body.source,
+                title: body.title,
+                date: body.date,
+                createdBy: operator || null,
+              });
+            })();
       const expense = db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.expenseId);
       res.status(201).json({
         expense: rowToExpense(expense as Parameters<typeof rowToExpense>[0]),
@@ -1076,6 +1132,7 @@ export function registerRoutes(router: import('express').Router): void {
         body.category,
         body.date,
       );
+      syncExpenseCategoriesFromExpenses(db);
       const row = db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
       res.status(201).json(rowToExpense(row as Parameters<typeof rowToExpense>[0]));
     }),
@@ -1600,17 +1657,28 @@ export function registerRoutes(router: import('express').Router): void {
         .all()
         .map((r) => rowToCustomer(r as Parameters<typeof rowToCustomer>[0]));
 
+      const suppliers = db
+        .prepare('SELECT * FROM suppliers ORDER BY name')
+        .all()
+        .map((r) => rowToSupplier(r as Parameters<typeof rowToSupplier>[0]));
+      const purchaseOrders = db
+        .prepare('SELECT * FROM purchase_orders ORDER BY purchased_at DESC')
+        .all()
+        .map((r) => rowToPurchaseOrder(db, r as PurchaseOrderRow));
+
       const accessControl = buildAccessControlBackupSnapshot(db);
       const { expenseCategories, userAdminAudit, license } = buildBackupExtrasSnapshot(db);
 
       res.json({
-        schemaVersion: 8,
+        schemaVersion: BACKUP_SCHEMA_VERSION,
         exportedAt: new Date().toISOString(),
         app: 'executive-suite',
         products,
         transactions,
         expenses,
         customers,
+        suppliers,
+        purchaseOrders,
         appSettings,
         expenseCategories,
         userAdminAudit,
@@ -1660,4 +1728,5 @@ export function registerRoutes(router: import('express').Router): void {
   registerSyncRoutes(router);
   registerCatalogRoutes(router);
   registerWarehouseRoutes(router);
+  registerPurchaseRoutes(router);
 }

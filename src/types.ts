@@ -15,6 +15,7 @@ export type Screen =
   | 'inventory'
   | 'stockMovements'
   | 'expenses'
+  | 'purchases'
   | 'receivables'
   | 'payables'
   | 'reports'
@@ -126,6 +127,69 @@ export interface Customer {
   phone: string;
   notes: string;
   createdAt: number;
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  address: string;
+  phone: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PurchaseStatus = 'draft' | 'pending_review' | 'posted' | 'cancelled';
+
+export interface PurchaseLine {
+  id: string;
+  purchaseId: string;
+  productId: string | null;
+  name: string;
+  barcode: string;
+  unitCost: number;
+  quantity: number;
+  unitOfMeasure: UnitOfMeasure;
+  warehouseReceivedQty: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  purchasedAt: number;
+  supplierId: string | null;
+  supplierName: string;
+  invoiceNumber: string;
+  notes: string;
+  lines: PurchaseLine[];
+  status: PurchaseStatus;
+  totalCost: number;
+  warehousePostedAt: number | null;
+  submittedForReviewAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PurchaseLineReviewKind = 'linked_product' | 'barcode_match' | 'new_product' | 'missing_product';
+
+export type PurchaseLineReviewReason = 'cost_ponderation' | 'new_product' | 'unlinked' | 'none';
+
+export interface PurchaseLineReview {
+  lineId: string;
+  lineName: string;
+  barcode: string;
+  quantity: number;
+  unitOfMeasure: UnitOfMeasure;
+  unitCost: number;
+  resolvedProductId: string | null;
+  kind: PurchaseLineReviewKind;
+  needsReview: boolean;
+  reviewReason: PurchaseLineReviewReason;
+  productName: string | null;
+  productSku: string | null;
+  currentWarehouseQty: number;
+  currentWarehouseUnitCost: number;
+  projectedWarehouseUnitCost: number;
+  receiveQuantity: number;
+  quantityTruncated: boolean;
 }
 
 export interface Product {

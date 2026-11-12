@@ -44,6 +44,9 @@ import {
   isReturnRow,
   operatorCompletedSalesTotals,
   operatorReversalTotals,
+  debtCollectedInRange,
+  debtPendingSoldInRange,
+  resolveSalesLogStatsRange,
 } from '../lib/reporting';
 import {
   dateRangeForPreset,
@@ -154,9 +157,15 @@ export function Dashboard({
   const [logCustomStart, setLogCustomStart] = useState(() => toInputDate(new Date()));
   const [logCustomEnd, setLogCustomEnd] = useState(() => toInputDate(new Date()));
   const [logCashSessionId, setLogCashSessionId] = useState('');
+  const [logOrderSearch, setLogOrderSearch] = useState('');
+  const [logShowDebtPending, setLogShowDebtPending] = useState(false);
+  const [logShowDebtCollected, setLogShowDebtCollected] = useState(true);
 
   const openFullLog = () => {
     const open = cashSessions.find((s) => s.closedAt == null);
+    setLogOrderSearch('');
+    setLogShowDebtPending(false);
+    setLogShowDebtCollected(true);
     setLogCashSessionId(open?.id ?? '');
     if (open) {
       setLogDatePreset('custom');
@@ -255,8 +264,11 @@ export function Dashboard({
         ]),
       );
     }
+    if (logOrderSearch.trim()) {
+      list = list.filter((tx) => rowMatchesSearch(logOrderSearch, [tx.orderNumber, tx.id]));
+    }
     return list;
-  }, [transactions, logCashSessionId, cashSessions, logRange, operatorFilter, headerSearch]);
+  }, [transactions, logCashSessionId, cashSessions, logRange, operatorFilter, headerSearch, logOrderSearch]);
 
   const logListForTab = useMemo(() => {
     return logBaseTransactions.filter(logTab === 'completed' ? isSaleCompletedRow : isSaleReversalRow);
@@ -267,10 +279,51 @@ export function Dashboard({
     return operatorReversalTotals(logBaseTransactions);
   }, [logBaseTransactions, logTab]);
 
-  const logGrandTotal = useMemo(
-    () => Math.round(logListForTab.reduce((s, tx) => s + Math.abs(tx.amount), 0) * 100) / 100,
-    [logListForTab],
+  const logStatsRange = useMemo(
+    () => resolveSalesLogStatsRange(logCashSessionId, cashSessions, logRange),
+    [logCashSessionId, cashSessions, logRange],
   );
+
+  const logDebtPendingSummary = useMemo(() => {
+    if (!logStatsRange || logTab !== 'completed') return null;
+    return debtPendingSoldInRange(transactions, logStatsRange, operatorFilter || undefined);
+  }, [transactions, logStatsRange, operatorFilter, logTab]);
+
+  const logDebtCollectedSummary = useMemo(() => {
+    if (!logStatsRange || logTab !== 'completed') return null;
+    return debtCollectedInRange(transactions, logStatsRange, operatorFilter || undefined);
+  }, [transactions, logStatsRange, operatorFilter, logTab]);
+
+  const logOperatorTotalsFooter = useMemo(() => {
+    const base = logOperatorTotals.reduce(
+      (acc, row) => ({
+        count: acc.count + row.count,
+        cash: acc.cash + row.cash,
+        transfer: acc.transfer + row.transfer,
+        card: acc.card + row.card,
+        total: acc.total + row.total,
+      }),
+      { count: 0, cash: 0, transfer: 0, card: 0, total: 0 },
+    );
+    const pending = logShowDebtPending ? logDebtPendingSummary : null;
+    const collected = logShowDebtCollected ? logDebtCollectedSummary : null;
+    return {
+      count: base.count + (pending?.count ?? 0) + (collected?.count ?? 0),
+      cash: Math.round((base.cash + (collected?.cash ?? 0)) * 100) / 100,
+      transfer: Math.round((base.transfer + (collected?.transfer ?? 0)) * 100) / 100,
+      card: Math.round((base.card + (collected?.card ?? 0)) * 100) / 100,
+      total: Math.round((base.total + (pending?.total ?? 0) + (collected?.total ?? 0)) * 100) / 100,
+    };
+  }, [
+    logOperatorTotals,
+    logDebtPendingSummary,
+    logDebtCollectedSummary,
+    logShowDebtPending,
+    logShowDebtCollected,
+  ]);
+
+  const showLogDebtPendingRow = logShowDebtPending && !!logDebtPendingSummary;
+  const showLogDebtCollectedRow = logShowDebtCollected && !!logDebtCollectedSummary;
 
   const sortedCashSessions = useMemo(
     () => [...cashSessions].sort((a, b) => b.openedAt - a.openedAt),
@@ -669,6 +722,18 @@ export function Dashboard({
           ))}
         </div>
 
+        <div className="mb-4">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+            {t('dashboard.logSearchOrder')}
+          </label>
+          <Input
+            className="mt-1 max-w-md"
+            value={logOrderSearch}
+            onChange={(e) => setLogOrderSearch(e.target.value)}
+            placeholder={t('dashboard.logSearchOrderPlaceholder')}
+          />
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
           <div>
             <label className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
@@ -752,39 +817,104 @@ export function Dashboard({
         </div>
 
         <div className="mb-5 rounded-xl border border-primary/15 bg-primary/5 p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
             <p className="text-xs font-bold uppercase tracking-widest text-primary">
               {t('dashboard.logOperatorTotalsTitle')}
             </p>
-            <p className="text-sm font-black text-primary">
-              {t('dashboard.logGrandTotal')}: ${logGrandTotal.toFixed(2)}
-            </p>
+            {logTab === 'completed' && logStatsRange ? (
+              <div className="flex flex-wrap gap-4">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-on-surface-variant cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-black/20 text-primary focus:ring-primary/30"
+                    checked={logShowDebtPending}
+                    onChange={(e) => setLogShowDebtPending(e.target.checked)}
+                  />
+                  {t('receivables.statusFilter.pending')}
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-on-surface-variant cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-black/20 text-primary focus:ring-primary/30"
+                    checked={logShowDebtCollected}
+                    onChange={(e) => setLogShowDebtCollected(e.target.checked)}
+                  />
+                  {t('receivables.statusFilter.collected')}
+                </label>
+              </div>
+            ) : null}
           </div>
-          {logOperatorTotals.length === 0 ? (
+          {logOperatorTotals.length === 0 && !showLogDebtPendingRow && !showLogDebtCollectedRow ? (
             <p className="text-xs text-on-surface-variant">{t('dashboard.logOperatorTotalsEmpty')}</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs table-fixed min-w-[36rem]">
+                <colgroup>
+                  <col className="w-[24%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                </colgroup>
                 <thead>
                   <tr className="text-left text-on-surface-variant border-b border-black/5">
                     <th className="py-1.5 pr-2">{t('dashboard.logColOperator')}</th>
                     <th className="py-1.5 pr-2 text-right">{t('dashboard.logColSalesCount')}</th>
                     <th className="py-1.5 pr-2 text-right">{t('dashboard.logColCash')}</th>
                     <th className="py-1.5 pr-2 text-right">{t('dashboard.logColTransfer')}</th>
+                    <th className="py-1.5 pr-2 text-right">{t('dashboard.logColOnline')}</th>
                     <th className="py-1.5 text-right">{t('dashboard.logColTotal')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {logOperatorTotals.map((row) => (
-                    <tr key={row.operator} className="border-b border-black/5 last:border-0">
+                    <tr key={row.operator} className="border-b border-black/5">
                       <td className="py-1.5 pr-2 font-bold text-primary">{row.operator}</td>
                       <td className="py-1.5 pr-2 text-right">{row.count}</td>
                       <td className="py-1.5 pr-2 text-right font-mono">${row.cash.toFixed(2)}</td>
                       <td className="py-1.5 pr-2 text-right font-mono">${row.transfer.toFixed(2)}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${row.card.toFixed(2)}</td>
                       <td className="py-1.5 text-right font-mono font-bold">${row.total.toFixed(2)}</td>
                     </tr>
                   ))}
+                  {showLogDebtPendingRow && logDebtPendingSummary ? (
+                    <tr className="border-b border-black/5 bg-surface-container-low/80">
+                      <td className="py-1.5 pr-2 font-bold text-on-surface-variant">
+                        {t('receivables.statusFilter.pending')}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right">{logDebtPendingSummary.count}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">—</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">—</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">—</td>
+                      <td className="py-1.5 text-right font-mono font-bold">${logDebtPendingSummary.total.toFixed(2)}</td>
+                    </tr>
+                  ) : null}
+                  {showLogDebtCollectedRow && logDebtCollectedSummary ? (
+                    <tr className="border-b border-black/5 bg-surface-container-low/80">
+                      <td className="py-1.5 pr-2 font-bold text-on-surface-variant">
+                        {t('receivables.statusFilter.collected')}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right">{logDebtCollectedSummary.count}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${logDebtCollectedSummary.cash.toFixed(2)}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${logDebtCollectedSummary.transfer.toFixed(2)}</td>
+                      <td className="py-1.5 pr-2 text-right font-mono">${logDebtCollectedSummary.card.toFixed(2)}</td>
+                      <td className="py-1.5 text-right font-mono font-bold">${logDebtCollectedSummary.total.toFixed(2)}</td>
+                    </tr>
+                  ) : null}
                 </tbody>
+                {logOperatorTotals.length > 0 || showLogDebtPendingRow || showLogDebtCollectedRow ? (
+                  <tfoot>
+                    <tr className="border-t border-primary/20 font-black text-primary">
+                      <td className="py-2 pr-2">{t('dashboard.logTotalsFooter')}</td>
+                      <td className="py-2 pr-2 text-right">{logOperatorTotalsFooter.count}</td>
+                      <td className="py-2 pr-2 text-right font-mono">${logOperatorTotalsFooter.cash.toFixed(2)}</td>
+                      <td className="py-2 pr-2 text-right font-mono">${logOperatorTotalsFooter.transfer.toFixed(2)}</td>
+                      <td className="py-2 pr-2 text-right font-mono">${logOperatorTotalsFooter.card.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono">${logOperatorTotalsFooter.total.toFixed(2)}</td>
+                    </tr>
+                  </tfoot>
+                ) : null}
               </table>
             </div>
           )}

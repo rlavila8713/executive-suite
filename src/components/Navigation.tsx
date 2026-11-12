@@ -24,6 +24,7 @@ import {
   CircleHelp,
   HandCoins,
   CircleDollarSign,
+  Truck,
   UserCog,
   ChevronLeft,
   ChevronRight,
@@ -104,6 +105,7 @@ function useMenuGroups(): MenuGroup[] {
       label: t('nav.groupStock'),
       items: [
         { id: 'warehouse', label: t('nav.warehouse'), icon: Warehouse },
+        { id: 'purchases', label: t('nav.purchases'), icon: Truck },
         { id: 'inventory', label: t('nav.inventory'), icon: Boxes },
         { id: 'stockMovements', label: t('nav.stockMovements'), icon: History },
       ],

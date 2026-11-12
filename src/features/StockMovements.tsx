@@ -238,19 +238,27 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
+                <colgroup>
+                  <col className="w-[9rem]" />
+                  <col className="w-[11rem]" />
+                  <col className="w-[14rem]" />
+                  <col className="w-[5rem]" />
+                  <col className="w-[5.5rem]" />
+                  <col className="min-w-[8rem]" />
+                  <col className="w-[6rem]" />
+                  <col className="w-[5.5rem]" />
+                </colgroup>
                 <thead>
                   <tr className="text-left text-on-surface-variant border-b border-black/5">
-                    <th className="py-3 px-4">{t('warehouse.colMovementDate')}</th>
-                    <th className="py-3 px-4">{t('warehouse.colMovementType')}</th>
-                    <th className="py-3 px-4">{t('warehouse.colMovementProduct')}</th>
-                    <th className="py-3 px-4 text-right">{t('warehouse.colMovementDelta')}</th>
-                    <th className="py-3 px-4 text-right">{t('stockMovements.colCost')}</th>
-                    {/* {tab === 'warehouse' ? (
-                      <th className="py-3 px-4 text-right">{t('warehouse.colMovementBalance')}</th>
-                    ) : null} */}
-                    <th className="py-3 px-4">{t('warehouse.colMovementOperator')}</th>
-                    <th className="py-3 px-4 text-right">{t('common.actions')}</th>
+                    <th className="py-3 px-4 align-top">{t('warehouse.colMovementDate')}</th>
+                    <th className="py-3 px-4 align-top">{t('warehouse.colMovementType')}</th>
+                    <th className="py-3 px-4 align-top">{t('warehouse.colMovementProduct')}</th>
+                    <th className="py-3 px-4 text-right align-top">{t('warehouse.colMovementDelta')}</th>
+                    <th className="py-3 px-4 text-right align-top">{t('stockMovements.colCost')}</th>
+                    <th className="py-3 px-4 align-top">{t('stockMovements.colMovementReason')}</th>
+                    <th className="py-3 px-4 align-top">{t('warehouse.colMovementOperator')}</th>
+                    <th className="py-3 px-4 text-right align-top">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -258,18 +266,19 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
                     const p = productById.get(m.productId);
                     const reversible = movementReversibleQuantity(m);
                     const canReverse = movementCanBeReversed(m) && !m.reversedAt && reversible > 0;
+                    const reasonText =
+                      m.type === 'REVERSAL' && m.notes?.trim()
+                        ? m.notes.trim()
+                        : m.notes?.trim() && !m.notes.startsWith('store:') && !m.notes.startsWith('warehouse:') && !m.notes.startsWith('from:')
+                          ? m.notes.trim()
+                          : '';
                     return (
-                      <tr key={m.id} className="border-b border-black/5">
+                      <tr key={m.id} className="border-b border-black/5 align-top">
                         <td className="py-3 px-4 text-xs whitespace-nowrap">
                           {formatAppDateTime(m.createdAt, locale, 'short')}
                         </td>
                         <td className="py-3 px-4">
-                          <div>{t(movementListTypeLabelKey(m))}</div>
-                          {m.type === 'REVERSAL' && m.notes?.trim() ? (
-                            <div className="text-xs text-on-surface-variant mt-0.5 max-w-[14rem]">
-                              {m.notes.trim()}
-                            </div>
-                          ) : null}
+                          <div className="break-words">{t(movementListTypeLabelKey(m))}</div>
                         </td>
                         <td className="py-3 px-4">
                           <div className="font-medium">{m.productName ?? p?.name ?? m.productId}</div>
@@ -279,10 +288,10 @@ export function StockMovements({ products, globalSearch = '', onAfterMutation }:
                           <MovementQuantityCell movement={m} perspective={perspective} />
                         </td>
                         <td className="py-3 px-4 text-right">{formatMoney(m.unitCost)}</td>
-                        {/* {tab === 'warehouse' ? (
-                          <td className="py-3 px-4 text-right">{m.balanceAfter ?? '—'}</td>
-                        ) : null} */}
-                        <td className="py-3 px-4 text-xs text-on-surface-variant">{m.createdBy ?? '—'}</td>
+                        <td className="py-3 px-4 text-xs text-on-surface-variant break-words whitespace-normal leading-snug">
+                          {reasonText || '—'}
+                        </td>
+                        <td className="py-3 px-4 text-xs text-on-surface-variant break-words">{m.createdBy ?? '—'}</td>
                         <td className="py-3 px-4 text-right">
                           <MovementReversalActions
                             movement={m}
