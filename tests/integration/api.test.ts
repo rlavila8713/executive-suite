@@ -14,6 +14,7 @@ import {
   TEST_DEVICE_ID,
   fillStoreStockFromWarehouse,
 } from './helpers.js';
+import { BACKUP_SCHEMA_VERSION } from '../../server/backupSchema.js';
 
 function readPrivateKey(): string | null {
   const keyPath = path.join(process.cwd(), 'license-private.pem');
@@ -1279,6 +1280,22 @@ describe('Executive Suite API integration', () => {
       });
       assert.equal(customer.status, 201);
 
+      const supplier = await api<{ id: string; name: string }>('/api/suppliers', {
+        method: 'POST',
+        body: { name: 'Backup Supplier' },
+      });
+      assert.equal(supplier.status, 201);
+
+      const purchase = await api<{ id: string }>('/api/purchases', {
+        method: 'POST',
+        body: {
+          purchasedAt: Date.now(),
+          supplierId: supplier.body.id,
+          lines: [{ name: 'Línea backup', unitCost: 1, quantity: 2, unitOfMeasure: 'unidad' }],
+        },
+      });
+      assert.equal(purchase.status, 201);
+
       const backup = await api<{
         schemaVersion: number;
         accessControl?: { users: { id: string }[] };
@@ -1289,9 +1306,11 @@ describe('Executive Suite API integration', () => {
         warehouseStock: { productId: string; quantity: number }[];
         warehouses: unknown[];
         customers: { id: string; firstName: string }[];
+        suppliers: { id: string; name: string }[];
+        purchaseOrders: { id: string; lines: { name: string }[] }[];
       }>('/api/backup');
       assert.equal(backup.status, 200);
-      assert.equal(backup.body.schemaVersion, 8);
+      assert.equal(backup.body.schemaVersion, BACKUP_SCHEMA_VERSION);
       const usersBeforeReset = await api<{ id: string; displayName: string }[]>('/api/users');
       assert.equal(usersBeforeReset.status, 200);
       const userCountBefore = usersBeforeReset.body.length;
@@ -1308,6 +1327,8 @@ describe('Executive Suite API integration', () => {
       assert.equal(snap!.cost, 3.5);
       assert.ok(backup.body.warehouses.length >= 1);
       assert.ok(backup.body.customers.some((c) => c.id === customer.body.id));
+      assert.ok(backup.body.suppliers.some((s) => s.id === supplier.body.id));
+      assert.ok(backup.body.purchaseOrders.some((o) => o.id === purchase.body.id));
       const whRow = backup.body.warehouseStock.find((r) => r.productId === productId);
       assert.ok(whRow);
       assert.equal(whRow!.quantity, 8);
@@ -1330,6 +1351,11 @@ describe('Executive Suite API integration', () => {
       const restoredWh = wh.body.find((r) => r.productId === productId);
       assert.ok(restoredWh);
       assert.equal(restoredWh!.quantity, 8);
+
+      const suppliersAfter = await api<{ id: string; name: string }[]>('/api/suppliers');
+      assert.ok(suppliersAfter.body.some((s) => s.id === supplier.body.id));
+      const purchasesAfter = await api<{ id: string }[]>('/api/purchases');
+      assert.ok(purchasesAfter.body.some((o) => o.id === purchase.body.id));
 
       const customers = await api<{ id: string; firstName: string }[]>('/api/customers');
       assert.ok(customers.body.some((c) => c.id === customer.body.id && c.firstName === 'María'));
@@ -1445,6 +1471,94 @@ describe('Executive Suite API integration', () => {
       const license = await api<{ status: string; trialStartedAt: number }>('/api/license');
       assert.equal(license.body.status, 'trial');
       assert.equal(license.body.trialStartedAt, trialStartedAt);
+    });
+  });
+
+  describe('purchases & suppliers', () => {
+    it('CRUD supplier, assisted purchase receive updates warehouse', async () => {
+      const supplier = await api<{ id: string; name: string }>('/api/suppliers', {
+        method: 'POST',
+        body: { name: 'Distribuidora Test' },
+      });
+      assert.equal(supplier.status, 201);
+
+      const product = await api<{ id: string }>('/api/products', {
+        method: 'POST',
+        body: {
+          name: 'Harina 1kg',
+          sku: 'HAR-001',
+          category: 'General',
+          price: 2,
+          cost: 0,
+          stock: 0,
+        },
+      });
+      assert.equal(product.status, 201);
+
+      await api(`/api/products/${product.body.id}/receive`, {
+        method: 'POST',
+        body: { quantity: 5, unitCost: 1.2, price: 2 },
+      });
+
+      const purchase = await api<{ id: string; status: string }>('/api/purchases', {
+        method: 'POST',
+        body: {
+          purchasedAt: Date.now(),
+          supplierId: supplier.body.id,
+          invoiceNumber: 'F-100',
+          lines: [
+            {
+              productId: product.body.id,
+              name: 'Harina 1kg',
+              unitCost: 1.5,
+              quantity: 10,
+              unitOfMeasure: 'unidad',
+            },
+            {
+              name: 'Producto nuevo compra',
+              barcode: 'NEWBAR999',
+              unitCost: 3,
+              quantity: 4,
+              unitOfMeasure: 'unidad',
+            },
+          ],
+        },
+      });
+      assert.equal(purchase.status, 201);
+
+      const submit = await api<{ status: string }>(`/api/purchases/${purchase.body.id}/submit-for-review`, {
+        method: 'POST',
+      });
+      assert.equal(submit.status, 200);
+      assert.equal(submit.body.status, 'pending_review');
+
+      const review = await api<{ lines: { lineId: string; needsReview: boolean; kind: string }[] }>(
+        `/api/purchases/${purchase.body.id}/warehouse-review`,
+      );
+      assert.equal(review.status, 200);
+      assert.ok(review.body.lines.some((l) => l.needsReview));
+
+      const receive = await api<{ purchase: { status: string } }>(
+        `/api/purchases/${purchase.body.id}/receive-to-warehouse`,
+        {
+          method: 'POST',
+          body: {
+            lines: review.body.lines.map((l) => ({
+              lineId: l.lineId,
+              action: 'receive',
+              confirmed: true,
+              createProduct: l.kind === 'new_product',
+            })),
+          },
+        },
+      );
+      assert.equal(receive.status, 200);
+      assert.equal(receive.body.purchase.status, 'posted');
+
+      const whStock = await api<{ productId: string; quantity: number }[]>('/api/warehouse/stock');
+      const harina = whStock.body.find((r) => r.productId === product.body.id);
+      assert.ok(harina);
+      assert.equal(harina!.quantity, 15);
     });
   });
 });

@@ -3,7 +3,7 @@ import { newId } from './db.js';
 import { computeCostAfterRemovingLayer } from './inventoryCost.js';
 import { ApiError } from './apiError.js';
 import { INVENTORY_CONSUMPTION_CATEGORY_CODE, getExpenseCategoryByCode } from './expenseCategories.js';
-import { getDefaultWarehouse, ensureWarehouseStockRow } from './warehouse.js';
+import { getDefaultWarehouse } from './warehouse.js';
 
 function insertConsumptionMovement(
   db: SqliteStore,
@@ -41,24 +41,18 @@ function insertConsumptionMovement(
   );
 }
 
-export function createInventoryConsumptionExpense(
+function consumeStoreProduct(
   db: SqliteStore,
   input: {
     productId: string;
     quantity: number;
-    source: 'store' | 'warehouse';
-    title?: string;
-    date?: string;
+    expenseId: string;
     createdBy: string | null;
   },
-): { expenseId: string; amount: number; movementType: 'EXPENSE_STORE' | 'EXPENSE_WAREHOUSE' } {
+): { amount: number; movementType: 'EXPENSE_STORE' } {
   const qty = Math.floor(Number(input.quantity));
   if (!Number.isFinite(qty) || qty <= 0) {
     throw new ApiError(400, 'Invalid quantity', 'ERR_INVALID_CONSUMPTION_QTY');
-  }
-  const category = getExpenseCategoryByCode(db, INVENTORY_CONSUMPTION_CATEGORY_CODE);
-  if (!category) {
-    throw new ApiError(500, 'Inventory consumption category not configured');
   }
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(input.productId) as
@@ -73,58 +67,61 @@ export function createInventoryConsumptionExpense(
   if (!product) throw new ApiError(404, 'Product not found');
 
   const warehouse = getDefaultWarehouse(db);
-  const expenseId = newId();
-  const date =
-    input.date?.trim() ||
-    new Date().toISOString().slice(0, 10);
-  const title =
-    (input.title?.trim() ||
-      `${category.name}: ${product.name} (${qty})`).slice(0, 200);
 
-  if (input.source === 'store') {
-    if (product.stock < qty) {
-      throw new ApiError(409, 'Insufficient store stock', 'ERR_INSUFFICIENT_STOCK');
-    }
-    const unitCost = product.cost > 0 ? product.cost : 0;
-    if (unitCost <= 0) {
-      throw new ApiError(409, 'Product has no store cost', 'ERR_PRODUCT_COST_READONLY');
-    }
-    const amount = Math.round(unitCost * qty * 100) / 100;
-    const newStock = product.stock - qty;
-    const newCost =
-      newStock <= 0
-        ? product.cost
-        : computeCostAfterRemovingLayer(product.stock, product.cost, qty, unitCost);
+  if (product.stock < qty) {
+    throw new ApiError(409, 'Insufficient store stock', 'ERR_INSUFFICIENT_STOCK');
+  }
+  const unitCost = product.cost > 0 ? product.cost : 0;
+  if (unitCost <= 0) {
+    throw new ApiError(409, 'Product has no store cost', 'ERR_PRODUCT_COST_READONLY');
+  }
+  const amount = Math.round(unitCost * qty * 100) / 100;
+  const newStock = product.stock - qty;
+  const newCost =
+    newStock <= 0
+      ? product.cost
+      : computeCostAfterRemovingLayer(product.stock, product.cost, qty, unitCost);
 
-    db.prepare('UPDATE products SET stock = ?, cost = ? WHERE id = ?').run(newStock, newCost, product.id);
-    db.prepare('INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)').run(
-      expenseId,
-      title,
-      amount,
-      category.name,
-      date,
-    );
+  db.prepare('UPDATE products SET stock = ?, cost = ? WHERE id = ?').run(newStock, newCost, product.id);
 
-    const stockRow = db
-      .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
-      .get(warehouse.id, product.id) as { section_id: string } | undefined;
+  const stockRow = db
+    .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
+    .get(warehouse.id, product.id) as { section_id: string } | undefined;
 
-    insertConsumptionMovement(db, {
-      warehouseId: warehouse.id,
-      productId: product.id,
-      sectionId: stockRow?.section_id ?? null,
-      type: 'EXPENSE_STORE',
-      quantityDelta: -qty,
-      unitCost,
-      balanceAfter: newStock,
-      expenseId,
-      notes: `store:${qty}`,
-      createdBy: input.createdBy,
-    });
+  insertConsumptionMovement(db, {
+    warehouseId: warehouse.id,
+    productId: product.id,
+    sectionId: stockRow?.section_id ?? null,
+    type: 'EXPENSE_STORE',
+    quantityDelta: -qty,
+    unitCost,
+    balanceAfter: newStock,
+    expenseId: input.expenseId,
+    notes: `store:${qty}`,
+    createdBy: input.createdBy,
+  });
 
-    return { expenseId, amount, movementType: 'EXPENSE_STORE' };
+  return { amount, movementType: 'EXPENSE_STORE' };
+}
+
+function consumeWarehouseProduct(
+  db: SqliteStore,
+  input: {
+    productId: string;
+    quantity: number;
+    expenseId: string;
+    createdBy: string | null;
+  },
+): { amount: number; movementType: 'EXPENSE_WAREHOUSE' } {
+  const qty = Math.floor(Number(input.quantity));
+  if (!Number.isFinite(qty) || qty <= 0) {
+    throw new ApiError(400, 'Invalid quantity', 'ERR_INVALID_CONSUMPTION_QTY');
   }
 
+  const product = db.prepare('SELECT id FROM products WHERE id = ?').get(input.productId) as { id: string } | undefined;
+  if (!product) throw new ApiError(404, 'Product not found');
+
+  const warehouse = getDefaultWarehouse(db);
   const stockRow = db
     .prepare('SELECT * FROM warehouse_stock WHERE warehouse_id = ? AND product_id = ?')
     .get(warehouse.id, product.id) as
@@ -152,14 +149,6 @@ export function createInventoryConsumptionExpense(
   );
   db.prepare('UPDATE products SET warehouse_cost = ? WHERE id = ?').run(newWhCost, product.id);
 
-  db.prepare('INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)').run(
-    expenseId,
-    title,
-    amount,
-    category.name,
-    date,
-  );
-
   insertConsumptionMovement(db, {
     warehouseId: warehouse.id,
     productId: product.id,
@@ -168,10 +157,96 @@ export function createInventoryConsumptionExpense(
     quantityDelta: -qty,
     unitCost,
     balanceAfter: newWhQty,
-    expenseId,
+    expenseId: input.expenseId,
     notes: `warehouse:${qty}`,
     createdBy: input.createdBy,
   });
 
-  return { expenseId, amount, movementType: 'EXPENSE_WAREHOUSE' };
+  return { amount, movementType: 'EXPENSE_WAREHOUSE' };
+}
+
+export type InventoryConsumptionItem = { productId: string; quantity: number };
+
+export function createInventoryConsumptionExpense(
+  db: SqliteStore,
+  input: {
+    productId: string;
+    quantity: number;
+    source: 'store' | 'warehouse';
+    title?: string;
+    date?: string;
+    createdBy: string | null;
+  },
+): { expenseId: string; amount: number; movementType: 'EXPENSE_STORE' | 'EXPENSE_WAREHOUSE' } {
+  return createInventoryConsumptionExpenseBatch(db, {
+    items: [{ productId: input.productId, quantity: input.quantity }],
+    source: input.source,
+    title: input.title,
+    date: input.date,
+    createdBy: input.createdBy,
+  });
+}
+
+export function createInventoryConsumptionExpenseBatch(
+  db: SqliteStore,
+  input: {
+    items: InventoryConsumptionItem[];
+    source: 'store' | 'warehouse';
+    title?: string;
+    date?: string;
+    createdBy: string | null;
+  },
+): { expenseId: string; amount: number; movementType: 'EXPENSE_STORE' | 'EXPENSE_WAREHOUSE' } {
+  const items = input.items
+    .map((row) => ({
+      productId: String(row.productId ?? '').trim(),
+      quantity: Math.floor(Number(row.quantity)),
+    }))
+    .filter((row) => row.productId && Number.isFinite(row.quantity) && row.quantity > 0);
+
+  if (items.length === 0) {
+    throw new ApiError(400, 'Invalid quantity', 'ERR_INVALID_CONSUMPTION_QTY');
+  }
+
+  const category = getExpenseCategoryByCode(db, INVENTORY_CONSUMPTION_CATEGORY_CODE);
+  if (!category) {
+    throw new ApiError(500, 'Inventory consumption category not configured');
+  }
+
+  const expenseId = newId();
+  const date = input.date?.trim() || new Date().toISOString().slice(0, 10);
+  let totalAmount = 0;
+  let movementType: 'EXPENSE_STORE' | 'EXPENSE_WAREHOUSE' = input.source === 'store' ? 'EXPENSE_STORE' : 'EXPENSE_WAREHOUSE';
+  const titleParts: string[] = [];
+
+  db.runInTransaction(() => {
+    for (const item of items) {
+      const result =
+        input.source === 'store'
+          ? consumeStoreProduct(db, { ...item, expenseId, createdBy: input.createdBy })
+          : consumeWarehouseProduct(db, { ...item, expenseId, createdBy: input.createdBy });
+      totalAmount += result.amount;
+      movementType = result.movementType;
+      const p = db.prepare('SELECT name FROM products WHERE id = ?').get(item.productId) as { name: string } | undefined;
+      titleParts.push(`${p?.name ?? item.productId} (${item.quantity})`);
+    }
+
+    const defaultTitle = `${category.name}: ${titleParts.join('; ')}`.slice(0, 200);
+    const title = (input.title?.trim() || defaultTitle).slice(0, 200);
+    const amount = Math.round(totalAmount * 100) / 100;
+
+    db.prepare('INSERT INTO expenses (id, title, amount, category, date) VALUES (?, ?, ?, ?, ?)').run(
+      expenseId,
+      title,
+      amount,
+      category.name,
+      date,
+    );
+  });
+
+  return {
+    expenseId,
+    amount: Math.round(totalAmount * 100) / 100,
+    movementType,
+  };
 }

@@ -36,6 +36,7 @@ Base URL: `http://<server-ip>:4000`
 | `GET /api/products/:id/image` | Product image (JPEG/PNG/WebP/SVG) |
 | `PATCH /api/products/:id/stock` | **Deprecated** — returns `409 ERR_STORE_STOCK_DIRECT_EDIT`. Use warehouse transfer instead. |
 | Warehouse (entries, transfer) | See [docs/WAREHOUSE.md](docs/WAREHOUSE.md) — `POST /api/products/:id/receive`, `POST /api/warehouse/stock/:id/transfer-to-store` (web client only). |
+| Purchases & suppliers | [docs/PURCHASES.md](docs/PURCHASES.md) — `/api/suppliers`, `/api/purchases`, assisted warehouse receive. |
 | `POST /api/sales` | Checkout (creates transaction + deducts stock). Optional `clientSaleId` (UUID) for idempotent/mobile offline replay. |
 | `GET /api/sync/offline-pack` | Mobile: snapshot for offline cache (products, customers, cash session, access). See [docs/MOBILE_OFFLINE.md](docs/MOBILE_OFFLINE.md). |
 | `POST /api/sync/sales` | Mobile: batch replay of queued offline sales (idempotent by `clientSaleId`). |
@@ -45,8 +46,8 @@ Base URL: `http://<server-ip>:4000`
 | `GET /api/expenses` | Expenses |
 | `GET /api/settings` | Store settings |
 | `GET /api/cash-sessions` | Cash drawer sessions |
-| `GET /api/backup` | Export full JSON backup |
-| `POST /api/backup/import` | Replace all data from backup JSON |
+| `GET /api/backup` | Export full JSON backup (`schemaVersion` **9** — [docs/BACKUP_SCHEMA.md](docs/BACKUP_SCHEMA.md)) |
+| `POST /api/backup/import` | Replace all data from backup JSON (versions 1–9) |
 
 ### Mobile app example
 

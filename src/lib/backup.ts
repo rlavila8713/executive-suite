@@ -9,6 +9,8 @@ import type {
   SaleReceipt,
   SaleReceiptLine,
   Customer,
+  Supplier,
+  PurchaseOrder,
   Transaction,
   Warehouse,
   WarehouseMovement,
@@ -37,10 +39,13 @@ function markDexieMigrated(): void {
   }
 }
 
-/** Current export format. Imports accept schema versions 1–8. */
-export const BACKUP_SCHEMA_VERSION = 8;
+/**
+ * Current JSON backup format (`GET /api/backup`).
+ * Keep in sync with `server/backupSchema.ts` → `BACKUP_SCHEMA_VERSION`.
+ */
+export const BACKUP_SCHEMA_VERSION = 9;
 
-const SUPPORTED_BACKUP_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+const SUPPORTED_BACKUP_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export type ExecutiveSuiteBackup = {
   schemaVersion: (typeof SUPPORTED_BACKUP_VERSIONS)[number];
@@ -71,6 +76,10 @@ export type ExecutiveSuiteBackup = {
   userAdminAudit?: ExecutiveSuiteBackupAuditEntry[];
   /** Trial / paid license state (schema ≥ 8). */
   license?: ExecutiveSuiteBackupLicense;
+  /** Suppliers master data (schema ≥ 9). */
+  suppliers?: Supplier[];
+  /** Purchase orders with lines embedded (schema ≥ 9; invoice image files are not in JSON). */
+  purchaseOrders?: PurchaseOrder[];
 };
 
 export type ExecutiveSuiteBackupAuditEntry = {
@@ -335,7 +344,8 @@ export function parseBackupJson(text: string): ExecutiveSuiteBackup {
     version !== 5 &&
     version !== 6 &&
     version !== 7 &&
-    version !== 8
+    version !== 8 &&
+    version !== 9
   ) {
     throw new Error(
       `Unsupported backup version: ${String(version)}. Expected ${SUPPORTED_BACKUP_VERSIONS.join(', ')}.`,

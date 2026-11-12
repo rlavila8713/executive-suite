@@ -23,6 +23,7 @@ import { Cash } from './features/Cash';
 import { Reconciliation } from './features/Reconciliation';
 import { POS } from './features/POS';
 import { Expenses } from './features/Expenses';
+import { Purchases } from './features/Purchases';
 import { Reports } from './features/Reports';
 import { Receivables } from './features/Receivables';
 import { Payables } from './features/Payables';
@@ -63,6 +64,8 @@ function searchPlaceholderForScreen(screen: Screen, t: (k: string) => string): s
       return t('app.search.unused');
     case 'expenses':
       return t('app.search.expenses');
+    case 'purchases':
+      return t('purchases.searchPlaceholder');
     case 'receivables':
       return t('receivables.searchPlaceholder');
     case 'payables':
@@ -102,6 +105,8 @@ function getTitle(screen: Screen, storeName: string, t: (k: string) => string): 
       return t('app.titles.pos');
     case 'expenses':
       return t('app.titles.expenses');
+    case 'purchases':
+      return t('app.titles.purchases');
     case 'receivables':
       return t('app.titles.receivables');
     case 'payables':
@@ -409,6 +414,16 @@ function AppView(props: AppState) {
             onInventoryConsumption={createInventoryConsumptionExpense}
           />
         );
+      case 'purchases':
+        return (
+          <Purchases
+            products={products}
+            warehouseSections={warehouseSections}
+            globalSearch={globalSearch}
+            currency={appSettings.currency}
+            onAfterReceive={refreshData}
+          />
+        );
       case 'receivables':
         return (
           <Receivables
@@ -459,6 +474,7 @@ function AppView(props: AppState) {
             products={products}
             productCategories={productCategories}
             productSubcategories={productSubcategories}
+            warehouseStock={warehouseStock}
             globalSearch={globalSearch}
             onSyncStock={refreshData}
             syncBusy={apiChecking}

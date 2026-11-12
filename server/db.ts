@@ -9,6 +9,7 @@ import { codeFromCategoryName, migrateCatalogSchema } from './migrations.js';
 import { persistDatabaseAtomic } from './persistDb.js';
 import { migrateLegacyProductPhotoLayout } from './legacyImageLayout.js';
 import { migrateWarehouseSchema } from './warehouseMigrations.js';
+import { migratePurchasesSchema } from './purchaseMigrations.js';
 import { migrateExpenseCategoriesSchema } from './expenseCategories.js';
 import { migrateAuthSchema } from './auth.js';
 import { migrateRbacSchema, clearRbacUsersOnFactoryReset } from './rbac.js';
@@ -168,6 +169,7 @@ export async function initDb(): Promise<void> {
     initSchema(sqliteStore);
     migrateCatalogSchema(sqliteStore);
     migrateWarehouseSchema(sqliteStore);
+    migratePurchasesSchema(sqliteStore);
     migrateExpenseCategoriesSchema(sqliteStore);
     ensureSeeded(sqliteStore);
     migrateRbacSchema(sqliteStore);
@@ -328,6 +330,14 @@ export function factoryResetDb(db: SqliteStore): void {
     db.prepare('DELETE FROM warehouse_sections').run();
     db.prepare('DELETE FROM warehouses').run();
     db.prepare('DELETE FROM customers').run();
+    try {
+      db.prepare('DELETE FROM purchase_invoice_images').run();
+      db.prepare('DELETE FROM purchase_lines').run();
+      db.prepare('DELETE FROM purchase_orders').run();
+      db.prepare('DELETE FROM suppliers').run();
+    } catch {
+      /* purchases schema optional */
+    }
     db.prepare('DELETE FROM cash_sessions').run();
     db.prepare('DELETE FROM connected_devices').run();
     try {
